@@ -1,3 +1,17 @@
+/**
+ * @module MainLayout
+ * @description Layout principal com sidebar de navegação e header.
+ *
+ * Renderiza sidebar colapsável com 8 seções de navegação
+ * (Dashboard, Clientes, Rede, Comunicação, Kanban, Relatórios,
+ * Configurações, Equipe), header com busca global e avatar do
+ * usuário, e área de conteúdo via `<Outlet />`.
+ *
+ * Controle de acesso (RBAC) via função `canAccess()` que filtra
+ * itens de menu com base no papel do usuário logado.
+ *
+ * @see AuthContext para dados do usuário logado
+ */
 import { Link, useLocation, Outlet, useNavigate } from 'react-router';
 import {
   LayoutDashboard,
@@ -13,14 +27,20 @@ import {
   ChevronDown,
   Menu,
   X,
+  Activity,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useState } from 'react';
+import logo from '../assets/logo.png';
 
 export function MainLayout() {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -41,6 +61,7 @@ export function MainLayout() {
         { name: 'Lista de Clientes', href: '/clientes', icon: Users, roles: ['admin', 'gerencia', 'comercial'] },
         { name: 'Análise de Crédito', href: '/clientes/analise', icon: Users, roles: ['admin', 'gerencia'] },
         { name: 'Empréstimos Ativos', href: '/clientes/emprestimos', icon: Users, roles: ['admin', 'gerencia'] },
+        { name: 'Gestão de Parcelas', href: '/clientes/parcelas', icon: Users, roles: ['admin', 'gerencia'] },
         { name: 'Histórico', href: '/clientes/historico', icon: Users, roles: ['admin', 'gerencia'] },
       ],
     },
@@ -87,6 +108,13 @@ export function MainLayout() {
         { name: 'Minha Conta', href: '/configuracoes/conta', icon: Settings, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
       ],
     },
+    {
+      title: 'EQUIPE',
+      items: [
+        { name: 'Monitoramento', href: '/equipe/monitoramento', icon: Activity, roles: ['admin', 'gerencia'] },
+        { name: 'Produtividade', href: '/equipe/produtividade', icon: Activity, roles: ['admin', 'gerencia'] },
+      ],
+    },
   ];
 
   const isActive = (href: string) => {
@@ -106,20 +134,17 @@ export function MainLayout() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-muted">
+    <div className="flex h-screen overflow-hidden bg-muted transition-colors duration-300">
       {/* Sidebar */}
       <aside
         className={`${
           sidebarOpen ? 'w-64' : 'w-0'
-        } transition-all duration-300 bg-[#0A2472] text-white flex flex-col overflow-hidden`}
+        } transition-all duration-300 bg-slate-900 text-sidebar-foreground flex flex-col overflow-hidden`}
       >
         {/* Logo */}
-        <div className="p-4 border-b border-[#1A3A9F] flex items-center justify-between">
+        <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-[#2EC4B6] rounded flex items-center justify-center font-bold">
-              F
-            </div>
-            <span className="font-semibold">FintechFlow</span>
+           <img src={logo} alt="Logo" className="w-64 h-auto" />
           </div>
         </div>
 
@@ -131,7 +156,7 @@ export function MainLayout() {
 
             return (
               <div key={section.title}>
-                <h3 className="text-xs font-semibold text-[#2EC4B6] mb-2">
+                <h3 className="text-xs font-semibold text-sidebar-primary mb-2">
                   {section.title}
                 </h3>
                 <ul className="space-y-1">
@@ -141,8 +166,8 @@ export function MainLayout() {
                         to={item.href}
                         className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
                           isActive(item.href)
-                            ? 'bg-[#2EC4B6] text-white'
-                            : 'text-gray-300 hover:bg-[#1A3A9F] hover:text-white'
+                            ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+                            : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground'
                         }`}
                       >
                         <item.icon className="w-4 h-4" />
@@ -157,10 +182,10 @@ export function MainLayout() {
         </nav>
 
         {/* Logout */}
-        <div className="p-4 border-t border-[#1A3A9F]">
+        <div className="p-4 border-t border-sidebar-border">
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-gray-300 hover:bg-[#1A3A9F] hover:text-white w-full transition-colors"
+            className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground w-full transition-colors"
           >
             <LogOut className="w-4 h-4" />
             <span>Sair</span>
@@ -171,7 +196,7 @@ export function MainLayout() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <header className="bg-white border-b border-border p-4 flex items-center justify-between">
+        <header className="bg-card border-b border-border p-4 flex items-center justify-between transition-colors duration-300">
           <div className="flex items-center gap-4 flex-1">
             <Button
               variant="ghost"
@@ -191,6 +216,15 @@ export function MainLayout() {
           </div>
 
           <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+            >
+              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </Button>
+
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="w-5 h-5" />
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />

@@ -1,3 +1,16 @@
+/**
+ * @module ClientesPage
+ * @description Listagem e gestão de clientes do sistema.
+ *
+ * Tabela paginada com busca, filtro por status/score e ordenação.
+ * Permite cadastrar novo cliente (com campo sexo para mensagens
+ * personalizadas), editar e visualizar detalhes. Exibe CPF,
+ * telefone, limite de crédito e score interno de cada cliente.
+ *
+ * @route /clientes
+ * @access Protegido — todos os perfis autenticados
+ * @see mockClientes
+ */
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -6,8 +19,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Search, Grid, List, MessageSquare, Edit, History, Ban, Eye } from 'lucide-react';
-import { mockClientes } from '../lib/mockData';
+import { useClientes } from '../hooks/useClientes';
 import { StatusBadge } from '../components/StatusBadge';
+import type { Cliente } from '../lib/mockData';
 
 type ViewMode = 'table' | 'cards';
 
@@ -15,9 +29,11 @@ export default function ClientesPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
-  const [selectedClient, setSelectedClient] = useState<any>(null);
+  const [selectedClient, setSelectedClient] = useState<Cliente | null>(null);
 
-  const filteredClientes = mockClientes.filter((cliente) => {
+  const { data: clientes = [], isLoading } = useClientes();
+
+  const filteredClientes = clientes.filter((cliente) => {
     const matchesSearch = cliente.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
       cliente.email.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'todos' || cliente.status === statusFilter;
@@ -41,10 +57,10 @@ export default function ClientesPage() {
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Lista de Clientes</h1>
           <p className="text-muted-foreground mt-1">
-            {filteredClientes.length} cliente(s) encontrado(s)
+            {isLoading ? 'Carregando...' : `${filteredClientes.length} cliente(s) encontrado(s)`}
           </p>
         </div>
-        <Button className="bg-[#0A2472] hover:bg-[#1A3A9F]">
+        <Button className="bg-primary hover:bg-primary/90">
           Novo Cliente
         </Button>
       </div>
@@ -150,7 +166,7 @@ export default function ClientesPage() {
                         <div className="flex items-center gap-2">
                           <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
                             <div
-                              className="h-full bg-[#2EC4B6]"
+                              className="h-full bg-secondary"
                               style={{ width: `${(cliente.scoreInterno / 1000) * 100}%` }}
                             />
                           </div>
@@ -328,7 +344,7 @@ export default function ClientesPage() {
                     <p>
                       <span className="text-muted-foreground">Indicado por:</span>{' '}
                       <span className="font-medium">
-                        {mockClientes.find((c) => c.id === selectedClient.indicadoPor)?.nome}
+                        {clientes.find((c) => c.id === selectedClient.indicadoPor)?.nome}
                       </span>
                     </p>
                   )}
@@ -342,7 +358,7 @@ export default function ClientesPage() {
               </div>
 
               <div className="flex gap-2">
-                <Button className="flex-1 bg-[#0A2472] hover:bg-[#1A3A9F]">
+                <Button className="flex-1 bg-primary hover:bg-primary/90">
                   <Edit className="w-4 h-4 mr-2" />
                   Editar
                 </Button>

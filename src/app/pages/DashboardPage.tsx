@@ -1,3 +1,16 @@
+/**
+ * @module DashboardPage
+ * @description Dashboard principal (visão geral) do FintechFlow.
+ *
+ * Apresenta KPIs consolidados: total emprestado, inadimplência,
+ * clientes ativos, receita prevista. Inclui gráficos de evolução
+ * financeira (AreaChart) e composição de carteira (PieChart).
+ * Filtros por período e busca rápida.
+ *
+ * @route /dashboard
+ * @access Protegido — todos os perfis autenticados
+ * @see mockEvoluacaoFinanceira, mockComposicaoCarteira
+ */
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -5,14 +18,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from '../components/ui/input';
 import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { TrendingUp, TrendingDown, Users, Percent, DollarSign, Search, MessageSquare, Eye, Edit } from 'lucide-react';
-import { mockClientes, mockEvoluacaoFinanceira, mockComposicaoCarteira } from '../lib/mockData';
+import { mockEvoluacaoFinanceira, mockComposicaoCarteira } from '../lib/mockData';
+import { useClientes } from '../hooks/useClientes';
 import { StatusBadge } from '../components/StatusBadge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 
-const COLORS = ['#2DC937', '#FFB703', '#E71D36'];
+const COLORS = ['var(--chart-5)', 'var(--chart-3)', 'var(--chart-4)'];
 
 export default function DashboardPage() {
   const [selectedClient, setSelectedClient] = useState<any>(null);
+  const { data: clientes = [] } = useClientes();
 
   // Calcular métricas
   const totalFaturamento = 1245890;
@@ -20,7 +35,7 @@ export default function DashboardPage() {
   const clientesAtivos = 1245;
   const taxaConversao = 68;
 
-  const clientesRecentes = mockClientes.slice(0, 6);
+  const clientesRecentes = clientes.slice(0, 6);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -176,7 +191,7 @@ export default function DashboardPage() {
                   yAxisId="left"
                   type="monotone"
                   dataKey="receita"
-                  stroke="#0A2472"
+                  stroke="var(--chart-1)"
                   strokeWidth={2}
                   name="Receita (R$)"
                 />
@@ -184,7 +199,7 @@ export default function DashboardPage() {
                   yAxisId="right"
                   type="monotone"
                   dataKey="inadimplencia"
-                  stroke="#E71D36"
+                  stroke="var(--chart-4)"
                   strokeWidth={2}
                   name="Inadimplência (%)"
                 />
@@ -207,7 +222,7 @@ export default function DashboardPage() {
                   labelLine={false}
                   label={({ status, porcentagem }) => `${status}: ${porcentagem}%`}
                   outerRadius={80}
-                  fill="#8884d8"
+                  fill="var(--chart-1)"
                   dataKey="clientes"
                 >
                   {mockComposicaoCarteira.map((entry, index) => (
@@ -345,7 +360,7 @@ export default function DashboardPage() {
                     <p>
                       <span className="text-muted-foreground">Indicado por:</span>{' '}
                       <span className="font-medium">
-                        {mockClientes.find((c) => c.id === selectedClient.indicadoPor)?.nome}
+                        {clientes.find((c) => c.id === selectedClient.indicadoPor)?.nome}
                       </span>
                     </p>
                   )}

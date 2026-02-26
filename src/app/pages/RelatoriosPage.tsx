@@ -1,3 +1,15 @@
+/**
+ * @module RelatoriosPage
+ * @description Central de relatórios financeiros.
+ *
+ * Gerador de relatórios com templates pré-definidos:
+ * inadimplência, receita, carteira e performance. Diálogo
+ * de configuração com período, formato (PDF/Excel/CSV) e
+ * opção de envio por e-mail. Download direto ou agendamento.
+ *
+ * @route /relatorios
+ * @access Protegido — perfis admin, gerente
+ */
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { FileText, Download, Mail, FileSpreadsheet } from 'lucide-react';
@@ -97,7 +109,7 @@ export default function RelatoriosPage() {
               </CardHeader>
               <CardContent>
                 <Button
-                  className="w-full bg-[#0A2472] hover:bg-[#1A3A9F]"
+                  className="w-full bg-primary hover:bg-primary/90"
                   onClick={() => handleGerarRelatorio(relatorio.id)}
                 >
                   Gerar Relatório
@@ -312,7 +324,7 @@ export default function RelatoriosPage() {
 
             {/* Botões de Ação */}
             <div className="flex gap-2 pt-4 border-t">
-              <Button className="flex-1 bg-[#0A2472] hover:bg-[#1A3A9F]">
+              <Button className="flex-1 bg-primary hover:bg-primary/90">
                 <Download className="w-4 h-4 mr-2" />
                 Exportar PDF
               </Button>

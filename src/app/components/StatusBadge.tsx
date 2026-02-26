@@ -1,3 +1,13 @@
+/**
+ * @module StatusBadge
+ * @description Badge colorido para status de cliente/parcela.
+ *
+ * Mapeia os status `em_dia`, `a_vencer` e `vencido` para
+ * cores (verde, amarelo, vermelho) com indicador circular.
+ *
+ * @param props.status - Status a exibir: 'em_dia' | 'a_vencer' | 'vencido'
+ * @returns Badge estilizado com cor e label correspondente
+ */
 import { Badge } from './ui/badge';
 
 interface StatusBadgeProps {

@@ -1,13 +1,26 @@
+/**
+ * @module DashboardCobrancaPage
+ * @description Dashboard de cobrança com indicadores de inadimplência.
+ *
+ * Mostra total em atraso, parcelas vencidas, acordos realizados
+ * e taxa de recuperação. Lista clientes com maior atraso e
+ * ações rápidas de contato (WhatsApp, telefone).
+ *
+ * @route /dashboard/cobranca
+ * @access Protegido — perfis admin, gerente, cobrador
+ * @see mockClientes, mockParcelas
+ */
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { AlertTriangle, MessageSquare, HandshakeIcon } from 'lucide-react';
-import { mockClientes } from '../lib/mockData';
+import { useClientes } from '../hooks/useClientes';
 import { StatusBadge } from '../components/StatusBadge';
 
 export default function DashboardCobrancaPage() {
+  const { data: allClientes = [] } = useClientes();
   // Filtrar apenas clientes inadimplentes
-  const clientesInadimplentes = mockClientes.filter((c) => c.status === 'vencido');
+  const clientesInadimplentes = allClientes.filter((c) => c.status === 'vencido');
 
   const totalInadimplentes = clientesInadimplentes.length;
   const valorTotal = clientesInadimplentes.reduce((acc, c) => acc + c.valor, 0);
@@ -32,9 +45,9 @@ export default function DashboardCobrancaPage() {
       </div>
 
       {/* Alerta de perfil */}
-      <Alert className="border-[#FCA311] bg-[#FCA311]/10">
-        <AlertTriangle className="h-4 w-4 text-[#FCA311]" />
-        <AlertDescription className="text-[#FCA311]">
+      <Alert className="border-accent bg-accent/10">
+        <AlertTriangle className="h-4 w-4 text-accent" />
+        <AlertDescription className="text-accent">
           <strong>ATENÇÃO:</strong> Você está no perfil COBRANÇA - Visualizando apenas clientes INADIMPLENTES
         </AlertDescription>
       </Alert>
@@ -92,7 +105,7 @@ export default function DashboardCobrancaPage() {
 
       {/* Botões de Ação */}
       <div className="flex gap-4">
-        <Button className="bg-[#2EC4B6] hover:bg-[#2EC4B6]/90">
+        <Button className="bg-secondary hover:bg-secondary/90">
           <HandshakeIcon className="w-4 h-4 mr-2" />
           Iniciar Negociação
         </Button>
@@ -147,7 +160,7 @@ export default function DashboardCobrancaPage() {
                           <MessageSquare className="w-4 h-4 mr-1" />
                           WhatsApp
                         </Button>
-                        <Button size="sm" className="bg-[#2EC4B6] hover:bg-[#2EC4B6]/90">
+                        <Button size="sm" className="bg-secondary hover:bg-secondary/90">
                           <HandshakeIcon className="w-4 h-4 mr-1" />
                           Negociar
                         </Button>

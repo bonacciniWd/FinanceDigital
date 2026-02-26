@@ -1,10 +1,23 @@
+/**
+ * @module KanbanCobrancaPage
+ * @description Kanban de cobrança com colunas de status.
+ *
+ * Board drag-and-drop com colunas: Pendente, Em Contato,
+ * Acordo, Pago, Inadimplente. Cards exibem cliente, valor
+ * em atraso e dias de atraso. Diálogos para registrar
+ * tentativa de contato e formalizar acordos.
+ *
+ * @route /kanban/cobranca
+ * @access Protegido — perfis admin, gerente, cobrador
+ * @see mockClientes, mockParcelas
+ */
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { MessageSquare, Phone, HandshakeIcon, ChevronRight } from 'lucide-react';
-import { mockClientes } from '../lib/mockData';
+import { useClientes } from '../hooks/useClientes';
 
 interface KanbanColumn {
   id: string;
@@ -14,14 +27,15 @@ interface KanbanColumn {
 }
 
 const columns: KanbanColumn[] = [
-  { id: 'a_vencer', title: 'A VENCER', color: 'bg-yellow-100 border-yellow-300', count: 12 },
-  { id: 'vencidos', title: 'VENCIDOS', color: 'bg-red-100 border-red-300', count: 28 },
-  { id: 'negociacao', title: 'NEGOCIAÇÃO', color: 'bg-orange-100 border-orange-300', count: 15 },
-  { id: 'acordos', title: 'ACORDOS', color: 'bg-green-100 border-green-300', count: 7 },
+  { id: 'a_vencer', title: 'A VENCER', color: 'bg-yellow-100 text-slate-900 border-yellow-300', count: 12 },
+  { id: 'vencidos', title: 'VENCIDOS', color: 'bg-red-100 text-slate-900 border-red-300', count: 28 },
+  { id: 'negociacao', title: 'NEGOCIAÇÃO', color: 'bg-orange-100 text-slate-900 border-orange-300', count: 15 },
+  { id: 'acordos', title: 'ACORDOS', color: 'bg-green-100 text-slate-900 border-green-300', count: 7 },
 ];
 
 export default function KanbanCobrancaPage() {
   const [selectedClient, setSelectedClient] = useState<any>(null);
+  const { data: allClientes = [] } = useClientes();
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -33,13 +47,13 @@ export default function KanbanCobrancaPage() {
   // Organizar clientes por coluna
   const getClientsByColumn = (columnId: string) => {
     if (columnId === 'a_vencer') {
-      return mockClientes.filter((c) => c.status === 'a_vencer').slice(0, 3);
+      return allClientes.filter((c) => c.status === 'a_vencer').slice(0, 3);
     } else if (columnId === 'vencidos') {
-      return mockClientes.filter((c) => c.status === 'vencido').slice(0, 3);
+      return allClientes.filter((c) => c.status === 'vencido').slice(0, 3);
     } else if (columnId === 'negociacao') {
-      return mockClientes.filter((c) => c.status === 'vencido').slice(3, 5);
+      return allClientes.filter((c) => c.status === 'vencido').slice(3, 5);
     } else if (columnId === 'acordos') {
-      return mockClientes.filter((c) => c.status === 'em_dia').slice(0, 2);
+      return allClientes.filter((c) => c.status === 'em_dia').slice(0, 2);
     }
     return [];
   };
@@ -87,7 +101,7 @@ export default function KanbanCobrancaPage() {
                 {getClientsByColumn(column.id).map((cliente) => (
                   <Card
                     key={cliente.id}
-                    className="bg-white hover:shadow-md transition-shadow cursor-pointer"
+                    className="bg-card hover:shadow-md transition-shadow cursor-pointer"
                     onClick={() => setSelectedClient(cliente)}
                   >
                     <CardContent className="p-4">
@@ -283,7 +297,7 @@ export default function KanbanCobrancaPage() {
                   <Phone className="w-4 h-4 mr-2" />
                   Ligar
                 </Button>
-                <Button className="flex-1 bg-[#2EC4B6] hover:bg-[#2EC4B6]/90">
+                <Button className="flex-1 bg-secondary hover:bg-secondary/90">
                   <HandshakeIcon className="w-4 h-4 mr-2" />
                   Proposta
                 </Button>

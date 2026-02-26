@@ -1,3 +1,14 @@
+/**
+ * @module LoginPage
+ * @description Página de autenticação do FintechFlow.
+ *
+ * Exibe formulário de login com e-mail e senha, validação básica
+ * e autenticação via contexto {@link AuthContext}.
+ * Após login bem-sucedido redireciona para `/dashboard`.
+ *
+ * @route /login
+ * @access Público (única rota não protegida)
+ */
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useAuth } from '../contexts/AuthContext';
@@ -6,7 +17,10 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, Sun, Moon } from 'lucide-react';
+
+import logo from '../assets/logo.png';
+import { useTheme } from '../contexts/ThemeContext';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -17,6 +31,7 @@ export default function LoginPage() {
 
   const { login } = useAuth();
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,11 +39,11 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const success = await login(email, password);
-      if (success) {
+      const result = await login(email, password);
+      if (result.success) {
         navigate('/dashboard');
       } else {
-        setError('Usuário ou senha inválidos');
+        setError(result.error ?? 'Usuário ou senha inválidos');
       }
     } catch (err) {
       setError('Erro ao fazer login. Tente novamente.');
@@ -38,14 +53,20 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#0A2472] to-[#1A3A9F] flex items-center justify-center p-4">
-      <Card className="w-full max-w-md shadow-2xl">
+    <div className="min-h-screen bg-gradient-to-br from-[#000] to-[#1A3B9F] dark:from-[#0B1120] dark:to-[#0F1729] flex items-center justify-center p-4 transition-colors duration-300">
+      {/* Theme toggle */}
+      <button
+        onClick={toggleTheme}
+        className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+        title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+      >
+        {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+      </button>
+
+      <Card className="w-full max-w-lg shadow-2xl">
         <CardHeader className="space-y-4 text-center">
-          <div className="mx-auto w-16 h-16 bg-[#2EC4B6] rounded-lg flex items-center justify-center">
-            <span className="text-3xl font-bold text-white">F</span>
-          </div>
+          <img src={logo} alt="Logo" className="w-82 h-auto mx-auto" />
           <div>
-            <CardTitle className="text-2xl">FintechFlow</CardTitle>
             <CardDescription className="mt-2">
               Plataforma de Gestão de Crédito
             </CardDescription>
@@ -105,7 +126,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full bg-[#0A2472] hover:bg-[#1A3A9F]"
+              className="w-full bg-primary hover:bg-primary/90"
               disabled={loading}
             >
               {loading ? 'Entrando...' : 'Entrar'}
@@ -114,7 +135,7 @@ export default function LoginPage() {
             <div className="text-center">
               <a
                 href="#"
-                className="text-sm text-[#2EC4B6] hover:underline"
+                className="text-sm text-muted-foreground hover:underline"
               >
                 Esqueceu a senha?
               </a>
@@ -129,7 +150,7 @@ export default function LoginPage() {
               <p>• Admin: admin@financeira.com</p>
               <p>• Gerente: gerente@financeira.com</p>
               <p>• Cobrança: cobranca@financeira.com</p>
-              <p className="mt-2 italic">Qualquer senha funciona no modo demo</p>
+              <p className="mt-2 italic">Qualquer senha funciona no modo demo.</p>
             </div>
           </div>
         </CardContent>

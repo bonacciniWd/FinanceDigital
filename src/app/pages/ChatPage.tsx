@@ -1,3 +1,15 @@
+/**
+ * @module ChatPage
+ * @description Interface de chat em tempo real para atendimento.
+ *
+ * Painel lateral com lista de conversas (filtro por status),
+ * área principal de mensagens com envio de texto/anexos e
+ * painel de informações do cliente selecionado.
+ *
+ * @route /comunicacao/chat
+ * @access Protegido — todos os perfis autenticados
+ * @see mockMensagens, mockClientes
+ */
 import { useState } from 'react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -5,15 +17,19 @@ import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Send, Paperclip, Circle, CheckCheck } from 'lucide-react';
-import { mockClientes, mockMensagens } from '../lib/mockData';
+import { useClientes } from '../hooks/useClientes';
+import { useMensagens } from '../hooks/useMensagens';
 import { StatusBadge } from '../components/StatusBadge';
 
 export default function ChatPage() {
   const [selectedClientId, setSelectedClientId] = useState('1');
   const [message, setMessage] = useState('');
 
-  const selectedClient = mockClientes.find((c) => c.id === selectedClientId);
-  const clientMessages = mockMensagens.filter((m) => m.clienteId === selectedClientId);
+  const { data: allClientes = [] } = useClientes();
+  const { data: allMensagens = [] } = useMensagens(selectedClientId);
+
+  const selectedClient = allClientes.find((c) => c.id === selectedClientId);
+  const clientMessages = allMensagens;
 
   const handleSendMessage = () => {
     if (message.trim()) {
@@ -49,9 +65,9 @@ export default function ChatPage() {
             </div>
             <ScrollArea className="flex-1">
               <div className="p-2 space-y-1">
-                {mockClientes.slice(0, 6).map((cliente) => {
+                {allClientes.slice(0, 6).map((cliente) => {
                   const hasUnread = cliente.id === '1';
-                  const lastMessage = mockMensagens.find((m) => m.clienteId === cliente.id);
+                  const lastMessage = allMensagens.find((m) => m.clienteId === cliente.id);
 
                   return (
                     <button
@@ -128,7 +144,7 @@ export default function ChatPage() {
                     <div
                       className={`max-w-[70%] rounded-lg px-4 py-2 ${
                         msg.remetente === 'sistema'
-                          ? 'bg-[#0A2472] text-white'
+                          ? 'bg-primary text-primary-foreground'
                           : 'bg-muted'
                       }`}
                     >
@@ -197,7 +213,7 @@ export default function ChatPage() {
                 />
                 <Button
                   onClick={handleSendMessage}
-                  className="bg-[#0A2472] hover:bg-[#1A3A9F]"
+                  className="bg-primary hover:bg-primary/90"
                 >
                   <Send className="w-4 h-4" />
                 </Button>

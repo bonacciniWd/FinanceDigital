@@ -1,12 +1,26 @@
+/**
+ * @module RedeIndicacoesPage
+ * @description Painel da rede de indicações e afiliados.
+ *
+ * Visualização hierárquica da rede, métricas de indicações
+ * (total, convertidas, pendentes) e ranking dos melhores
+ * indicadores. Alertas para indicações com problemas.
+ *
+ * @route /rede
+ * @access Protegido — todos os perfis autenticados
+ * @see mockClientes
+ */
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { AlertTriangle, User, DollarSign } from 'lucide-react';
-import { mockClientes } from '../lib/mockData';
+import { useClientes } from '../hooks/useClientes';
 import { StatusBadge } from '../components/StatusBadge';
 
 export default function RedeIndicacoesPage() {
+  const { data: allClientes = [] } = useClientes();
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -15,11 +29,11 @@ export default function RedeIndicacoesPage() {
   };
 
   // Encontrar cliente com rede (exemplo: João Silva)
-  const clienteTop = mockClientes.find((c) => c.id === '1');
-  const indicadosNivel1 = mockClientes.filter((c) => clienteTop?.indicou?.includes(c.id));
+  const clienteTop = allClientes.find((c) => c.id === '1');
+  const indicadosNivel1 = allClientes.filter((c) => clienteTop?.indicou?.includes(c.id));
 
   // Cliente com problema (Ana Costa - ID 4) está vencido
-  const clienteProblema = mockClientes.find((c) => c.id === '4');
+  const clienteProblema = allClientes.find((c) => c.id === '4');
   const redeComProblema = clienteProblema?.indicadoPor === '1';
 
   return (
@@ -64,9 +78,9 @@ export default function RedeIndicacoesPage() {
               {/* Nível 0 - Top */}
               {clienteTop && (
                 <div className="flex flex-col items-center">
-                  <div className="bg-white border-2 border-[#0A2472] rounded-lg p-4 shadow-lg w-64">
+                  <div className="bg-card border-2 border-primary rounded-lg p-4 shadow-lg w-64">
                     <div className="flex items-center gap-3 mb-2">
-                      <div className="w-10 h-10 bg-[#0A2472] text-white rounded-full flex items-center justify-center font-semibold">
+                      <div className="w-10 h-10 bg-primary text-primary-foreground rounded-full flex items-center justify-center font-semibold">
                         {clienteTop.nome.charAt(0)}
                       </div>
                       <div className="flex-1">
@@ -81,14 +95,14 @@ export default function RedeIndicacoesPage() {
                   </div>
 
                   {/* Linha conectora */}
-                  <div className="w-0.5 h-8 bg-gray-300" />
+                  <div className="w-0.5 h-8 bg-border" />
 
                   {/* Nível 1 - Indicados diretos */}
                   <div className="flex gap-8 relative">
                     {/* Linha horizontal conectora */}
                     {indicadosNivel1.length > 1 && (
                       <div
-                        className="absolute top-0 h-0.5 bg-gray-300"
+                        className="absolute top-0 h-0.5 bg-border"
                         style={{
                           left: '25%',
                           right: '25%',
@@ -99,10 +113,10 @@ export default function RedeIndicacoesPage() {
                     {indicadosNivel1.map((cliente, index) => (
                       <div key={cliente.id} className="flex flex-col items-center">
                         {/* Linha vertical individual */}
-                        <div className="w-0.5 h-8 bg-gray-300" />
+                        <div className="w-0.5 h-8 bg-border" />
 
                         <div
-                          className={`bg-white border-2 rounded-lg p-3 shadow w-56 ${
+                          className={`bg-card border-2 rounded-lg p-3 shadow w-56 ${
                             cliente.status === 'vencido'
                               ? 'border-red-500'
                               : cliente.status === 'a_vencer'
@@ -136,8 +150,8 @@ export default function RedeIndicacoesPage() {
                         {/* Sub-nível (mock - apenas visual) */}
                         {index === 0 && (
                           <>
-                            <div className="w-0.5 h-8 bg-gray-300" />
-                            <div className="bg-white border-2 border-green-500 rounded-lg p-2 shadow w-48 text-xs">
+                            <div className="w-0.5 h-8 bg-border" />
+                            <div className="bg-card border-2 border-green-500 rounded-lg p-2 shadow w-48 text-xs">
                               <div className="flex items-center gap-2 mb-1">
                                 <div className="w-6 h-6 bg-green-500 text-white rounded-full flex items-center justify-center font-semibold text-xs">
                                   C
@@ -200,7 +214,7 @@ export default function RedeIndicacoesPage() {
                 </tr>
               </thead>
               <tbody>
-                {mockClientes
+                {allClientes
                   .filter((c) => c.indicou && c.indicou.length > 0)
                   .map((cliente) => (
                     <tr key={cliente.id} className="border-b hover:bg-muted/50">

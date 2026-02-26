@@ -1,3 +1,13 @@
+/**
+ * @module ImageWithFallback
+ * @description Componente de imagem com fallback SVG em caso de erro.
+ *
+ * Renderiza `<img>` normalmente. Se o carregamento falhar (onError),
+ * exibe um placeholder SVG cinza com ícone de imagem quebrada.
+ * Preserva `className`, `style` e demais props do `<img>` original.
+ *
+ * @param props - Mesmas props de `<img>` (React.ImgHTMLAttributes)
+ */
 import React, { useState } from 'react'
 
 const ERROR_IMG_SRC =
@@ -14,7 +24,7 @@ export function ImageWithFallback(props: React.ImgHTMLAttributes<HTMLImageElemen
 
   return didError ? (
     <div
-      className={`inline-block bg-gray-100 text-center align-middle ${className ?? ''}`}
+      className={`inline-block bg-muted text-center align-middle ${className ?? ''}`}
       style={style}
     >
       <div className="flex items-center justify-center w-full h-full">
