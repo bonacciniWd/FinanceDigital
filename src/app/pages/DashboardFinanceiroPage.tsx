@@ -2,49 +2,106 @@
  * @module DashboardFinanceiroPage
  * @description Dashboard financeiro detalhado.
  *
- * Exibe receita bruta/líquida, lucro operacional, ROI e
- * taxa de inadimplência com gráficos LineChart e BarChart.
- * Permite filtro por período (mês/trimestre/ano).
+ * Dados reais: receita = parcelas pagas, composição = juros + multas,
+ * fluxo de caixa = pagamentos recentes agrupados por dia.
  *
  * @route /dashboard/financeiro
- * @access Protegido — perfis admin, gerente, operador
- * @see mockEvoluacaoFinanceira
+ * @access Protegido — perfis admin, gerente
  */
+import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
-import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { DollarSign, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Download } from 'lucide-react';
-
-const receitasMensais = [
-  { mes: 'Set', receita: 780000, despesa: 320000, lucro: 460000 },
-  { mes: 'Out', receita: 920000, despesa: 350000, lucro: 570000 },
-  { mes: 'Nov', receita: 1050000, despesa: 380000, lucro: 670000 },
-  { mes: 'Dez', receita: 1180000, despesa: 410000, lucro: 770000 },
-  { mes: 'Jan', receita: 1250000, despesa: 420000, lucro: 830000 },
-  { mes: 'Fev', receita: 1320000, despesa: 440000, lucro: 880000 },
-];
-
-const composicaoReceita = [
-  { name: 'Juros', value: 680000, color: 'var(--chart-1)' },
-  { name: 'Multas', value: 120000, color: 'var(--chart-4)' },
-  { name: 'Taxas', value: 85000, color: 'var(--chart-3)' },
-  { name: 'Comissões', value: 45000, color: 'var(--chart-2)' },
-];
-
-const fluxoCaixa = [
-  { dia: '17/02', entrada: 45000, saida: 12000 },
-  { dia: '18/02', entrada: 38000, saida: 8000 },
-  { dia: '19/02', entrada: 52000, saida: 15000 },
-  { dia: '20/02', entrada: 28000, saida: 22000 },
-  { dia: '21/02', entrada: 61000, saida: 9000 },
-  { dia: '22/02', entrada: 15000, saida: 5000 },
-  { dia: '23/02', entrada: 42000, saida: 11000 },
-];
+import { DollarSign, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react';
+import { LWCChart } from '../components/charts/LWCChart';
+import { DonutChart } from '../components/charts/DonutChart';
+import { CategoryBarChart } from '../components/charts/CategoryBarChart';
+import { useParcelas } from '../hooks/useParcelas';
+import { useEmprestimos } from '../hooks/useEmprestimos';
 
 export default function DashboardFinanceiroPage() {
+  const { data: parcelas = [], isLoading: loadingParcelas } = useParcelas();
+  const { data: emprestimos = [] } = useEmprestimos();
+
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+
+  // Parcelas pagas = receita efetiva
+  const parcelasPagas = parcelas.filter((p) => p.status === 'paga');
+
+  // KPIs
+  const receitaBruta = parcelasPagas.reduce((sum, p) => sum + (p.valor ?? 0), 0);
+  const totalJuros = parcelasPagas.reduce((sum, p) => sum + (p.juros ?? 0), 0);
+  const totalMultas = parcelasPagas.reduce((sum, p) => sum + (p.multa ?? 0), 0);
+  const totalDescontos = parcelasPagas.reduce((sum, p) => sum + (p.desconto ?? 0), 0);
+  const receitaLiquida = receitaBruta - totalDescontos;
+  const margemPct = receitaBruta > 0 ? ((receitaLiquida / receitaBruta) * 100).toFixed(1) : '0';
+
+  // Composição da receita
+  const valorPrincipal = parcelasPagas.reduce((sum, p) => sum + ((p.valorOriginal ?? p.valor_original ?? p.valor ?? 0)), 0);
+  const composicaoReceita = useMemo(() => [
+    { name: 'Principal', value: valorPrincipal - totalJuros - totalMultas, color: 'var(--chart-1)' },
+    { name: 'Juros', value: totalJuros, color: 'var(--chart-3)' },
+    { name: 'Multas', value: totalMultas, color: 'var(--chart-4)' },
+  ].filter((item) => item.value > 0), [valorPrincipal, totalJuros, totalMultas]);
+
+  // Evolução mensal: agrupa parcelas pagas por mês
+  const receitasMensais = useMemo(() => {
+    const meses: Record<string, { receita: number; descontos: number }> = {};
+    parcelasPagas.forEach((p) => {
+      const date = new Date(p.dataPagamento ?? p.data_pagamento ?? p.created_at);
+      const key = date.toLocaleString('pt-BR', { year: 'numeric', month: 'short' }).replace('.', '');
+      if (!meses[key]) meses[key] = { receita: 0, descontos: 0 };
+      meses[key].receita += p.valor ?? 0;
+      meses[key].descontos += p.desconto ?? 0;
+    });
+    return Object.entries(meses)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([mes, v]) => ({
+        mes: mes.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        receita: v.receita,
+        despesa: v.descontos,
+        lucro: v.receita - v.descontos,
+      }));
+  }, [parcelasPagas]);
+
+  // Fluxo de caixa: últimos 7 dias de pagamentos
+  const fluxoCaixa = useMemo(() => {
+    const hoje = new Date();
+    const dias: Record<string, { entrada: number; saida: number }> = {};
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(hoje);
+      d.setDate(d.getDate() - i);
+      const key = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+      dias[key] = { entrada: 0, saida: 0 };
+    }
+    parcelasPagas.forEach((p) => {
+      const date = new Date(p.dataPagamento ?? p.data_pagamento ?? p.created_at);
+      const key = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+      if (dias[key]) {
+        dias[key].entrada += p.valor ?? 0;
+      }
+    });
+    // Descontos concedidos como "saída"
+    parcelasPagas.forEach((p) => {
+      if ((p.desconto ?? 0) > 0) {
+        const date = new Date(p.dataPagamento ?? p.data_pagamento ?? p.created_at);
+        const key = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        if (dias[key]) {
+          dias[key].saida += p.desconto ?? 0;
+        }
+      }
+    });
+    return Object.entries(dias).map(([dia, v]) => ({ dia, ...v }));
+  }, [parcelasPagas]);
+
+  if (loadingParcelas) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -52,18 +109,6 @@ export default function DashboardFinanceiroPage() {
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Dashboard Financeiro</h1>
           <p className="text-muted-foreground mt-1">Visão detalhada da saúde financeira da operação</p>
-        </div>
-        <div className="flex gap-3">
-          <Select defaultValue="fev">
-            <SelectTrigger className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="jan">Janeiro 2026</SelectItem>
-              <SelectItem value="fev">Fevereiro 2026</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button variant="outline"><Download className="w-4 h-4 mr-2" />Exportar</Button>
         </div>
       </div>
 
@@ -75,36 +120,30 @@ export default function DashboardFinanceiroPage() {
             <DollarSign className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(1320000)}</div>
-            <div className="flex items-center text-sm text-green-600 mt-1">
-              <ArrowUpRight className="w-4 h-4" /> +5.6% vs mês anterior
-            </div>
+            <div className="text-2xl font-bold">{formatCurrency(receitaBruta)}</div>
+            <div className="text-xs text-muted-foreground mt-1">{parcelasPagas.length} parcelas pagas</div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Despesas</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Descontos</CardTitle>
             <TrendingDown className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(440000)}</div>
-            <div className="flex items-center text-sm text-red-600 mt-1">
-              <ArrowDownRight className="w-4 h-4" /> +4.8% vs mês anterior
-            </div>
+            <div className="text-2xl font-bold">{formatCurrency(totalDescontos)}</div>
+            <div className="text-xs text-muted-foreground mt-1">concedidos em pagamentos</div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Lucro Líquido</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Receita Líquida</CardTitle>
             <TrendingUp className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(880000)}</div>
-            <div className="flex items-center text-sm text-green-600 mt-1">
-              <ArrowUpRight className="w-4 h-4" /> +6.0% vs mês anterior
-            </div>
+            <div className="text-2xl font-bold">{formatCurrency(receitaLiquida)}</div>
+            <div className="text-xs text-muted-foreground mt-1">receita - descontos</div>
           </CardContent>
         </Card>
 
@@ -114,9 +153,9 @@ export default function DashboardFinanceiroPage() {
             <TrendingUp className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">66.7%</div>
-            <div className="flex items-center text-sm text-green-600 mt-1">
-              <ArrowUpRight className="w-4 h-4" /> +0.3pp vs mês anterior
+            <div className="text-2xl font-bold">{margemPct}%</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              {emprestimos.filter((e) => e.status === 'ativo').length} empréstimos ativos
             </div>
           </CardContent>
         </Card>
@@ -125,55 +164,69 @@ export default function DashboardFinanceiroPage() {
       {/* Gráficos */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader><CardTitle>Evolução Receita x Despesa</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Evolução Receita</CardTitle></CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={receitasMensais}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="mes" />
-                <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                <Legend />
-                <Line type="monotone" dataKey="receita" name="Receita" stroke="var(--chart-1)" strokeWidth={2} />
-                <Line type="monotone" dataKey="despesa" name="Despesa" stroke="var(--chart-4)" strokeWidth={2} />
-                <Line type="monotone" dataKey="lucro" name="Lucro" stroke="var(--chart-5)" strokeWidth={2} strokeDasharray="5 5" />
-              </LineChart>
-            </ResponsiveContainer>
+            <LWCChart
+              height={300}
+              series={[
+                {
+                  label: 'Receita',
+                  color: '#3b82f6',
+                  type: 'area',
+                  data: receitasMensais.map((r) => ({ time: r.mes, value: r.receita })),
+                },
+                {
+                  label: 'Descontos',
+                  color: '#ef4444',
+                  type: 'line',
+                  data: receitasMensais.map((r) => ({ time: r.mes, value: r.despesa })),
+                },
+                {
+                  label: 'Líquido',
+                  color: '#22c55e',
+                  type: 'line',
+                  data: receitasMensais.map((r) => ({ time: r.mes, value: r.lucro })),
+                },
+              ]}
+              emptyText="Nenhuma parcela paga registrada"
+            />
+            <div className="flex gap-4 justify-center mt-3 flex-wrap">
+              {[{c:'#3b82f6',l:'Receita'},{c:'#ef4444',l:'Descontos'},{c:'#22c55e',l:'Líquido'}].map((item) => (
+                <div key={item.l} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="w-3 h-0.5 inline-block rounded" style={{ backgroundColor: item.c }} />
+                  {item.l}
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader><CardTitle>Composição da Receita</CardTitle></CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie data={composicaoReceita} cx="50%" cy="50%" outerRadius={100} dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                  {composicaoReceita.map((entry, index) => (
-                    <Cell key={index} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v: number) => formatCurrency(v)} />
-              </PieChart>
-            </ResponsiveContainer>
+          <CardContent className="flex justify-center">
+            <DonutChart
+              size={270}
+              data={composicaoReceita.map((c) => ({ name: c.name, value: c.value, color: c.color }))}
+              formatValue={formatCurrency}
+            />
           </CardContent>
         </Card>
       </div>
 
       {/* Fluxo de Caixa Diário */}
       <Card>
-        <CardHeader><CardTitle>Fluxo de Caixa - Últimos 7 dias</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Fluxo de Caixa — Últimos 7 dias</CardTitle></CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={fluxoCaixa}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="dia" />
-              <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: number) => formatCurrency(v)} />
-              <Legend />
-              <Bar dataKey="entrada" name="Entradas" fill="var(--chart-5)" />
-              <Bar dataKey="saida" name="Saídas" fill="var(--chart-4)" />
-            </BarChart>
-          </ResponsiveContainer>
+          <CategoryBarChart
+            height={280}
+            data={fluxoCaixa.map((d) => ({ label: d.dia, entrada: d.entrada, saida: d.saida }))}
+            series={[
+              { label: 'Entradas', color: '#22c55e', dataKey: 'entrada' },
+              { label: 'Descontos', color: '#ef4444', dataKey: 'saida' },
+            ]}
+            labelKey="label"
+            formatValue={formatCurrency}
+          />
         </CardContent>
       </Card>
     </div>

@@ -18,7 +18,6 @@ import {
   Users,
   Network,
   MessageSquare,
-  Kanban,
   FileText,
   Settings,
   LogOut,
@@ -27,16 +26,47 @@ import {
   ChevronDown,
   Menu,
   X,
-  Activity,
   Sun,
   Moon,
+  TrendingUp,
+  Receipt,
+  BarChart3,
+  UserSearch,
+  CreditCard,
+  Wallet,
+  ClipboardList,
+  History,
+  Share2,
+  Gift,
+  ShieldBan,
+  UserPlus,
+  MessagesSquare,
+  Bot,
+  Workflow,
+  FileCode,
+  Columns3,
+  Scale,
+  Headset,
+  Eye,
+  FileBarChart,
+  FileSpreadsheet,
+  Download,
+  KeyRound,
+  UserCog,
+  Plug,
+  UserCircle,
+  Monitor,
+  Gauge,
+  QrCode,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { useActivityTracker } from '../hooks/useActivityTracker';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useState } from 'react';
-import logo from '../assets/logo.png';
+import logo from '../assets/logo-login.png';
+import { AnimatedBackground } from './AnimatedBackground';
 
 export function MainLayout() {
   const { user, logout } = useAuth();
@@ -45,74 +75,84 @@ export function MainLayout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  // Rastreia atividade do usuário logado (online/offline, sessão, heartbeat)
+  useActivityTracker(user?.id);
+
   const navigation = [
     {
       title: 'DASHBOARD',
       items: [
         { name: 'Visão Geral', href: '/dashboard', icon: LayoutDashboard, roles: ['admin', 'gerencia'] },
-        { name: 'Financeiro', href: '/dashboard/financeiro', icon: LayoutDashboard, roles: ['admin', 'gerencia'] },
-        { name: 'Cobrança', href: '/dashboard/cobranca', icon: LayoutDashboard, roles: ['admin', 'cobranca'] },
-        { name: 'Comercial', href: '/dashboard/comercial', icon: LayoutDashboard, roles: ['admin', 'comercial'] },
+        { name: 'Financeiro', href: '/dashboard/financeiro', icon: TrendingUp, roles: ['admin', 'gerencia'] },
+        { name: 'Cobrança', href: '/dashboard/cobranca', icon: Receipt, roles: ['admin', 'cobranca'] },
+        { name: 'Comercial', href: '/dashboard/comercial', icon: BarChart3, roles: ['admin', 'comercial'] },
       ],
     },
     {
       title: 'CLIENTES',
       items: [
-        { name: 'Lista de Clientes', href: '/clientes', icon: Users, roles: ['admin', 'gerencia', 'comercial'] },
-        { name: 'Análise de Crédito', href: '/clientes/analise', icon: Users, roles: ['admin', 'gerencia'] },
-        { name: 'Empréstimos Ativos', href: '/clientes/emprestimos', icon: Users, roles: ['admin', 'gerencia'] },
-        { name: 'Gestão de Parcelas', href: '/clientes/parcelas', icon: Users, roles: ['admin', 'gerencia'] },
-        { name: 'Histórico', href: '/clientes/historico', icon: Users, roles: ['admin', 'gerencia'] },
+        { name: 'Lista de Clientes', href: '/clientes', icon: UserSearch, roles: ['admin', 'gerencia', 'comercial'] },
+        { name: 'Análise de Crédito', href: '/clientes/analise', icon: CreditCard, roles: ['admin', 'gerencia'] },
+        { name: 'Empréstimos Ativos', href: '/clientes/emprestimos', icon: Wallet, roles: ['admin', 'gerencia'] },
+        { name: 'Gestão de Parcelas', href: '/clientes/parcelas', icon: ClipboardList, roles: ['admin', 'gerencia'] },
+        { name: 'Histórico', href: '/clientes/historico', icon: History, roles: ['admin', 'gerencia'] },
+      ],
+    },
+    {
+      title: 'PAGAMENTOS',
+      items: [
+        { name: 'Pagamentos Pix', href: '/pagamentos', icon: QrCode, roles: ['admin', 'gerencia'] },
       ],
     },
     {
       title: 'REDE DE INDICAÇÕES',
       items: [
-        { name: 'Mapa da Rede', href: '/rede', icon: Network, roles: ['admin', 'gerencia'] },
-        { name: 'Bônus e Comissões', href: '/rede/bonus', icon: Network, roles: ['admin', 'gerencia'] },
-        { name: 'Grupos Bloqueados', href: '/rede/bloqueados', icon: Network, roles: ['admin', 'gerencia'] },
-        { name: 'Indicar Novo', href: '/rede/indicar', icon: Network, roles: ['admin', 'comercial'] },
+        { name: 'Mapa da Rede', href: '/rede', icon: Share2, roles: ['admin', 'gerencia'] },
+        { name: 'Bônus e Comissões', href: '/rede/bonus', icon: Gift, roles: ['admin', 'gerencia'] },
+        { name: 'Grupos Bloqueados', href: '/rede/bloqueados', icon: ShieldBan, roles: ['admin', 'gerencia'] },
+        { name: 'Indicar Novo', href: '/rede/indicar', icon: UserPlus, roles: ['admin', 'comercial'] },
       ],
     },
     {
       title: 'COMUNICAÇÃO',
       items: [
-        { name: 'Chat Geral', href: '/chat', icon: MessageSquare, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
+        { name: 'Chat Geral', href: '/chat', icon: MessagesSquare, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
         { name: 'WhatsApp', href: '/whatsapp', icon: MessageSquare, roles: ['admin', 'gerencia', 'cobranca'] },
-        { name: 'Fluxos de Chat', href: '/chat/fluxos', icon: MessageSquare, roles: ['admin', 'gerencia'] },
-        { name: 'Templates', href: '/chat/templates', icon: MessageSquare, roles: ['admin', 'gerencia'] },
+        { name: 'Fluxos de Chat', href: '/chat/fluxos', icon: Workflow, roles: ['admin', 'gerencia'] },
+        { name: 'Templates', href: '/chat/templates', icon: FileCode, roles: ['admin', 'gerencia'] },
       ],
     },
     {
       title: 'KANBAN',
       items: [
-        { name: 'Cobrança', href: '/kanban/cobranca', icon: Kanban, roles: ['admin', 'gerencia', 'cobranca'] },
-        { name: 'Análise de Crédito', href: '/kanban/analise', icon: Kanban, roles: ['admin', 'gerencia'] },
-        { name: 'Atendimento', href: '/kanban/atendimento', icon: Kanban, roles: ['admin', 'gerencia', 'comercial'] },
-        { name: 'Visão Gerencial', href: '/kanban/gerencial', icon: Kanban, roles: ['admin', 'gerencia'] },
+        { name: 'Cobrança', href: '/kanban/cobranca', icon: Columns3, roles: ['admin', 'gerencia', 'cobranca'] },
+        { name: 'Análise de Crédito', href: '/kanban/analise', icon: Scale, roles: ['admin', 'gerencia'] },
+        { name: 'Atendimento', href: '/kanban/atendimento', icon: Headset, roles: ['admin', 'gerencia', 'comercial'] },
+        { name: 'Visão Gerencial', href: '/kanban/gerencial', icon: Eye, roles: ['admin', 'gerencia'] },
       ],
     },
     {
       title: 'RELATÓRIOS',
       items: [
-        { name: 'Gerenciais', href: '/relatorios/gerenciais', icon: FileText, roles: ['admin', 'gerencia'] },
-        { name: 'Operacionais', href: '/relatorios/operacionais', icon: FileText, roles: ['admin', 'gerencia'] },
-        { name: 'Exportar Dados', href: '/relatorios/exportar', icon: FileText, roles: ['admin', 'gerencia'] },
+        { name: 'Gerenciais', href: '/relatorios/gerenciais', icon: FileBarChart, roles: ['admin', 'gerencia'] },
+        { name: 'Operacionais', href: '/relatorios/operacionais', icon: FileSpreadsheet, roles: ['admin', 'gerencia'] },
+        { name: 'Exportar Dados', href: '/relatorios/exportar', icon: Download, roles: ['admin', 'gerencia'] },
       ],
     },
     {
       title: 'CONFIGURAÇÕES',
       items: [
-        { name: 'Perfis de Acesso', href: '/configuracoes/perfis', icon: Settings, roles: ['admin'] },
-        { name: 'Integrações', href: '/configuracoes/integracoes', icon: Settings, roles: ['admin'] },
-        { name: 'Minha Conta', href: '/configuracoes/conta', icon: Settings, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
+        { name: 'Perfis de Acesso', href: '/configuracoes/perfis', icon: KeyRound, roles: ['admin'] },
+        { name: 'Gerenciar Usuários', href: '/configuracoes/usuarios', icon: UserCog, roles: ['admin'] },
+        { name: 'Integrações', href: '/configuracoes/integracoes', icon: Plug, roles: ['admin'] },
+        { name: 'Minha Conta', href: '/configuracoes/conta', icon: UserCircle, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
       ],
     },
     {
       title: 'EQUIPE',
       items: [
-        { name: 'Monitoramento', href: '/equipe/monitoramento', icon: Activity, roles: ['admin', 'gerencia'] },
-        { name: 'Produtividade', href: '/equipe/produtividade', icon: Activity, roles: ['admin', 'gerencia'] },
+        { name: 'Monitoramento', href: '/equipe/monitoramento', icon: Monitor, roles: ['admin', 'gerencia'] },
+        { name: 'Produtividade', href: '/equipe/produtividade', icon: Gauge, roles: ['admin', 'gerencia'] },
       ],
     },
   ];
@@ -134,43 +174,44 @@ export function MainLayout() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-muted transition-colors duration-300">
+    <div className="flex h-screen overflow-hidden transition-colors duration-300">
+      <AnimatedBackground />
       {/* Sidebar */}
       <aside
         className={`${
           sidebarOpen ? 'w-64' : 'w-0'
-        } transition-all duration-300 bg-slate-900 text-sidebar-foreground flex flex-col overflow-hidden`}
+        } transition-all duration-300 glass-sidebar text-sidebar-foreground flex flex-col overflow-hidden relative z-10`}
       >
         {/* Logo */}
-        <div className="p-4 border-b border-sidebar-border flex items-center justify-between">
+        <div className="p-5 border-b border-sidebar-border/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
-           <img src={logo} alt="Logo" className="w-64 h-auto" />
+           <img src={logo} alt="Logo" className="w-48 h-auto" />
           </div>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto p-4 space-y-6">
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5 sidebar-scrollbar">
           {navigation.map((section) => {
             const visibleItems = section.items.filter((item) => canAccess(item.roles));
             if (visibleItems.length === 0) return null;
 
             return (
               <div key={section.title}>
-                <h3 className="text-xs font-semibold text-sidebar-primary mb-2">
+                <h3 className="text-[10px] font-semibold text-sidebar-primary/80 uppercase tracking-widest mb-2 px-3">
                   {section.title}
                 </h3>
-                <ul className="space-y-1">
+                <ul className="space-y-0.5">
                   {visibleItems.map((item) => (
                     <li key={item.name}>
                       <Link
                         to={item.href}
-                        className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                        className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200 ${
                           isActive(item.href)
-                            ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-                            : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                            ? 'liquid-metal-btn-active text-sidebar-primary-foreground'
+                            : 'liquid-metal-btn text-sidebar-foreground/60 hover:text-sidebar-foreground'
                         }`}
                       >
-                        <item.icon className="w-4 h-4" />
+                        <item.icon className="w-4 h-4 shrink-0" strokeWidth={isActive(item.href) ? 2.2 : 1.8} />
                         <span>{item.name}</span>
                       </Link>
                     </li>
@@ -182,21 +223,21 @@ export function MainLayout() {
         </nav>
 
         {/* Logout */}
-        <div className="p-4 border-t border-sidebar-border">
+        <div className="p-3 border-t border-sidebar-border/50">
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground w-full transition-colors"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium text-sidebar-foreground/50 hover:text-red-400 w-full transition-all duration-200 liquid-metal-logout"
           >
-            <LogOut className="w-4 h-4" />
+            <LogOut className="w-4 h-4" strokeWidth={1.8} />
             <span>Sair</span>
           </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden relative z-10">
         {/* Header */}
-        <header className="bg-card border-b border-border p-4 flex items-center justify-between transition-colors duration-300">
+        <header className="glass-header p-4 flex items-center justify-between transition-colors duration-300">
           <div className="flex items-center gap-4 flex-1">
             <Button
               variant="ghost"

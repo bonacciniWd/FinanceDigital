@@ -31,6 +31,7 @@ import IndicarNovoPage from './pages/IndicarNovoPage';
 import ChatPage from './pages/ChatPage';
 import WhatsAppPage from './pages/WhatsAppPage';
 import FluxosChatPage from './pages/FluxosChatPage';
+import FluxoEditorPage from './pages/FluxoEditorPage';
 import TemplatesMensagensPage from './pages/TemplatesMensagensPage';
 import KanbanCobrancaPage from './pages/KanbanCobrancaPage';
 import KanbanAnalisePage from './pages/KanbanAnalisePage';
@@ -42,9 +43,11 @@ import ExportarDadosPage from './pages/ExportarDadosPage';
 import PerfisAcessoPage from './pages/PerfisAcessoPage';
 import IntegracoesPage from './pages/IntegracoesPage';
 import MinhaContaPage from './pages/MinhaContaPage';
+import GerenciarUsuariosPage from './pages/GerenciarUsuariosPage';
 import MonitoramentoAtividadePage from './pages/MonitoramentoAtividadePage';
 import ProdutividadePage from './pages/ProdutividadePage';
 import ClienteAreaPage from './pages/ClienteAreaPage';
+import PagamentosWooviPage from './pages/PagamentosWooviPage';
 
 export const router = createBrowserRouter([
   {
@@ -60,6 +63,15 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <ClienteAreaPage />
+      </ProtectedRoute>
+    ),
+  },
+  // Editor de fluxo — fullscreen, sem sidebar
+  {
+    path: '/chat/fluxos/:id/editor',
+    element: (
+      <ProtectedRoute>
+        <FluxoEditorPage />
       </ProtectedRoute>
     ),
   },
@@ -83,6 +95,9 @@ export const router = createBrowserRouter([
       { path: 'clientes/emprestimos', element: <EmprestimosAtivosPage /> },
       { path: 'clientes/historico', element: <HistoricoClientesPage /> },
       { path: 'clientes/parcelas', element: <GestaoParcelasPage /> },
+
+      // Pagamentos / Woovi
+      { path: 'pagamentos', element: <PagamentosWooviPage /> },
 
       // Rede de Indicações
       { path: 'rede', element: <RedeIndicacoesPage /> },
@@ -109,6 +124,7 @@ export const router = createBrowserRouter([
 
       // Configurações
       { path: 'configuracoes/perfis', element: <PerfisAcessoPage /> },
+      { path: 'configuracoes/usuarios', element: <GerenciarUsuariosPage /> },
       { path: 'configuracoes/integracoes', element: <IntegracoesPage /> },
       { path: 'configuracoes/conta', element: <MinhaContaPage /> },
 

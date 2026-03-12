@@ -1,0 +1,98 @@
+# fly.toml — Evolution API no Fly.io
+# URL estática: https://finance-digital-evolution.fly.dev
+#
+# Deploy inicial:
+#   cd fly-evolution
+#   fly launch --no-deploy       (já existente, usa este fly.toml)
+#   fly secrets set ...          (ver deploy.sh)
+#   fly deploy
+#
+# Região: gru (São Paulo) → menor latência para BR
+
+app = "finance-digital-evolution"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# ── Máquina ───────────────────────────────────────────────────────────────────
+# shared-cpu-1x 512MB → suficiente para Evolution API (sem MongoDB)
+# Upgrade para dedicated-cpu-1x 1GB se a instância ficar instável com muitas msgs
+[vm]
+  cpu_kind  = "shared"
+  cpus      = 1
+  memory_mb = 512
+
+# ── Serviço HTTP ──────────────────────────────────────────────────────────────
+[[services]]
+  protocol      = "tcp"
+  internal_port = 8080
+
+  [[services.ports]]
+    port     = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port     = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type       = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+  [[services.http_checks]]
+    interval       = 30000   # 30s
+    timeout        = 5000    # 5s
+    grace_period   = "10s"
+    method         = "GET"
+    path           = "/"
+    protocol       = "http"
+    restart_limit  = 3
+
+# ── Volumes persistentes ──────────────────────────────────────────────────────
+# Crie antes do primeiro deploy:
+#   fly volumes create evolution_data --region gru --size 1
+#
+# Se precisar de mais espaço:
+#   fly volumes extend <volume-id> --size 3
+
+[[mounts]]
+  source      = "evolution_data"
+  destination = "/evolution/instances"
+
+# ── Variáveis de ambiente (não-sensíveis) ─────────────────────────────────────
+# Variáveis SENSÍVEIS ficam em fly secrets (ver deploy.sh):
+#   AUTHENTICATION_API_KEY, EVOLUTION_API_KEY (mesma coisa)
+[env]
+  # URL pública desta instância (Fly fornece o certificado TLS automaticamente)
+  SERVER_URL = "https://finance-digital-evolution.fly.dev"
+
+  # Auth — tipo (o valor da chave vai via secret)
+  AUTHENTICATION_TYPE                    = "apikey"
+  AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES = "true"
+
+  # Armazenamento local (sem MongoDB — sessões ficam no volume Fly)
+  DATABASE_ENABLED     = "false"
+  CACHE_REDIS_ENABLED  = "false"
+  CACHE_LOCAL_ENABLED  = "true"
+
+  # QR Code
+  QRCODE_LIMIT = "30"
+  QRCODE_COLOR = "#198754"
+
+  # Webhook global (desabilitado — cada instância configura o seu via manage-instance)
+  WEBHOOK_GLOBAL_ENABLED = "false"
+  WEBHOOK_GLOBAL_URL     = ""
+
+  # Logs (reduza para "ERROR,WARN" em produção para economizar memória)
+  LOG_LEVEL  = "ERROR,WARN,INFO,LOG"
+  LOG_BAILEYS = "error"
+
+  # Instâncias
+  DEL_INSTANCE       = "false"
+  DEL_TEMP_INSTANCES = "false"
+
+  # Identificação do cliente WhatsApp
+  CONFIG_SESSION_PHONE_CLIENT = "FinanceDigital"
+  CONFIG_SESSION_PHONE_NAME   = "Chrome"

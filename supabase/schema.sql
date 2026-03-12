@@ -16,7 +16,15 @@ CREATE TYPE mensagem_remetente AS ENUM ('cliente', 'sistema');
 CREATE TYPE mensagem_tipo AS ENUM ('texto', 'arquivo', 'boleto');
 CREATE TYPE template_categoria AS ENUM ('cobranca', 'boas_vindas', 'lembrete', 'negociacao');
 CREATE TYPE funcionario_status AS ENUM ('online', 'offline', 'ausente');
-
+CREATE TYPE analise_credito_status AS ENUM ('pendente', 'em_analise', 'aprovado', 'recusado');
+CREATE TYPE ticket_status AS ENUM ('aberto', 'em_atendimento', 'aguardando_cliente', 'resolvido', 'cancelado');
+CREATE TYPE ticket_canal AS ENUM ('whatsapp', 'chat', 'telefone', 'email', 'presencial');
+CREATE TYPE ticket_prioridade AS ENUM ('baixa', 'media', 'alta', 'urgente');
+CREATE TYPE kanban_cobranca_etapa AS ENUM ('a_vencer', 'vencido', 'contatado', 'negociacao', 'acordo', 'pago', 'perdido');
+CREATE TYPE whatsapp_instance_status AS ENUM ('conectado', 'desconectado', 'qr_pendente');
+CREATE TYPE fluxo_status AS ENUM ('ativo', 'pausado', 'rascunho');
+CREATE TYPE fluxo_etapa_tipo AS ENUM ('mensagem', 'condicao', 'acao', 'espera', 'finalizar');
+CREATE TYPE whatsapp_msg_status AS ENUM ('pendente', 'enviado', 'enviada', 'entregue', 'lido', 'lida', 'recebida', 'erro', 'falha');
 
 -- ── 2. PROFILES (extends auth.users) ────────────────────────
 
@@ -109,6 +117,7 @@ CREATE TABLE emprestimos (
   parcelas_pagas      INTEGER NOT NULL DEFAULT 0,
   valor_parcela       NUMERIC(12,2) NOT NULL,
   taxa_juros          NUMERIC(5,2) NOT NULL,
+  tipo_juros          VARCHAR(10) NOT NULL DEFAULT 'mensal',  -- mensal | semanal | diario
   data_contrato       DATE NOT NULL,
   proximo_vencimento  DATE NOT NULL,
   status              emprestimo_status NOT NULL DEFAULT 'ativo',
@@ -249,6 +258,87 @@ CREATE INDEX idx_logs_user ON logs_atividade(user_id);
 CREATE INDEX idx_logs_created ON logs_atividade(created_at DESC);
 
 
+-- ── 10b. ANÁLISES DE CRÉDITO ─────────────────────────────────
+
+CREATE TABLE analises_credito (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cliente_id        UUID REFERENCES clientes(id) ON DELETE SET NULL,
+  cliente_nome      TEXT NOT NULL,
+  cpf               TEXT NOT NULL,
+  valor_solicitado  NUMERIC(12,2) NOT NULL,
+  renda_mensal      NUMERIC(12,2) NOT NULL,
+  score_serasa      INTEGER NOT NULL CHECK (score_serasa >= 0 AND score_serasa <= 1000),
+  score_interno     INTEGER NOT NULL DEFAULT 0 CHECK (score_interno >= 0 AND score_interno <= 1000),
+  status            analise_credito_status NOT NULL DEFAULT 'pendente',
+  data_solicitacao  DATE NOT NULL DEFAULT CURRENT_DATE,
+  motivo            TEXT,
+  analista_id       UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_analises_status ON analises_credito(status);
+CREATE INDEX idx_analises_cliente ON analises_credito(cliente_id);
+CREATE INDEX idx_analises_data ON analises_credito(data_solicitacao DESC);
+
+CREATE TRIGGER analises_credito_updated_at
+  BEFORE UPDATE ON analises_credito
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
+-- ── 10c. TICKETS DE ATENDIMENTO ──────────────────────────────
+
+CREATE TABLE tickets_atendimento (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cliente_id        UUID NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  atendente_id      UUID REFERENCES funcionarios(id) ON DELETE SET NULL,
+  assunto           TEXT NOT NULL,
+  descricao         TEXT,
+  status            ticket_status NOT NULL DEFAULT 'aberto',
+  canal             ticket_canal NOT NULL DEFAULT 'whatsapp',
+  prioridade        ticket_prioridade NOT NULL DEFAULT 'media',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolvido_em      TIMESTAMPTZ
+);
+
+CREATE INDEX idx_tickets_cliente ON tickets_atendimento(cliente_id);
+CREATE INDEX idx_tickets_atendente ON tickets_atendimento(atendente_id);
+CREATE INDEX idx_tickets_status ON tickets_atendimento(status);
+CREATE INDEX idx_tickets_prioridade ON tickets_atendimento(prioridade);
+CREATE INDEX idx_tickets_created ON tickets_atendimento(created_at DESC);
+
+CREATE TRIGGER tickets_atendimento_updated_at
+  BEFORE UPDATE ON tickets_atendimento
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
+-- ── 10d. KANBAN COBRANÇA (etapa de pipeline) ─────────────────
+
+CREATE TABLE kanban_cobranca (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cliente_id        UUID NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  parcela_id        UUID REFERENCES parcelas(id) ON DELETE SET NULL,
+  responsavel_id    UUID REFERENCES funcionarios(id) ON DELETE SET NULL,
+  etapa             kanban_cobranca_etapa NOT NULL DEFAULT 'a_vencer',
+  valor_divida      NUMERIC(12,2) NOT NULL DEFAULT 0,
+  dias_atraso       INTEGER NOT NULL DEFAULT 0,
+  tentativas_contato INTEGER NOT NULL DEFAULT 0,
+  ultimo_contato    TIMESTAMPTZ,
+  observacao        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_kanban_cob_cliente ON kanban_cobranca(cliente_id);
+CREATE INDEX idx_kanban_cob_responsavel ON kanban_cobranca(responsavel_id);
+CREATE INDEX idx_kanban_cob_etapa ON kanban_cobranca(etapa);
+
+CREATE TRIGGER kanban_cobranca_updated_at
+  BEFORE UPDATE ON kanban_cobranca
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
 -- ── 11. RPC FUNCTIONS ────────────────────────────────────────
 
 -- Dashboard Stats
@@ -300,6 +390,42 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Kanban Gerencial Stats
+CREATE OR REPLACE FUNCTION get_kanban_stats()
+RETURNS JSON AS $$
+DECLARE
+  result JSON;
+BEGIN
+  SELECT json_build_object(
+    'total_analises', (SELECT COUNT(*) FROM analises_credito),
+    'analises_pendentes', (SELECT COUNT(*) FROM analises_credito WHERE status = 'pendente'),
+    'analises_em_analise', (SELECT COUNT(*) FROM analises_credito WHERE status = 'em_analise'),
+    'analises_aprovadas', (SELECT COUNT(*) FROM analises_credito WHERE status = 'aprovado'),
+    'analises_recusadas', (SELECT COUNT(*) FROM analises_credito WHERE status = 'recusado'),
+    'total_tickets', (SELECT COUNT(*) FROM tickets_atendimento),
+    'tickets_abertos', (SELECT COUNT(*) FROM tickets_atendimento WHERE status = 'aberto'),
+    'tickets_em_atendimento', (SELECT COUNT(*) FROM tickets_atendimento WHERE status = 'em_atendimento'),
+    'tickets_resolvidos', (SELECT COUNT(*) FROM tickets_atendimento WHERE status = 'resolvido'),
+    'total_cobranca', (SELECT COUNT(*) FROM kanban_cobranca),
+    'cobranca_em_negociacao', (SELECT COUNT(*) FROM kanban_cobranca WHERE etapa = 'negociacao'),
+    'cobranca_acordos', (SELECT COUNT(*) FROM kanban_cobranca WHERE etapa = 'acordo'),
+    'cobranca_pagos', (SELECT COUNT(*) FROM kanban_cobranca WHERE etapa = 'pago'),
+    'valor_em_cobranca', (SELECT COALESCE(SUM(valor_divida), 0) FROM kanban_cobranca WHERE etapa NOT IN ('pago', 'perdido')),
+    'valor_recuperado', (SELECT COALESCE(SUM(valor_divida), 0) FROM kanban_cobranca WHERE etapa = 'pago'),
+    'taxa_aprovacao_credito', (
+      SELECT CASE
+        WHEN COUNT(*) FILTER (WHERE status IN ('aprovado', 'recusado')) = 0 THEN 0
+        ELSE ROUND(
+          (COUNT(*) FILTER (WHERE status = 'aprovado')::NUMERIC /
+           COUNT(*) FILTER (WHERE status IN ('aprovado', 'recusado'))) * 100, 1
+        )
+      END FROM analises_credito
+    )
+  ) INTO result;
+  RETURN result;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 
 -- ── 12. ROW LEVEL SECURITY (RLS) ─────────────────────────────
 
@@ -312,6 +438,9 @@ ALTER TABLE templates_whatsapp ENABLE ROW LEVEL SECURITY;
 ALTER TABLE funcionarios ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessoes_atividade ENABLE ROW LEVEL SECURITY;
 ALTER TABLE logs_atividade ENABLE ROW LEVEL SECURITY;
+ALTER TABLE analises_credito ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tickets_atendimento ENABLE ROW LEVEL SECURITY;
+ALTER TABLE kanban_cobranca ENABLE ROW LEVEL SECURITY;
 
 -- Helper: pega role do user logado
 CREATE OR REPLACE FUNCTION auth_role()
@@ -322,6 +451,9 @@ $$ LANGUAGE sql SECURITY DEFINER STABLE;
 -- PROFILES: user vê o próprio, admin/gerencia veem todos
 CREATE POLICY "profiles_select_own" ON profiles
   FOR SELECT USING (id = auth.uid() OR auth_role() IN ('admin', 'gerencia'));
+
+CREATE POLICY "profiles_insert_own" ON profiles
+  FOR INSERT WITH CHECK (id = auth.uid());
 
 CREATE POLICY "profiles_update_own" ON profiles
   FOR UPDATE USING (id = auth.uid())
@@ -421,65 +553,238 @@ CREATE POLICY "logs_select" ON logs_atividade
 CREATE POLICY "logs_insert" ON logs_atividade
   FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 
+-- ANALISES_CREDITO: todos logados veem; admin/gerencia/comercial criam e editam
+CREATE POLICY "analises_select" ON analises_credito
+  FOR SELECT USING (auth.uid() IS NOT NULL);
 
--- ── 13. SEED DATA (Dados Iniciais) ───────────────────────────
--- Execute APÓS criar os primeiros usuários no Supabase Auth.
--- Os IDs dos clientes são UUIDs fixos para manter referências.
+CREATE POLICY "analises_insert" ON analises_credito
+  FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia', 'comercial'));
 
--- Clientes seed
-INSERT INTO clientes (id, nome, email, telefone, cpf, sexo, status, valor, vencimento, dias_atraso, ultimo_contato, limite_credito, credito_utilizado, score_interno, bonus_acumulado, indicado_por)
-VALUES
-  ('11111111-1111-1111-1111-111111111111', 'João Silva', 'joao@email.com', '(11) 99999-9999', '123.456.789-00', 'masculino', 'em_dia', 5000, '2026-07-15', 0, NULL, 10000, 5000, 750, 150, '22222222-2222-2222-2222-222222222222'),
-  ('22222222-2222-2222-2222-222222222222', 'Maria Santos', 'maria@email.com', '(11) 98888-8888', '987.654.321-00', 'feminino', 'vencido', 3200, '2026-05-01', 45, '2026-06-10 (Chat)', 8000, 3200, 420, 100, NULL),
-  ('33333333-3333-3333-3333-333333333333', 'Pedro Oliveira', 'pedro@email.com', '(11) 97777-7777', '111.222.333-44', 'masculino', 'a_vencer', 8000, '2026-06-20', 0, NULL, 15000, 8000, 680, 75, '11111111-1111-1111-1111-111111111111'),
-  ('44444444-4444-4444-4444-444444444444', 'Ana Costa', 'ana@email.com', '(11) 96666-6666', '444.555.666-77', 'feminino', 'vencido', 2500, '2026-04-05', 76, '2026-05-05 (Tel)', 5000, 2500, 380, 50, '11111111-1111-1111-1111-111111111111'),
-  ('55555555-5555-5555-5555-555555555555', 'Carlos Souza', 'carlos@email.com', '(11) 95555-5555', '555.666.777-88', 'masculino', 'vencido', 12000, '2026-04-05', 76, '2026-05-05 (Tel)', 20000, 12000, 350, 0, '11111111-1111-1111-1111-111111111111'),
-  ('66666666-6666-6666-6666-666666666666', 'Fernanda Lima', 'fernanda@email.com', '(11) 94444-4444', '666.777.888-99', 'feminino', 'a_vencer', 4500, '2026-06-25', 0, NULL, 10000, 4500, 720, 200, NULL),
-  ('77777777-7777-7777-7777-777777777777', 'Roberto Alves', 'roberto@email.com', '(11) 93333-3333', '777.888.999-00', 'masculino', 'vencido', 1800, '2026-05-25', 23, '2026-06-15 (Whats)', 6000, 1800, 450, 25, NULL),
-  ('88888888-8888-8888-8888-888888888888', 'Patricia Gomes', 'patricia@email.com', '(11) 92222-2222', '888.999.000-11', 'feminino', 'vencido', 5500, '2026-02-24', 120, '2026-04-01 (Email)', 12000, 5500, 280, 0, NULL),
-  ('99999999-9999-9999-9999-999999999999', 'Lucas Mendes', 'lucas@email.com', '(11) 91111-1111', '999.000.111-22', 'masculino', 'vencido', 2200, '2026-06-07', 15, '2026-06-16 (Chat)', 7000, 2200, 520, 80, NULL),
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Paulo Mendes', 'paulo@email.com', '(11) 90000-0000', '000.111.222-33', 'masculino', 'a_vencer', 3200, '2026-06-25', 0, NULL, 8000, 3200, 690, 120, NULL);
+CREATE POLICY "analises_update" ON analises_credito
+  FOR UPDATE USING (auth_role() IN ('admin', 'gerencia', 'comercial'));
 
--- Empréstimos seed
-INSERT INTO emprestimos (id, cliente_id, valor, parcelas, parcelas_pagas, valor_parcela, taxa_juros, data_contrato, proximo_vencimento, status)
-VALUES
-  ('e1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 5000, 12, 5, 500, 2.5, '2025-09-15', '2026-03-15', 'ativo'),
-  ('e2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 3200, 10, 3, 380, 3.0, '2025-11-01', '2026-02-01', 'inadimplente'),
-  ('e3333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', 8000, 24, 6, 420, 2.8, '2025-08-20', '2026-03-20', 'ativo'),
-  ('e4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', 2500, 6, 1, 480, 3.2, '2025-12-05', '2026-01-05', 'inadimplente'),
-  ('e5555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555', 12000, 36, 8, 450, 2.2, '2025-06-05', '2026-03-05', 'inadimplente'),
-  ('e6666666-6666-6666-6666-666666666666', '66666666-6666-6666-6666-666666666666', 4500, 12, 4, 440, 2.6, '2025-10-25', '2026-03-25', 'ativo'),
-  ('e7777777-7777-7777-7777-777777777777', '77777777-7777-7777-7777-777777777777', 1800, 6, 2, 340, 3.5, '2025-12-25', '2026-02-25', 'inadimplente'),
-  ('e8888888-8888-8888-8888-888888888888', '88888888-8888-8888-8888-888888888888', 5500, 18, 2, 380, 3.0, '2025-12-24', '2026-02-24', 'inadimplente');
+CREATE POLICY "analises_delete" ON analises_credito
+  FOR DELETE USING (auth_role() = 'admin');
 
--- Parcelas seed
-INSERT INTO parcelas (emprestimo_id, cliente_id, numero, valor, valor_original, data_vencimento, status, juros, multa, desconto)
-VALUES
-  ('e1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 6, 500, 500, '2026-03-15', 'pendente', 0, 0, 0),
-  ('e1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 7, 500, 500, '2026-04-15', 'pendente', 0, 0, 0),
-  ('e2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 4, 418, 380, '2026-02-01', 'vencida', 28, 10, 0),
-  ('e2222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', 5, 380, 380, '2026-03-01', 'pendente', 0, 0, 0),
-  ('e3333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', 7, 420, 420, '2026-03-20', 'pendente', 0, 0, 0),
-  ('e4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', 2, 540, 480, '2026-01-05', 'vencida', 40, 20, 0),
-  ('e4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', 3, 510, 480, '2026-02-05', 'vencida', 20, 10, 0),
-  ('e5555555-5555-5555-5555-555555555555', '55555555-5555-5555-5555-555555555555', 9, 520, 450, '2026-03-05', 'vencida', 50, 20, 0),
-  ('e6666666-6666-6666-6666-666666666666', '66666666-6666-6666-6666-666666666666', 5, 440, 440, '2026-03-25', 'pendente', 0, 0, 0),
-  ('e7777777-7777-7777-7777-777777777777', '77777777-7777-7777-7777-777777777777', 3, 370, 340, '2026-02-25', 'vencida', 20, 10, 0),
-  ('e8888888-8888-8888-8888-888888888888', '88888888-8888-8888-8888-888888888888', 3, 430, 380, '2026-02-24', 'vencida', 35, 15, 0),
-  ('e8888888-8888-8888-8888-888888888888', '88888888-8888-8888-8888-888888888888', 4, 380, 380, '2026-03-24', 'pendente', 0, 0, 0);
+-- TICKETS_ATENDIMENTO: todos logados veem; admin/gerencia/cobranca/comercial criam; admin/gerencia/cobranca atualizam
+CREATE POLICY "tickets_select" ON tickets_atendimento
+  FOR SELECT USING (auth.uid() IS NOT NULL);
 
--- Templates WhatsApp seed
-INSERT INTO templates_whatsapp (nome, categoria, mensagem_masculino, mensagem_feminino, variaveis, ativo)
-VALUES
-  ('Lembrete de Vencimento', 'lembrete', 'Olá Sr. {nome}, lembramos que sua parcela de {valor} vence em {data}. Mantenha seu crédito em dia!', 'Olá Sra. {nome}, lembramos que sua parcela de {valor} vence em {data}. Mantenha seu crédito em dia!', ARRAY['nome', 'valor', 'data'], true),
-  ('Cobrança Amigável', 'cobranca', 'Prezado Sr. {nome}, identificamos que sua parcela está em atraso. Vamos regularizar? Entre em contato conosco.', 'Prezada Sra. {nome}, identificamos que sua parcela está em atraso. Vamos regularizar? Entre em contato conosco.', ARRAY['nome', 'valor', 'diasAtraso'], true),
-  ('Boas-vindas', 'boas_vindas', 'Bem-vindo ao FintechFlow, Sr. {nome}! Seu crédito de {valor} foi aprovado. Qualquer dúvida, estamos aqui.', 'Bem-vinda ao FintechFlow, Sra. {nome}! Seu crédito de {valor} foi aprovado. Qualquer dúvida, estamos aqui.', ARRAY['nome', 'valor'], true),
-  ('Proposta de Negociação', 'negociacao', 'Sr. {nome}, temos uma proposta especial para regularizar seu débito de {valor}. Desconto de até {desconto}%. Vamos conversar?', 'Sra. {nome}, temos uma proposta especial para regularizar seu débito de {valor}. Desconto de até {desconto}%. Vamos conversar?', ARRAY['nome', 'valor', 'desconto'], true);
+CREATE POLICY "tickets_insert" ON tickets_atendimento
+  FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia', 'cobranca', 'comercial'));
 
--- Mensagens seed
-INSERT INTO mensagens (cliente_id, remetente, conteudo, timestamp, lida, tipo)
-VALUES
-  ('11111111-1111-1111-1111-111111111111', 'cliente', 'Olá, gostaria de antecipar minha parcela', '2026-06-23T10:23:00Z', false, 'texto'),
-  ('11111111-1111-1111-1111-111111111111', 'sistema', 'Claro, João! Vou gerar o boleto com desconto. Aguarde um momento.', '2026-06-23T10:24:00Z', true, 'texto'),
-  ('11111111-1111-1111-1111-111111111111', 'sistema', 'Boleto gerado com sucesso', '2026-06-23T10:25:00Z', true, 'boleto'),
-  ('22222222-2222-2222-2222-222222222222', 'sistema', 'Olá Maria, lembramos que seu boleto venceu há 45 dias...', '2026-06-23T09:15:00Z', true, 'texto');
+CREATE POLICY "tickets_update" ON tickets_atendimento
+  FOR UPDATE USING (auth_role() IN ('admin', 'gerencia', 'cobranca', 'comercial'));
+
+CREATE POLICY "tickets_delete" ON tickets_atendimento
+  FOR DELETE USING (auth_role() = 'admin');
+
+-- KANBAN_COBRANCA: todos logados veem; admin/gerencia/cobranca criam e editam
+CREATE POLICY "kanban_cob_select" ON kanban_cobranca
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "kanban_cob_insert" ON kanban_cobranca
+  FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia', 'cobranca'));
+
+CREATE POLICY "kanban_cob_update" ON kanban_cobranca
+  FOR UPDATE USING (auth_role() IN ('admin', 'gerencia', 'cobranca'));
+
+CREATE POLICY "kanban_cob_delete" ON kanban_cobranca
+  FOR DELETE USING (auth_role() = 'admin');
+
+
+-- ── 12b. REDE DE INDICAÇÕES ──────────────────────────────────
+
+-- Tabela de rede de indicações
+CREATE TABLE rede_indicacoes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  cliente_id UUID NOT NULL REFERENCES clientes(id) ON DELETE CASCADE,
+  indicado_por UUID REFERENCES clientes(id) ON DELETE SET NULL,
+  nivel INTEGER NOT NULL DEFAULT 1,
+  rede_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ativo'
+    CHECK (status IN ('ativo', 'bloqueado', 'inativo')),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Tabela para bloqueios de rede
+CREATE TABLE bloqueios_rede (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  rede_id TEXT NOT NULL,
+  causado_por UUID REFERENCES clientes(id) ON DELETE SET NULL,
+  motivo TEXT NOT NULL DEFAULT 'manual'
+    CHECK (motivo IN ('inadimplencia', 'fraude', 'manual', 'auto_bloqueio')),
+  descricao TEXT,
+  bloqueado_em TIMESTAMPTZ DEFAULT now(),
+  desbloqueado_em TIMESTAMPTZ,
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Índices para performance
+CREATE INDEX idx_rede_cliente ON rede_indicacoes(cliente_id);
+CREATE INDEX idx_rede_indicado ON rede_indicacoes(indicado_por);
+CREATE INDEX idx_rede_rede_id ON rede_indicacoes(rede_id);
+CREATE INDEX idx_bloqueios_rede_id ON bloqueios_rede(rede_id);
+CREATE INDEX idx_bloqueios_ativo ON bloqueios_rede(ativo) WHERE ativo = true;
+
+-- Trigger updated_at
+CREATE TRIGGER set_updated_at_rede_indicacoes
+  BEFORE UPDATE ON rede_indicacoes
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- RLS
+ALTER TABLE rede_indicacoes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bloqueios_rede  ENABLE ROW LEVEL SECURITY;
+
+-- REDE_INDICACOES: todos logados veem; admin/gerencia/comercial editam
+CREATE POLICY "rede_select" ON rede_indicacoes
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "rede_insert" ON rede_indicacoes
+  FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia', 'comercial'));
+
+CREATE POLICY "rede_update" ON rede_indicacoes
+  FOR UPDATE USING (auth_role() IN ('admin', 'gerencia'));
+
+CREATE POLICY "rede_delete" ON rede_indicacoes
+  FOR DELETE USING (auth_role() = 'admin');
+
+-- BLOQUEIOS_REDE: todos logados veem; admin/gerencia editam
+CREATE POLICY "bloqueios_select" ON bloqueios_rede
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "bloqueios_insert" ON bloqueios_rede
+  FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia'));
+
+CREATE POLICY "bloqueios_update" ON bloqueios_rede
+  FOR UPDATE USING (auth_role() IN ('admin', 'gerencia'));
+
+
+-- ── 14. WHATSAPP INSTÂNCIAS ───────────────────────────────────
+
+CREATE TABLE whatsapp_instancias (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  departamento    TEXT DEFAULT 'geral',
+  instance_name   TEXT NOT NULL UNIQUE,
+  instance_token  TEXT,
+  phone_number    TEXT,
+  status          whatsapp_instance_status NOT NULL DEFAULT 'desconectado',
+  evolution_url   TEXT,
+  qr_code         TEXT,
+  webhook_url     TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_wpp_inst_depto ON whatsapp_instancias(departamento);
+
+CREATE TRIGGER whatsapp_instancias_updated_at
+  BEFORE UPDATE ON whatsapp_instancias
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
+-- ── 15. FLUXOS DE CHATBOT ────────────────────────────────────
+
+CREATE TABLE fluxos_chatbot (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  nome            TEXT NOT NULL,
+  descricao       TEXT,
+  departamento    TEXT NOT NULL,
+  status          fluxo_status NOT NULL DEFAULT 'rascunho',
+  gatilho         TEXT NOT NULL DEFAULT 'manual',
+  palavra_chave   TEXT,
+  cron_expression TEXT,
+  evento_trigger  TEXT,
+  template_id     UUID REFERENCES templates_whatsapp(id) ON DELETE SET NULL,
+  disparos        INTEGER NOT NULL DEFAULT 0,
+  respostas       INTEGER NOT NULL DEFAULT 0,
+  conversoes      INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_fluxo_depto ON fluxos_chatbot(departamento);
+CREATE INDEX idx_fluxo_status ON fluxos_chatbot(status);
+CREATE INDEX idx_fluxo_gatilho ON fluxos_chatbot(gatilho);
+
+CREATE TRIGGER fluxos_chatbot_updated_at
+  BEFORE UPDATE ON fluxos_chatbot
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+
+-- ── 16. ETAPAS DO FLUXO ──────────────────────────────────────
+
+CREATE TABLE fluxos_chatbot_etapas (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  fluxo_id        UUID NOT NULL REFERENCES fluxos_chatbot(id) ON DELETE CASCADE,
+  ordem           INTEGER NOT NULL DEFAULT 0,
+  tipo            fluxo_etapa_tipo NOT NULL DEFAULT 'mensagem',
+  conteudo        TEXT,
+  config          JSONB DEFAULT '{}',
+  proximo_sim     UUID,
+  proximo_nao     UUID,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_etapa_fluxo ON fluxos_chatbot_etapas(fluxo_id, ordem);
+
+
+-- ── 17. LOG DE MENSAGENS WHATSAPP ───────────────────────────
+
+CREATE TABLE whatsapp_mensagens_log (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  instancia_id    UUID REFERENCES whatsapp_instancias(id) ON DELETE SET NULL,
+  cliente_id      UUID REFERENCES clientes(id) ON DELETE SET NULL,
+  fluxo_id        UUID REFERENCES fluxos_chatbot(id) ON DELETE SET NULL,
+  direcao         TEXT NOT NULL CHECK (direcao IN ('entrada', 'saida', 'enviada', 'recebida')),
+  telefone        TEXT NOT NULL,
+  conteudo        TEXT NOT NULL,
+  tipo            TEXT NOT NULL DEFAULT 'text',
+  status          whatsapp_msg_status NOT NULL DEFAULT 'pendente',
+  message_id_wpp  TEXT,
+  metadata        JSONB DEFAULT '{}',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_wpp_log_cliente ON whatsapp_mensagens_log(cliente_id);
+CREATE INDEX idx_wpp_log_instancia ON whatsapp_mensagens_log(instancia_id);
+CREATE INDEX idx_wpp_log_fluxo ON whatsapp_mensagens_log(fluxo_id);
+CREATE INDEX idx_wpp_log_telefone ON whatsapp_mensagens_log(telefone);
+CREATE INDEX idx_wpp_log_created ON whatsapp_mensagens_log(created_at DESC);
+
+
+-- ── RLS para WhatsApp ───────────────────────────────────────
+
+ALTER TABLE whatsapp_instancias    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fluxos_chatbot         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fluxos_chatbot_etapas  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE whatsapp_mensagens_log ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "wpp_inst_select" ON whatsapp_instancias FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "wpp_inst_all" ON whatsapp_instancias FOR ALL USING (auth_role() = 'admin');
+
+CREATE POLICY "fluxo_select" ON fluxos_chatbot FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "fluxo_insert" ON fluxos_chatbot FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia'));
+CREATE POLICY "fluxo_update" ON fluxos_chatbot FOR UPDATE USING (auth_role() IN ('admin', 'gerencia'));
+CREATE POLICY "fluxo_delete" ON fluxos_chatbot FOR DELETE USING (auth_role() = 'admin');
+
+CREATE POLICY "etapa_select" ON fluxos_chatbot_etapas FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "etapa_insert" ON fluxos_chatbot_etapas FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia'));
+CREATE POLICY "etapa_update" ON fluxos_chatbot_etapas FOR UPDATE USING (auth_role() IN ('admin', 'gerencia'));
+CREATE POLICY "etapa_delete" ON fluxos_chatbot_etapas FOR DELETE USING (auth_role() IN ('admin', 'gerencia'));
+
+CREATE POLICY "wpp_log_select" ON whatsapp_mensagens_log FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "wpp_log_insert" ON whatsapp_mensagens_log FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+
+
+-- ── Supabase Realtime ───────────────────────────────────────
+-- Habilitar Realtime para tabelas WhatsApp (necessário para subscriptions)
+ALTER PUBLICATION supabase_realtime ADD TABLE whatsapp_mensagens_log;
+ALTER PUBLICATION supabase_realtime ADD TABLE whatsapp_instancias;
+
+
+-- ── 13. SEED DATA ────────────────────────────────────────────
+-- Os dados de teste estão em um arquivo separado: seed-data.sql
+-- Execute-o APÓS rodar este schema no SQL Editor do Supabase.

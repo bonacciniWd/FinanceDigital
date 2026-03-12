@@ -2,16 +2,15 @@
  * @module TemplatesMensagensPage
  * @description Gestão de templates de mensagens com suporte a gênero.
  *
- * CRUD de templates para WhatsApp e e-mail. Cada template possui
- * versão masculina (`mensagemMasculino`) e feminina (`mensagemFeminino`)
- * com variáveis dinâmicas ({nome}, {valor}, {vencimento}).
+ * CRUD real de templates para WhatsApp e e-mail via Supabase.
+ * Cada template possui versão masculina (`mensagemMasculino`) e feminina
+ * (`mensagemFeminino`) com variáveis dinâmicas ({nome}, {valor}, {vencimento}).
  * Pré-visualização em tempo real e categorização por tipo.
  *
  * @route /comunicacao/templates
  * @access Protegido — perfis admin, gerente
- * @see mockTemplatesWhatsApp
  */
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -21,25 +20,111 @@ import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { Plus, Edit, Eye, Copy, MessageSquare } from 'lucide-react';
-import { useTemplates } from '../hooks/useTemplates';
-import type { TemplateWhatsApp } from '../lib/mockData';
+import { Plus, Edit, Eye, Copy, MessageSquare, Loader2 } from 'lucide-react';
+import { useTemplates, useCreateTemplate, useUpdateTemplate, useToggleTemplateAtivo } from '../hooks/useTemplates';
+import type { TemplateWhatsApp } from '../lib/view-types';
+import type { TemplateCategoria } from '../lib/database.types';
+
+type FormData = {
+  nome: string;
+  categoria: TemplateCategoria | '';
+  mensagemMasculino: string;
+  mensagemFeminino: string;
+};
+
+const EMPTY_FORM: FormData = { nome: '', categoria: '', mensagemMasculino: '', mensagemFeminino: '' };
+
+/** Extrai variáveis do tipo {xxx} das mensagens */
+function extractVariables(msgM: string, msgF: string): string[] {
+  const regex = /\{(\w+)\}/g;
+  const vars = new Set<string>();
+  let m: RegExpExecArray | null;
+  for (const msg of [msgM, msgF]) {
+    while ((m = regex.exec(msg)) !== null) vars.add(m[1]);
+  }
+  return Array.from(vars);
+}
 
 export default function TemplatesMensagensPage() {
-  const { data: templatesData = [] } = useTemplates();
-  const [localTemplates, setLocalTemplates] = useState<TemplateWhatsApp[]>([]);
-  const [initialized, setInitialized] = useState(false);
+  const { data: templates = [] } = useTemplates();
+  const createTemplate = useCreateTemplate();
+  const updateTemplate = useUpdateTemplate();
+  const toggleAtivo = useToggleTemplateAtivo();
+
   const [selectedTemplate, setSelectedTemplate] = useState<TemplateWhatsApp | null>(null);
   const [previewSexo, setPreviewSexo] = useState<'masculino' | 'feminino'>('masculino');
-  const [modalNovo, setModalNovo] = useState(false);
 
-  // Sync hook data to local state for in-page mutations
-  if (!initialized && templatesData.length > 0) {
-    setLocalTemplates(templatesData);
-    setInitialized(true);
-  }
+  // Modal create/edit
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<FormData>(EMPTY_FORM);
 
-  const templates = initialized ? localTemplates : templatesData;
+  const isSaving = createTemplate.isPending || updateTemplate.isPending;
+
+  const openCreateModal = useCallback(() => {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setModalOpen(true);
+  }, []);
+
+  const openEditModal = useCallback((t: TemplateWhatsApp) => {
+    setEditingId(t.id);
+    setForm({
+      nome: t.nome,
+      categoria: t.categoria,
+      mensagemMasculino: t.mensagemMasculino,
+      mensagemFeminino: t.mensagemFeminino,
+    });
+    setModalOpen(true);
+  }, []);
+
+  const handleCopy = useCallback((t: TemplateWhatsApp) => {
+    const variaveis = extractVariables(t.mensagemMasculino, t.mensagemFeminino);
+    createTemplate.mutate({
+      nome: `${t.nome} (cópia)`,
+      categoria: t.categoria,
+      mensagem_masculino: t.mensagemMasculino,
+      mensagem_feminino: t.mensagemFeminino,
+      variaveis,
+      ativo: false,
+    });
+  }, [createTemplate]);
+
+  const handleSave = useCallback(() => {
+    if (!form.nome || !form.categoria || !form.mensagemMasculino || !form.mensagemFeminino) return;
+    const variaveis = extractVariables(form.mensagemMasculino, form.mensagemFeminino);
+
+    if (editingId) {
+      updateTemplate.mutate(
+        {
+          id: editingId,
+          data: {
+            nome: form.nome,
+            categoria: form.categoria as TemplateCategoria,
+            mensagem_masculino: form.mensagemMasculino,
+            mensagem_feminino: form.mensagemFeminino,
+            variaveis,
+          },
+        },
+        { onSuccess: () => { setModalOpen(false); setEditingId(null); setForm(EMPTY_FORM); } },
+      );
+    } else {
+      createTemplate.mutate(
+        {
+          nome: form.nome,
+          categoria: form.categoria as TemplateCategoria,
+          mensagem_masculino: form.mensagemMasculino,
+          mensagem_feminino: form.mensagemFeminino,
+          variaveis,
+        },
+        { onSuccess: () => { setModalOpen(false); setForm(EMPTY_FORM); } },
+      );
+    }
+  }, [form, editingId, createTemplate, updateTemplate]);
+
+  const handleToggleAtivo = useCallback((t: TemplateWhatsApp) => {
+    toggleAtivo.mutate({ id: t.id, ativo: !t.ativo });
+  }, [toggleAtivo]);
 
   const getCategoryBadge = (cat: string) => {
     const configs: Record<string, { label: string; className: string }> = {
@@ -49,6 +134,7 @@ export default function TemplatesMensagensPage() {
       negociacao: { label: 'Negociação', className: 'bg-purple-100 text-purple-800' },
     };
     const c = configs[cat];
+    if (!c) return <Badge variant="outline">{cat}</Badge>;
     return <Badge className={c.className}>{c.label}</Badge>;
   };
 
@@ -65,7 +151,7 @@ export default function TemplatesMensagensPage() {
           <h1 className="text-2xl font-semibold text-foreground">Templates de Mensagens</h1>
           <p className="text-muted-foreground mt-1">Mensagens personalizadas por sexo para WhatsApp e Chat</p>
         </div>
-        <Button className="bg-primary hover:bg-primary/90" onClick={() => setModalNovo(true)}>
+        <Button className="bg-primary hover:bg-primary/90" onClick={openCreateModal}>
           <Plus className="w-4 h-4 mr-2" />Novo Template
         </Button>
       </div>
@@ -103,7 +189,7 @@ export default function TemplatesMensagensPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">{template.ativo ? 'Ativo' : 'Inativo'}</span>
-                  <Switch checked={template.ativo} />
+                  <Switch checked={template.ativo} onCheckedChange={() => handleToggleAtivo(template)} />
                 </div>
               </div>
             </CardHeader>
@@ -126,8 +212,12 @@ export default function TemplatesMensagensPage() {
                 <Button size="sm" variant="outline" className="flex-1" onClick={() => setSelectedTemplate(template)}>
                   <Eye className="w-4 h-4 mr-1" />Preview
                 </Button>
-                <Button size="sm" variant="outline"><Edit className="w-4 h-4" /></Button>
-                <Button size="sm" variant="outline"><Copy className="w-4 h-4" /></Button>
+                <Button size="sm" variant="outline" onClick={() => openEditModal(template)}>
+                  <Edit className="w-4 h-4" />
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => handleCopy(template)}>
+                  <Copy className="w-4 h-4" />
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -165,19 +255,23 @@ export default function TemplatesMensagensPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Modal Novo Template */}
-      <Dialog open={modalNovo} onOpenChange={setModalNovo}>
+      {/* Modal Criar / Editar Template */}
+      <Dialog open={modalOpen} onOpenChange={(open) => { if (!open) { setModalOpen(false); setEditingId(null); setForm(EMPTY_FORM); } }}>
         <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle>Novo Template</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingId ? 'Editar Template' : 'Novo Template'}</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Nome do Template</Label>
-                <Input placeholder="Ex: Cobrança 2ª via" />
+                <Input
+                  placeholder="Ex: Cobrança 2ª via"
+                  value={form.nome}
+                  onChange={(e) => setForm(prev => ({ ...prev, nome: e.target.value }))}
+                />
               </div>
               <div>
                 <Label>Categoria</Label>
-                <Select>
+                <Select value={form.categoria} onValueChange={(v) => setForm(prev => ({ ...prev, categoria: v as TemplateCategoria }))}>
                   <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cobranca">Cobrança</SelectItem>
@@ -190,16 +284,35 @@ export default function TemplatesMensagensPage() {
             </div>
             <div>
               <Label>Mensagem Masculino (Sr.)</Label>
-              <Textarea placeholder="Use {nome}, {valor}, {data} como variáveis..." rows={3} />
+              <Textarea
+                placeholder="Use {nome}, {valor}, {data} como variáveis..."
+                rows={3}
+                value={form.mensagemMasculino}
+                onChange={(e) => setForm(prev => ({ ...prev, mensagemMasculino: e.target.value }))}
+              />
             </div>
             <div>
               <Label>Mensagem Feminino (Sra.)</Label>
-              <Textarea placeholder="Use {nome}, {valor}, {data} como variáveis..." rows={3} />
+              <Textarea
+                placeholder="Use {nome}, {valor}, {data} como variáveis..."
+                rows={3}
+                value={form.mensagemFeminino}
+                onChange={(e) => setForm(prev => ({ ...prev, mensagemFeminino: e.target.value }))}
+              />
             </div>
             <p className="text-xs text-muted-foreground">Variáveis disponíveis: {'{nome}'}, {'{valor}'}, {'{data}'}, {'{diasAtraso}'}, {'{desconto}'}</p>
             <div className="flex gap-3">
-              <Button className="flex-1 bg-primary hover:bg-primary/90">Salvar Template</Button>
-              <Button className="flex-1" variant="outline" onClick={() => setModalNovo(false)}>Cancelar</Button>
+              <Button
+                className="flex-1 bg-primary hover:bg-primary/90"
+                onClick={handleSave}
+                disabled={isSaving || !form.nome || !form.categoria || !form.mensagemMasculino || !form.mensagemFeminino}
+              >
+                {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {editingId ? 'Atualizar Template' : 'Salvar Template'}
+              </Button>
+              <Button className="flex-1" variant="outline" onClick={() => { setModalOpen(false); setEditingId(null); setForm(EMPTY_FORM); }}>
+                Cancelar
+              </Button>
             </div>
           </div>
         </DialogContent>

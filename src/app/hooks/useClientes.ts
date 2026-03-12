@@ -72,6 +72,8 @@ export function useCreateCliente() {
     mutationFn: (data: ClienteInsert) => clientesService.createCliente(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['rede-indicacoes'] });
     },
   });
 }
@@ -84,6 +86,10 @@ export function useUpdateCliente() {
       clientesService.updateCliente(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['rede-indicacoes'] });
     },
   });
 }
@@ -95,6 +101,10 @@ export function useDeleteCliente() {
     mutationFn: (id: string) => clientesService.deleteCliente(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+      queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+      queryClient.invalidateQueries({ queryKey: ['rede-indicacoes'] });
     },
   });
 }

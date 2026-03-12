@@ -1,6 +1,6 @@
 /**
  * @module RelatoriosPage
- * @description Central de relatórios financeiros.
+ * @description Central de relatórios financeiros — dados reais do Supabase.
  *
  * Gerador de relatórios com templates pré-definidos:
  * inadimplência, receita, carteira e performance. Diálogo
@@ -12,9 +12,15 @@
  */
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { FileText, Download, Mail, FileSpreadsheet } from 'lucide-react';
+import { FileText, Download, Mail, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { useClientes } from '../hooks/useClientes';
+import { useParcelas } from '../hooks/useParcelas';
+import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useMembrosRede } from '../hooks/useRedeIndicacoes';
+import { useAnalises } from '../hooks/useAnaliseCredito';
+import { toast } from 'sonner';
 
 interface Relatorio {
   id: string;
@@ -62,8 +68,214 @@ const relatoriosGerenciais: Relatorio[] = [
   },
 ];
 
+/** Gera e faz download de um CSV a partir de linhas string[][] */
+function downloadCsv(filename: string, headers: string[], rows: string[][]) {
+  const csvContent = [headers, ...rows]
+    .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function RelatoriosPage() {
   const [previewRelatorio, setPreviewRelatorio] = useState<string | null>(null);
+
+  const { data: clientes, isLoading: loadingClientes } = useClientes();
+  const { data: parcelas, isLoading: loadingParcelas } = useParcelas();
+  const { data: emprestimos, isLoading: loadingEmprestimos } = useEmprestimos();
+  const { data: membros, isLoading: loadingMembros } = useMembrosRede();
+  const { data: analises, isLoading: loadingAnalises } = useAnalises();
+
+  const loading = loadingClientes || loadingParcelas || loadingMembros || loadingEmprestimos || loadingAnalises;
+
+  // ── Clientes por Status ──
+  const clientesPorStatus = useMemo(() => {
+    if (!clientes) return { emDia: 0, aVencer: 0, vencidos: 0 };
+    return {
+      emDia: clientes.filter((c) => c.status === 'em_dia').length,
+      aVencer: clientes.filter((c) => c.status === 'a_vencer').length,
+      vencidos: clientes.filter((c) => c.status === 'vencido').length,
+    };
+  }, [clientes]);
+
+  // ── Valores por Status ──
+  const valoresPorStatus = useMemo(() => {
+    if (!clientes) return { emDia: 0, aVencer: 0, vencidos: 0 };
+    return {
+      emDia: clientes
+        .filter((c) => c.status === 'em_dia')
+        .reduce((s, c) => s + c.valor, 0),
+      aVencer: clientes
+        .filter((c) => c.status === 'a_vencer')
+        .reduce((s, c) => s + c.valor, 0),
+      vencidos: clientes
+        .filter((c) => c.status === 'vencido')
+        .reduce((s, c) => s + c.valor, 0),
+    };
+  }, [clientes]);
+
+  // ── Top 5 Devedores (clientes vencidos com maior valor) ──
+  const topDevedores = useMemo(() => {
+    if (!clientes) return [];
+    return clientes
+      .filter((c) => c.status === 'vencido')
+      .sort((a, b) => b.valor - a.valor)
+      .slice(0, 5);
+  }, [clientes]);
+
+  // ── Indicações do Mês ──
+  const indicacoesMes = useMemo(() => {
+    if (!membros) return { total: 0, convertidas: 0, taxa: 0 };
+    const now = new Date();
+    const mesAtual = now.getMonth();
+    const anoAtual = now.getFullYear();
+    const doMes = membros.filter((m) => {
+      const d = new Date(m.createdAt);
+      return d.getMonth() === mesAtual && d.getFullYear() === anoAtual;
+    });
+    const convertidas = doMes.filter((m) => m.clienteValor > 0).length;
+    const total = doMes.length;
+    return {
+      total,
+      convertidas,
+      taxa: total > 0 ? Math.round((convertidas / total) * 100) : 0,
+    };
+  }, [membros]);
+
+  // ── Dados do Preview Inadimplência ──
+  const inadimplenciaPreview = useMemo(() => {
+    if (!clientes || !parcelas) return null;
+    const totalClientes = clientes.length;
+    const inadimplentes = clientes.filter((c) => c.status === 'vencido');
+    const qtdInadimplentes = inadimplentes.length;
+    const taxaInadimplencia =
+      totalClientes > 0 ? ((qtdInadimplentes / totalClientes) * 100).toFixed(1) : '0';
+    const parcelasVencidas = parcelas.filter((p) => p.status === 'vencida');
+    const valorEmAtraso = parcelasVencidas.reduce((s, p) => s + p.valor, 0);
+    const mediaDiasAtraso =
+      inadimplentes.length > 0
+        ? Math.round(
+            inadimplentes.reduce((s, c) => s + (c.diasAtraso ?? 0), 0) /
+              inadimplentes.length
+          )
+        : 0;
+    const top5 = inadimplentes.sort((a, b) => b.valor - a.valor).slice(0, 5);
+    return {
+      totalClientes,
+      qtdInadimplentes,
+      taxaInadimplencia,
+      valorEmAtraso,
+      mediaDiasAtraso,
+      top5,
+    };
+  }, [clientes, parcelas]);
+
+  // ── Fluxo de Caixa Mensal ──
+  const fluxoCaixaPreview = useMemo(() => {
+    if (!parcelas || !emprestimos) return null;
+    const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const now = new Date();
+    const meses: { mes: string; entradas: number; saidas: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const m = d.getMonth();
+      const a = d.getFullYear();
+      const entradas = parcelas
+        .filter((p) => p.status === 'paga' && p.dataPagamento) 
+        .filter((p) => {
+          const dp = new Date(p.dataPagamento!);
+          return dp.getMonth() === m && dp.getFullYear() === a;
+        })
+        .reduce((s, p) => s + p.valor, 0);
+      const saidas = emprestimos
+        .filter((e) => {
+          const dc = new Date(e.dataContrato);
+          return dc.getMonth() === m && dc.getFullYear() === a;
+        })
+        .reduce((s, e) => s + e.valor, 0);
+      meses.push({ mes: `${MESES[m]}/${a}`, entradas, saidas });
+    }
+    const totalEntradas = meses.reduce((s, m) => s + m.entradas, 0);
+    const totalSaidas = meses.reduce((s, m) => s + m.saidas, 0);
+    return { meses, totalEntradas, totalSaidas, saldo: totalEntradas - totalSaidas };
+  }, [parcelas, emprestimos]);
+
+  // ── Performance da Rede ──
+  const redePreview = useMemo(() => {
+    if (!membros) return null;
+    const total = membros.length;
+    const ativos = membros.filter((m) => m.status === 'ativo').length;
+    const bloqueados = membros.filter((m) => m.status === 'bloqueado').length;
+    const totalBonus = membros.reduce((s, m) => s + m.clienteBonusAcumulado, 0);
+    const totalCarteira = membros.reduce((s, m) => s + m.clienteValor, 0);
+    const redesSet = new Set(membros.map((m) => m.redeId));
+    const redesCount = redesSet.size;
+    const nivelMax = membros.reduce((max, m) => Math.max(max, m.nivel), 0);
+    const topIndicadores = membros
+      .filter((m) => m.clienteBonusAcumulado > 0)
+      .sort((a, b) => b.clienteBonusAcumulado - a.clienteBonusAcumulado)
+      .slice(0, 5);
+    return { total, ativos, bloqueados, totalBonus, totalCarteira, redesCount, nivelMax, topIndicadores };
+  }, [membros]);
+
+  // ── Comissões a Pagar ──
+  const comissoesPreview = useMemo(() => {
+    if (!clientes) return null;
+    const comBonuS = clientes.filter((c) => c.bonusAcumulado > 0);
+    const totalBruto = comBonuS.reduce((s, c) => s + c.bonusAcumulado, 0);
+    const top5 = comBonuS.sort((a, b) => b.bonusAcumulado - a.bonusAcumulado).slice(0, 10);
+    return { total: comBonuS.length, totalBruto, top5 };
+  }, [clientes]);
+
+  // ── Clientes Inativos ──
+  const inativosPreview = useMemo(() => {
+    if (!clientes) return null;
+    const now = new Date();
+    const limite30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const inativos = clientes.filter((c) => {
+      if (!c.ultimoContato) return true;
+      return new Date(c.ultimoContato) < limite30;
+    });
+    const semContato = inativos.filter((c) => !c.ultimoContato);
+    const comContatoAntigo = inativos.filter((c) => c.ultimoContato);
+    const valorTotal = inativos.reduce((s, c) => s + c.valor, 0);
+    return {
+      total: inativos.length,
+      semContato: semContato.length,
+      comContatoAntigo: comContatoAntigo.length,
+      valorTotal,
+      lista: inativos.sort((a, b) => b.valor - a.valor).slice(0, 10),
+    };
+  }, [clientes]);
+
+  // ── Análise de Crédito ──
+  const creditoPreview = useMemo(() => {
+    if (!analises) return null;
+    const total = analises.length;
+    const aprovadas = analises.filter((a) => a.status === 'aprovado');
+    const recusadas = analises.filter((a) => a.status === 'recusado');
+    const pendentes = analises.filter((a) => a.status === 'pendente');
+    const emAnalise = analises.filter((a) => a.status === 'em_analise');
+    const valorAprovado = aprovadas.reduce((s, a) => s + a.valorSolicitado, 0);
+    const valorRecusado = recusadas.reduce((s, a) => s + a.valorSolicitado, 0);
+    const taxaAprovacao = total > 0 ? ((aprovadas.length / total) * 100).toFixed(1) : '0';
+    return {
+      total,
+      aprovadas: aprovadas.length,
+      recusadas: recusadas.length,
+      pendentes: pendentes.length,
+      emAnalise: emAnalise.length,
+      valorAprovado,
+      valorRecusado,
+      taxaAprovacao,
+      recentes: analises.sort((a, b) => new Date(b.dataSolicitacao).getTime() - new Date(a.dataSolicitacao).getTime()).slice(0, 10),
+    };
+  }, [analises]);
 
   const handleGerarRelatorio = (id: string) => {
     setPreviewRelatorio(id);
@@ -75,6 +287,119 @@ export default function RelatoriosPage() {
       currency: 'BRL',
     }).format(value);
   };
+
+  const handleExportClientesPorStatus = () => {
+    if (!clientes) return;
+    downloadCsv(
+      'clientes_por_status.csv',
+      ['Nome', 'Status', 'Valor', 'Dias Atraso', 'Email', 'Telefone'],
+      clientes.map((c) => [
+        c.nome,
+        c.status,
+        String(c.valor),
+        String(c.diasAtraso ?? 0),
+        c.email,
+        c.telefone,
+      ])
+    );
+  };
+
+  const handleExportTopDevedores = () => {
+    if (!topDevedores.length) return;
+    downloadCsv(
+      'top_devedores.csv',
+      ['Nome', 'Valor', 'Dias Atraso', 'Telefone'],
+      topDevedores.map((c) => [
+        c.nome,
+        String(c.valor),
+        String(c.diasAtraso ?? 0),
+        c.telefone,
+      ])
+    );
+  };
+
+  const handleExportIndicacoes = () => {
+    if (!membros) return;
+    downloadCsv(
+      'indicacoes.csv',
+      ['Nome', 'Rede', 'Nível', 'Status', 'Valor', 'Bônus'],
+      membros.map((m) => [
+        m.clienteNome,
+        m.redeId,
+        String(m.nivel),
+        m.status,
+        String(m.clienteValor),
+        String(m.clienteBonusAcumulado),
+      ])
+    );
+  };
+
+  /** Exporta CSV do relatório atualmente aberto no dialog */
+  const handleExportRelatorio = (formato: string) => {
+    if (!previewRelatorio) return;
+    const agora = new Date().toISOString().slice(0, 10);
+
+    switch (previewRelatorio) {
+      case 'inadimplencia': {
+        if (!clientes) return;
+        const inad = clientes.filter((c) => c.status === 'vencido');
+        downloadCsv(`inadimplencia_${agora}.csv`,
+          ['Nome', 'Valor', 'Dias Atraso', 'Telefone', 'Email', 'Último Contato'],
+          inad.map((c) => [c.nome, String(c.valor), String(c.diasAtraso ?? 0), c.telefone, c.email, c.ultimoContato ?? ''])
+        );
+        break;
+      }
+      case 'fluxo-caixa': {
+        if (!fluxoCaixaPreview) return;
+        downloadCsv(`fluxo_caixa_${agora}.csv`,
+          ['Mês', 'Entradas', 'Saídas', 'Saldo'],
+          fluxoCaixaPreview.meses.map((m) => [m.mes, String(m.entradas), String(m.saidas), String(m.entradas - m.saidas)])
+        );
+        break;
+      }
+      case 'performance-rede': {
+        if (!membros) return;
+        downloadCsv(`performance_rede_${agora}.csv`,
+          ['Nome', 'Rede', 'Nível', 'Status', 'Valor Carteira', 'Bônus Acumulado', 'Score'],
+          membros.map((m) => [m.clienteNome, m.redeId, String(m.nivel), m.status, String(m.clienteValor), String(m.clienteBonusAcumulado), String(m.clienteScoreInterno)])
+        );
+        break;
+      }
+      case 'comissoes': {
+        if (!clientes) return;
+        const comB = clientes.filter((c) => c.bonusAcumulado > 0).sort((a, b) => b.bonusAcumulado - a.bonusAcumulado);
+        downloadCsv(`comissoes_${agora}.csv`,
+          ['Nome', 'Email', 'Telefone', 'Status', 'Bônus Acumulado'],
+          comB.map((c) => [c.nome, c.email, c.telefone, c.status, String(c.bonusAcumulado)])
+        );
+        break;
+      }
+      case 'clientes-inativos': {
+        if (!inativosPreview) return;
+        const inat = clientes?.filter((c) => {
+          if (!c.ultimoContato) return true;
+          return new Date(c.ultimoContato) < new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        }) ?? [];
+        downloadCsv(`clientes_inativos_${agora}.csv`,
+          ['Nome', 'Telefone', 'Email', 'Status', 'Valor', 'Último Contato'],
+          inat.map((c) => [c.nome, c.telefone, c.email, c.status, String(c.valor), c.ultimoContato ?? 'Nunca'])
+        );
+        break;
+      }
+      case 'analise-credito': {
+        if (!analises) return;
+        downloadCsv(`analise_credito_${agora}.csv`,
+          ['Cliente', 'CPF', 'Valor Solicitado', 'Renda Mensal', 'Score Serasa', 'Score Interno', 'Status', 'Data Solicitação'],
+          analises.map((a) => [a.clienteNome, a.cpf, String(a.valorSolicitado), String(a.rendaMensal), String(a.scoreSerasa), String(a.scoreInterno), a.status, a.dataSolicitacao])
+        );
+        break;
+      }
+    }
+    toast.success('Relatório exportado com sucesso!');
+  };
+
+  const now = new Date();
+  const mesAno = now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).toUpperCase();
 
   return (
     <div className="space-y-6">
@@ -134,18 +459,30 @@ export default function RelatoriosPage() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Em dia:</span>
-                  <span className="font-semibold">845</span>
+                  <span className="font-semibold">
+                    {loading ? '...' : clientesPorStatus.emDia}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span>À vencer:</span>
-                  <span className="font-semibold">312</span>
+                  <span className="font-semibold">
+                    {loading ? '...' : clientesPorStatus.aVencer}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Vencidos:</span>
-                  <span className="font-semibold text-red-600">88</span>
+                  <span className="font-semibold text-red-600">
+                    {loading ? '...' : clientesPorStatus.vencidos}
+                  </span>
                 </div>
               </div>
-              <Button variant="outline" size="sm" className="w-full mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mt-3"
+                onClick={handleExportClientesPorStatus}
+                disabled={loading}
+              >
                 <Download className="w-3 h-3 mr-1" />
                 Exportar
               </Button>
@@ -162,20 +499,30 @@ export default function RelatoriosPage() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Em dia:</span>
-                  <span className="font-semibold">{formatCurrency(920990)}</span>
+                  <span className="font-semibold">
+                    {loading ? '...' : formatCurrency(valoresPorStatus.emDia)}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span>À vencer:</span>
-                  <span className="font-semibold">{formatCurrency(156400)}</span>
+                  <span className="font-semibold">
+                    {loading ? '...' : formatCurrency(valoresPorStatus.aVencer)}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Vencidos:</span>
                   <span className="font-semibold text-red-600">
-                    {formatCurrency(324500)}
+                    {loading ? '...' : formatCurrency(valoresPorStatus.vencidos)}
                   </span>
                 </div>
               </div>
-              <Button variant="outline" size="sm" className="w-full mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mt-3"
+                onClick={handleExportClientesPorStatus}
+                disabled={loading}
+              >
                 <Download className="w-3 h-3 mr-1" />
                 Exportar
               </Button>
@@ -190,28 +537,28 @@ export default function RelatoriosPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span>Carlos Souza</span>
-                  <span className="font-semibold">{formatCurrency(12000)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Patricia Gomes</span>
-                  <span className="font-semibold">{formatCurrency(5500)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Fernanda Lima</span>
-                  <span className="font-semibold">{formatCurrency(4500)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Maria Santos</span>
-                  <span className="font-semibold">{formatCurrency(3200)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Lucas Mendes</span>
-                  <span className="font-semibold">{formatCurrency(2200)}</span>
-                </div>
+                {loading ? (
+                  <p className="text-muted-foreground text-center py-2">Carregando...</p>
+                ) : topDevedores.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-2">Nenhum devedor</p>
+                ) : (
+                  topDevedores.map((c) => (
+                    <div key={c.id} className="flex justify-between">
+                      <span className="truncate mr-2">{c.nome}</span>
+                      <span className="font-semibold whitespace-nowrap">
+                        {formatCurrency(c.valor)}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
-              <Button variant="outline" size="sm" className="w-full mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mt-3"
+                onClick={handleExportTopDevedores}
+                disabled={loading || topDevedores.length === 0}
+              >
                 <Download className="w-3 h-3 mr-1" />
                 Exportar
               </Button>
@@ -228,18 +575,30 @@ export default function RelatoriosPage() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span>Total:</span>
-                  <span className="font-semibold">47</span>
+                  <span className="font-semibold">
+                    {loading ? '...' : indicacoesMes.total}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Convertidas:</span>
-                  <span className="font-semibold">32</span>
+                  <span className="font-semibold">
+                    {loading ? '...' : indicacoesMes.convertidas}
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span>Taxa:</span>
-                  <span className="font-semibold text-green-600">68%</span>
+                  <span className="font-semibold text-green-600">
+                    {loading ? '...' : `${indicacoesMes.taxa}%`}
+                  </span>
                 </div>
               </div>
-              <Button variant="outline" size="sm" className="w-full mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mt-3"
+                onClick={handleExportIndicacoes}
+                disabled={loading}
+              >
                 <Download className="w-3 h-3 mr-1" />
                 Exportar
               </Button>
@@ -258,83 +617,342 @@ export default function RelatoriosPage() {
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Preview do Relatório */}
-            {previewRelatorio === 'inadimplencia' && (
-              <div className="space-y-4">
-                <div className="bg-muted p-4 rounded-lg">
-                  <h3 className="font-semibold mb-2">
-                    RELATÓRIO DE INADIMPLÊNCIA - JUNHO/2026
-                  </h3>
-                  <p className="text-sm text-muted-foreground">
-                    Período: 01/06/2026 a 23/06/2026
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Gerado em: 23/06/2026 14:30
-                  </p>
-                </div>
+            <div className="bg-muted p-4 rounded-lg">
+              <h3 className="font-semibold mb-1">
+                {relatoriosGerenciais.find((r) => r.id === previewRelatorio)?.titulo?.toUpperCase()} - {mesAno}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Gerado em: {now.toLocaleDateString('pt-BR')} {now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
 
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-muted p-3 rounded">
-                      <div className="text-sm text-muted-foreground">Total de clientes</div>
-                      <div className="text-xl font-bold">1.245</div>
-                    </div>
-                    <div className="bg-muted p-3 rounded">
-                      <div className="text-sm text-muted-foreground">Inadimplentes</div>
-                      <div className="text-xl font-bold text-red-600">88 (7,2%)</div>
-                    </div>
-                    <div className="bg-muted p-3 rounded">
-                      <div className="text-sm text-muted-foreground">
-                        Valor total em atraso
+            {loading ? (
+              <div className="flex items-center justify-center p-8">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" />
+                <span>Carregando dados...</span>
+              </div>
+            ) : (
+              <>
+                {/* ═══ INADIMPLÊNCIA ═══ */}
+                {previewRelatorio === 'inadimplencia' && inadimplenciaPreview && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total de clientes</div>
+                        <div className="text-xl font-bold">{inadimplenciaPreview.totalClientes.toLocaleString('pt-BR')}</div>
                       </div>
-                      <div className="text-xl font-bold">{formatCurrency(324500)}</div>
-                    </div>
-                    <div className="bg-muted p-3 rounded">
-                      <div className="text-sm text-muted-foreground">
-                        Média de dias em atraso
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Inadimplentes</div>
+                        <div className="text-xl font-bold text-red-600">{inadimplenciaPreview.qtdInadimplentes} ({inadimplenciaPreview.taxaInadimplencia}%)</div>
                       </div>
-                      <div className="text-xl font-bold">45 dias</div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Valor total em atraso</div>
+                        <div className="text-xl font-bold">{formatCurrency(inadimplenciaPreview.valorEmAtraso)}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Média de dias em atraso</div>
+                        <div className="text-xl font-bold">{inadimplenciaPreview.mediaDiasAtraso} dias</div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold mb-2">Top devedores:</h4>
+                      {inadimplenciaPreview.top5.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Nenhum inadimplente</p>
+                      ) : (
+                        <ol className="space-y-1 text-sm">
+                          {inadimplenciaPreview.top5.map((c, i) => (
+                            <li key={c.id}>{i + 1}. {c.nome} - {formatCurrency(c.valor)} ({c.diasAtraso ?? 0} dias)</li>
+                          ))}
+                        </ol>
+                      )}
                     </div>
                   </div>
+                )}
 
-                  <div>
-                    <h4 className="font-semibold mb-2">Top 5 devedores:</h4>
-                    <ol className="space-y-1 text-sm">
-                      <li>1. Carlos Souza - {formatCurrency(12000)} (76 dias)</li>
-                      <li>2. Patricia Gomes - {formatCurrency(5500)} (120 dias)</li>
-                      <li>3. Maria Santos - {formatCurrency(3200)} (45 dias)</li>
-                      <li>4. Roberto Alves - {formatCurrency(1800)} (23 dias)</li>
-                      <li>5. Lucas Mendes - {formatCurrency(2200)} (15 dias)</li>
-                    </ol>
+                {/* ═══ FLUXO DE CAIXA ═══ */}
+                {previewRelatorio === 'fluxo-caixa' && fluxoCaixaPreview && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total Entradas</div>
+                        <div className="text-xl font-bold text-green-600">{formatCurrency(fluxoCaixaPreview.totalEntradas)}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total Saídas (Desembolsos)</div>
+                        <div className="text-xl font-bold text-red-600">{formatCurrency(fluxoCaixaPreview.totalSaidas)}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Saldo (6 meses)</div>
+                        <div className={`text-xl font-bold ${fluxoCaixaPreview.saldo >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {formatCurrency(fluxoCaixaPreview.saldo)}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold mb-2">Detalhamento Mensal:</h4>
+                      <div className="border rounded-lg overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-muted">
+                            <tr>
+                              <th className="text-left p-2">Mês</th>
+                              <th className="text-right p-2">Entradas (Recebimentos)</th>
+                              <th className="text-right p-2">Saídas (Empréstimos)</th>
+                              <th className="text-right p-2">Saldo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {fluxoCaixaPreview.meses.map((m, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="p-2 font-medium">{m.mes}</td>
+                                <td className="p-2 text-right text-green-600">{formatCurrency(m.entradas)}</td>
+                                <td className="p-2 text-right text-red-600">{formatCurrency(m.saidas)}</td>
+                                <td className={`p-2 text-right font-semibold ${m.entradas - m.saidas >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                  {formatCurrency(m.entradas - m.saidas)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            )}
+                )}
 
-            {/* Outros relatórios teriam previews diferentes */}
-            {previewRelatorio && previewRelatorio !== 'inadimplencia' && (
-              <div className="bg-muted p-8 rounded-lg text-center">
-                <FileText className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
-                <p className="text-muted-foreground">
-                  Preview do relatório{' '}
-                  {relatoriosGerenciais.find((r) => r.id === previewRelatorio)?.titulo}
-                </p>
-              </div>
+                {/* ═══ PERFORMANCE DA REDE ═══ */}
+                {previewRelatorio === 'performance-rede' && redePreview && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total Membros</div>
+                        <div className="text-xl font-bold">{redePreview.total}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Ativos</div>
+                        <div className="text-xl font-bold text-green-600">{redePreview.ativos}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Bloqueados</div>
+                        <div className="text-xl font-bold text-red-600">{redePreview.bloqueados}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Redes Ativas</div>
+                        <div className="text-xl font-bold">{redePreview.redesCount}</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total Bônus Gerado</div>
+                        <div className="text-xl font-bold">{formatCurrency(redePreview.totalBonus)}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total Carteira</div>
+                        <div className="text-xl font-bold">{formatCurrency(redePreview.totalCarteira)}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Nível Máximo</div>
+                        <div className="text-xl font-bold">{redePreview.nivelMax}</div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold mb-2">Top Indicadores por Bônus:</h4>
+                      {redePreview.topIndicadores.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Nenhum indicador com bônus</p>
+                      ) : (
+                        <ol className="space-y-1 text-sm">
+                          {redePreview.topIndicadores.map((m, i) => (
+                            <li key={m.id}>{i + 1}. {m.clienteNome} - {formatCurrency(m.clienteBonusAcumulado)} (Rede: {m.redeId.slice(0, 8)}...)</li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ═══ COMISSÕES A PAGAR ═══ */}
+                {previewRelatorio === 'comissoes' && comissoesPreview && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Indicadores com Bônus</div>
+                        <div className="text-xl font-bold">{comissoesPreview.total}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total a Pagar</div>
+                        <div className="text-xl font-bold text-orange-600">{formatCurrency(comissoesPreview.totalBruto)}</div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold mb-2">Detalhamento:</h4>
+                      {comissoesPreview.top5.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Nenhuma comissão pendente</p>
+                      ) : (
+                        <div className="border rounded-lg overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead className="bg-muted">
+                              <tr>
+                                <th className="text-left p-2">#</th>
+                                <th className="text-left p-2">Nome</th>
+                                <th className="text-left p-2">Status</th>
+                                <th className="text-right p-2">Bônus Acumulado</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {comissoesPreview.top5.map((c, i) => (
+                                <tr key={c.id} className="border-t">
+                                  <td className="p-2">{i + 1}</td>
+                                  <td className="p-2 font-medium">{c.nome}</td>
+                                  <td className="p-2">{c.status === 'em_dia' ? '🟢 Em dia' : c.status === 'a_vencer' ? '🟡 À vencer' : '🔴 Vencido'}</td>
+                                  <td className="p-2 text-right font-semibold">{formatCurrency(c.bonusAcumulado)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ═══ CLIENTES INATIVOS ═══ */}
+                {previewRelatorio === 'clientes-inativos' && inativosPreview && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total Inativos</div>
+                        <div className="text-xl font-bold text-orange-600">{inativosPreview.total}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Sem Contato</div>
+                        <div className="text-xl font-bold text-red-600">{inativosPreview.semContato}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Contato &gt;30 dias</div>
+                        <div className="text-xl font-bold text-yellow-600">{inativosPreview.comContatoAntigo}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Valor em carteira</div>
+                        <div className="text-xl font-bold">{formatCurrency(inativosPreview.valorTotal)}</div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold mb-2">Top 10 inativos (por valor):</h4>
+                      {inativosPreview.lista.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Todos os clientes foram contatados recentemente</p>
+                      ) : (
+                        <div className="border rounded-lg overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead className="bg-muted">
+                              <tr>
+                                <th className="text-left p-2">Nome</th>
+                                <th className="text-left p-2">Telefone</th>
+                                <th className="text-left p-2">Último Contato</th>
+                                <th className="text-right p-2">Valor</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {inativosPreview.lista.map((c) => (
+                                <tr key={c.id} className="border-t">
+                                  <td className="p-2 font-medium">{c.nome}</td>
+                                  <td className="p-2">{c.telefone}</td>
+                                  <td className="p-2">{c.ultimoContato ? new Date(c.ultimoContato).toLocaleDateString('pt-BR') : 'Nunca'}</td>
+                                  <td className="p-2 text-right font-semibold">{formatCurrency(c.valor)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ═══ ANÁLISE DE CRÉDITO ═══ */}
+                {previewRelatorio === 'analise-credito' && creditoPreview && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Total Solicitações</div>
+                        <div className="text-xl font-bold">{creditoPreview.total}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Aprovadas</div>
+                        <div className="text-xl font-bold text-green-600">{creditoPreview.aprovadas}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Recusadas</div>
+                        <div className="text-xl font-bold text-red-600">{creditoPreview.recusadas}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Taxa Aprovação</div>
+                        <div className="text-xl font-bold">{creditoPreview.taxaAprovacao}%</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Pendentes + Em Análise</div>
+                        <div className="text-xl font-bold text-yellow-600">{creditoPreview.pendentes + creditoPreview.emAnalise}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Valor Aprovado</div>
+                        <div className="text-xl font-bold text-green-600">{formatCurrency(creditoPreview.valorAprovado)}</div>
+                      </div>
+                      <div className="bg-muted p-3 rounded">
+                        <div className="text-sm text-muted-foreground">Valor Recusado</div>
+                        <div className="text-xl font-bold text-red-600">{formatCurrency(creditoPreview.valorRecusado)}</div>
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold mb-2">Últimas Solicitações:</h4>
+                      {creditoPreview.recentes.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">Nenhuma solicitação encontrada</p>
+                      ) : (
+                        <div className="border rounded-lg overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead className="bg-muted">
+                              <tr>
+                                <th className="text-left p-2">Cliente</th>
+                                <th className="text-left p-2">Valor</th>
+                                <th className="text-left p-2">Status</th>
+                                <th className="text-left p-2">Data</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {creditoPreview.recentes.map((a) => (
+                                <tr key={a.id} className="border-t">
+                                  <td className="p-2 font-medium">{a.clienteNome}</td>
+                                  <td className="p-2">{formatCurrency(a.valorSolicitado)}</td>
+                                  <td className="p-2">
+                                    {a.status === 'aprovado' ? '🟢 Aprovado' : a.status === 'recusado' ? '🔴 Recusado' : a.status === 'em_analise' ? '🟡 Em análise' : '⏳ Pendente'}
+                                  </td>
+                                  <td className="p-2">{new Date(a.dataSolicitacao).toLocaleDateString('pt-BR')}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Botões de Ação */}
             <div className="flex gap-2 pt-4 border-t">
-              <Button className="flex-1 bg-primary hover:bg-primary/90">
+              <Button
+                className="flex-1 bg-primary hover:bg-primary/90"
+                disabled={loading}
+                onClick={() => handleExportRelatorio('csv')}
+              >
                 <Download className="w-4 h-4 mr-2" />
-                Exportar PDF
+                Exportar CSV
               </Button>
-              <Button variant="outline" className="flex-1">
-                <FileSpreadsheet className="w-4 h-4 mr-2" />
-                Exportar Excel
-              </Button>
-              <Button variant="outline" className="flex-1">
-                <Mail className="w-4 h-4 mr-2" />
-                Enviar por E-mail
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setPreviewRelatorio(null)}
+              >
+                Fechar
               </Button>
             </div>
           </div>

@@ -1,305 +1,372 @@
 /**
  * @module KanbanCobrancaPage
- * @description Kanban de cobrança com colunas de status.
+ * @description Kanban de cobrança com dados reais do Supabase.
  *
- * Board drag-and-drop com colunas: Pendente, Em Contato,
- * Acordo, Pago, Inadimplente. Cards exibem cliente, valor
- * em atraso e dias de atraso. Diálogos para registrar
- * tentativa de contato e formalizar acordos.
+ * Board com colunas: A Vencer, Vencido, Contatado, Negociação, Acordo, Pago.
+ * Cards exibem cliente, valor, dias de atraso e responsável.
+ * Drag-and-drop muda etapa via mutation. Modal com ações de contato.
+ * Sem dados mock — usa useCardsCobranca, useMoverCardCobranca, useRegistrarContato.
  *
  * @route /kanban/cobranca
- * @access Protegido — perfis admin, gerente, cobrador
- * @see mockClientes, mockParcelas
+ * @access Protegido — perfis admin, gerência, cobrança
  */
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { MessageSquare, Phone, HandshakeIcon, ChevronRight } from 'lucide-react';
-import { useClientes } from '../hooks/useClientes';
+import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
+import {
+  MessageSquare,
+  Phone,
+  HandshakeIcon,
+  ChevronRight,
+  Search,
+  Loader2,
+  AlertCircle,
+  UserCheck,
+} from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  useCardsCobranca,
+  useMoverCardCobranca,
+  useRegistrarContato,
+  useUpdateCardCobranca,
+} from '../hooks/useKanbanCobranca';
+import type { KanbanCobrancaView } from '../lib/view-types';
+import type { KanbanCobrancaEtapa } from '../lib/database.types';
 
-interface KanbanColumn {
-  id: string;
+interface ColumnDef {
+  id: KanbanCobrancaEtapa;
   title: string;
-  color: string;
-  count: number;
+  dotColor: string;
 }
 
-const columns: KanbanColumn[] = [
-  { id: 'a_vencer', title: 'A VENCER', color: 'bg-yellow-100 text-slate-900 border-yellow-300', count: 12 },
-  { id: 'vencidos', title: 'VENCIDOS', color: 'bg-red-100 text-slate-900 border-red-300', count: 28 },
-  { id: 'negociacao', title: 'NEGOCIAÇÃO', color: 'bg-orange-100 text-slate-900 border-orange-300', count: 15 },
-  { id: 'acordos', title: 'ACORDOS', color: 'bg-green-100 text-slate-900 border-green-300', count: 7 },
+const COLUMNS: ColumnDef[] = [
+  { id: 'a_vencer', title: 'A VENCER', dotColor: '#eab308' },
+  { id: 'vencido', title: 'VENCIDOS', dotColor: '#ef4444' },
+  { id: 'contatado', title: 'CONTATADO', dotColor: '#3b82f6' },
+  { id: 'negociacao', title: 'NEGOCIAÇÃO', dotColor: '#f97316' },
+  { id: 'acordo', title: 'ACORDOS', dotColor: '#22c55e' },
+  { id: 'pago', title: 'PAGOS', dotColor: '#10b981' },
 ];
 
 export default function KanbanCobrancaPage() {
-  const [selectedClient, setSelectedClient] = useState<any>(null);
-  const { data: allClientes = [] } = useClientes();
+  const navigate = useNavigate();
+  const [selectedCard, setSelectedCard] = useState<KanbanCobrancaView | null>(null);
+  const [busca, setBusca] = useState('');
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
+  const [contatoObs, setContatoObs] = useState('');
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(value);
-  };
+  const { data: allCards = [], isLoading, error } = useCardsCobranca();
+  const moverCard = useMoverCardCobranca();
+  const registrarContato = useRegistrarContato();
+  const updateCard = useUpdateCardCobranca();
 
-  // Organizar clientes por coluna
-  const getClientsByColumn = (columnId: string) => {
-    if (columnId === 'a_vencer') {
-      return allClientes.filter((c) => c.status === 'a_vencer').slice(0, 3);
-    } else if (columnId === 'vencidos') {
-      return allClientes.filter((c) => c.status === 'vencido').slice(0, 3);
-    } else if (columnId === 'negociacao') {
-      return allClientes.filter((c) => c.status === 'vencido').slice(3, 5);
-    } else if (columnId === 'acordos') {
-      return allClientes.filter((c) => c.status === 'em_dia').slice(0, 2);
+  const formatCurrency = (value: number) =>
+    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+
+  const filteredCards = useMemo(() => {
+    if (!busca.trim()) return allCards;
+    const lower = busca.toLowerCase();
+    return allCards.filter(
+      (c) =>
+        c.clienteNome.toLowerCase().includes(lower) ||
+        c.clienteEmail.toLowerCase().includes(lower) ||
+        c.responsavelNome.toLowerCase().includes(lower)
+    );
+  }, [allCards, busca]);
+
+  const cardsByEtapa = useMemo(() => {
+    const map: Record<string, KanbanCobrancaView[]> = {};
+    for (const col of COLUMNS) {
+      map[col.id] = filteredCards.filter((c) => c.etapa === col.id);
     }
-    return [];
+    return map;
+  }, [filteredCards]);
+
+  const stats = useMemo(() => {
+    const total = allCards.reduce((sum, c) => sum + c.valorDivida, 0);
+    const negociacao = allCards
+      .filter((c) => c.etapa === 'negociacao')
+      .reduce((sum, c) => sum + c.valorDivida, 0);
+    const acordos = allCards.filter((c) => c.etapa === 'acordo').length;
+    const pagos = allCards.filter((c) => c.etapa === 'pago');
+    const totalPago = pagos.reduce((sum, c) => sum + c.valorDivida, 0);
+    const totalClientes = allCards.filter((c) => !['pago', 'perdido'].includes(c.etapa)).length;
+    const taxaConversao = allCards.filter((c) => c.etapa === 'negociacao').length > 0
+      ? Math.round((acordos / allCards.filter((c) => c.etapa === 'negociacao').length) * 100)
+      : 0;
+    return { total, negociacao, acordos, totalClientes, taxaConversao, totalPago };
+  }, [allCards]);
+
+  const handleDragStart = (e: React.DragEvent, cardId: string) => {
+    e.dataTransfer.setData('cardId', cardId);
+    e.dataTransfer.effectAllowed = 'move';
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'a_vencer':
-        return '🟡';
-      case 'vencido':
-        return '🔴';
-      case 'negociacao':
-        return '🟠';
-      case 'acordos':
-        return '🟢';
-      default:
-        return '⚪';
-    }
+  const handleDragOver = (e: React.DragEvent, columnId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverColumn(columnId);
   };
+
+  const handleDrop = (e: React.DragEvent, columnId: string) => {
+    e.preventDefault();
+    setDragOverColumn(null);
+    const cardId = e.dataTransfer.getData('cardId');
+    if (!cardId) return;
+
+    const card = allCards.find((c) => c.id === cardId);
+    if (!card || card.etapa === columnId) return;
+
+    moverCard.mutate(
+      { id: cardId, etapa: columnId as KanbanCobrancaEtapa },
+      {
+        onSuccess: () => toast.success(`Card movido para ${COLUMNS.find((c) => c.id === columnId)?.title}`),
+        onError: (err) => toast.error(`Erro ao mover: ${err.message}`),
+      }
+    );
+  };
+
+  const handleRegistrarContato = () => {
+    if (!selectedCard) return;
+    registrarContato.mutate(
+      { id: selectedCard.id, observacao: contatoObs || undefined },
+      {
+        onSuccess: () => {
+          toast.success('Contato registrado com sucesso');
+          setContatoObs('');
+          setSelectedCard(null);
+        },
+        onError: (err) => toast.error(`Erro: ${err.message}`),
+      }
+    );
+  };
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <AlertCircle className="w-12 h-12 text-destructive mx-auto mb-4" />
+          <p className="text-destructive font-medium">Erro ao carregar dados</p>
+          <p className="text-sm text-muted-foreground mt-1">{(error as Error).message}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-foreground">Kanban - Cobrança</h1>
-        <p className="text-muted-foreground mt-1">
-          Gerencie o fluxo de cobrança visualmente
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">Kanban - Cobrança</h1>
+          <p className="text-muted-foreground mt-1">
+            Gerencie o fluxo de cobrança visualmente — arraste os cards entre colunas
+          </p>
+        </div>
+        <div className="relative w-64">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Buscar cliente..." className="pl-10" value={busca} onChange={(e) => setBusca(e.target.value)} />
+        </div>
       </div>
 
-      {/* Kanban Board */}
-      <div className="flex gap-4 overflow-x-auto pb-4">
-        {columns.map((column) => (
-          <div key={column.id} className="flex-shrink-0 w-80">
-            <Card className={`${column.color} border-2`}>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-semibold">
-                    {column.title}
-                  </CardTitle>
-                  <Badge variant="secondary" className="font-semibold">
-                    {column.count}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {getClientsByColumn(column.id).map((cliente) => (
-                  <Card
-                    key={cliente.id}
-                    className="bg-card hover:shadow-md transition-shadow cursor-pointer"
-                    onClick={() => setSelectedClient(cliente)}
-                  >
-                    <CardContent className="p-4">
-                      <div className="space-y-2">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="font-semibold text-sm">{cliente.nome}</div>
-                            <div className="text-xs text-muted-foreground mt-1">
-                              {cliente.email}
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          <span className="ml-3 text-muted-foreground">Carregando pipeline...</span>
+        </div>
+      ) : (
+        <div className="flex gap-4 overflow-x-auto pb-4">
+          {COLUMNS.map((column) => {
+            const cards = cardsByEtapa[column.id] || [];
+            const isOver = dragOverColumn === column.id;
+            return (
+              <div key={column.id} className="flex-shrink-0 w-80">
+                <Card
+                  className={`liquid-metal-column ${isOver ? 'dragging-over' : ''}`}
+                  style={{ '--kanban-col-color': `${column.dotColor}88` } as React.CSSProperties}
+                  onDragOver={(e) => handleDragOver(e, column.id)}
+                  onDragLeave={() => setDragOverColumn(null)}
+                  onDrop={(e) => handleDrop(e, column.id)}
+                >
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                        <span className="kanban-status-dot" style={{ background: column.dotColor, '--dot-color': column.dotColor } as React.CSSProperties} />
+                        {column.title}
+                      </CardTitle>
+                      <Badge variant="secondary" className="font-semibold">{cards.length}</Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3 min-h-[100px]">
+                    {cards.length === 0 && (
+                      <p className="text-xs text-muted-foreground text-center py-4 italic">Nenhum card nesta etapa</p>
+                    )}
+                    {cards.map((card) => (
+                      <Card
+                        key={card.id}
+                        className="liquid-metal-card cursor-grab active:cursor-grabbing"
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, card.id)}
+                        onClick={() => setSelectedCard(card)}
+                      >
+                        <CardContent className="p-4">
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="font-semibold text-sm text-foreground">{card.clienteNome}</div>
+                                <div className="text-xs text-muted-foreground mt-0.5">{card.clienteEmail}</div>
+                              </div>
+                              <span className="text-lg">{column.emoji}</span>
+                            </div>
+                            <div className="space-y-1 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Valor:</span>
+                                <span className="font-semibold text-foreground">{formatCurrency(card.valorDivida)}</span>
+                              </div>
+                              {card.diasAtraso > 0 && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">Atraso:</span>
+                                  <span className="font-semibold text-red-600 dark:text-red-400">{card.diasAtraso} dias</span>
+                                </div>
+                              )}
+                              {card.tentativasContato > 0 && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">Contatos:</span>
+                                  <span className="font-medium text-foreground">{card.tentativasContato}x</span>
+                                </div>
+                              )}
+                              {card.responsavelNome !== 'Não atribuído' && (
+                                <div className="flex items-center gap-1 mt-1">
+                                  <UserCheck className="w-3 h-3 text-muted-foreground" />
+                                  <span className="text-muted-foreground">{card.responsavelNome}</span>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex gap-1 pt-2">
+                              <Button size="sm" variant="outline" className="flex-1 h-8 text-xs" onClick={(e) => { e.stopPropagation(); navigate(`/chat?phone=${encodeURIComponent(card.clienteTelefone)}`); }}>
+                                <MessageSquare className="w-3 h-3 mr-1" />Chat
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
+                                <ChevronRight className="w-4 h-4" />
+                              </Button>
                             </div>
                           </div>
-                          <span className="text-lg">
-                            {getStatusIcon(column.id)}
-                          </span>
-                        </div>
-
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Valor:</span>
-                            <span className="font-semibold">
-                              {formatCurrency(cliente.valor)}
-                            </span>
-                          </div>
-
-                          {cliente.diasAtraso ? (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Atraso:</span>
-                              <span className="font-semibold text-red-600">
-                                {cliente.diasAtraso} dias
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Vence:</span>
-                              <span className="font-semibold">
-                                {new Date(cliente.vencimento).toLocaleDateString('pt-BR', {
-                                  day: '2-digit',
-                                  month: '2-digit',
-                                })}
-                              </span>
-                            </div>
-                          )}
-
-                          {cliente.ultimoContato && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Último contato:</span>
-                              <span className="font-medium">{cliente.ultimoContato}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex gap-1 pt-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="flex-1 h-8 text-xs"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                            }}
-                          >
-                            <MessageSquare className="w-3 h-3 mr-1" />
-                            Chat
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 px-2"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                            }}
-                          >
-                            <ChevronRight className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-
-                {/* Ver mais */}
-                {column.count > 3 && (
-                  <Button variant="ghost" className="w-full text-xs" size="sm">
-                    Ver mais {column.count - 3} cliente(s)
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        ))}
-      </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </CardContent>
+                </Card>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Estatísticas */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Total em Cobrança
-            </CardTitle>
-          </CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total em Cobrança</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(324500)}</div>
-            <p className="text-xs text-muted-foreground mt-1">62 clientes</p>
+            <div className="text-2xl font-bold text-foreground">{formatCurrency(stats.total)}</div>
+            <p className="text-xs text-muted-foreground mt-1">{stats.totalClientes} clientes</p>
           </CardContent>
         </Card>
-
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Em Negociação
-            </CardTitle>
-          </CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Em Negociação</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(67500)}</div>
-            <p className="text-xs text-muted-foreground mt-1">15 clientes</p>
+            <div className="text-2xl font-bold text-foreground">{formatCurrency(stats.negociacao)}</div>
+            <p className="text-xs text-muted-foreground mt-1">{allCards.filter((c) => c.etapa === 'negociacao').length} clientes</p>
           </CardContent>
         </Card>
-
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Acordos Fechados
-            </CardTitle>
-          </CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Acordos Fechados</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">7</div>
-            <p className="text-xs text-muted-foreground mt-1">neste mês</p>
+            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{stats.acordos}</div>
+            <p className="text-xs text-muted-foreground mt-1">Recuperado: {formatCurrency(stats.totalPago)}</p>
           </CardContent>
         </Card>
-
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Taxa de Conversão
-            </CardTitle>
-          </CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Taxa de Conversão</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">32%</div>
+            <div className="text-2xl font-bold text-foreground">{stats.taxaConversao}%</div>
             <p className="text-xs text-muted-foreground mt-1">negociação → acordo</p>
           </CardContent>
         </Card>
       </div>
 
       {/* Modal de Detalhes */}
-      <Dialog open={!!selectedClient} onOpenChange={() => setSelectedClient(null)}>
+      <Dialog open={!!selectedCard} onOpenChange={() => { setSelectedCard(null); setContatoObs(''); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <div className="w-12 h-12 bg-primary text-white rounded-full flex items-center justify-center font-semibold text-lg">
-                {selectedClient?.nome.charAt(0)}
+                {selectedCard?.clienteNome.charAt(0)}
               </div>
               <div>
-                <div>{selectedClient?.nome}</div>
+                <div className="text-foreground">{selectedCard?.clienteNome}</div>
                 <div className="text-sm text-muted-foreground font-normal">
-                  {formatCurrency(selectedClient?.valor || 0)}
+                  {selectedCard ? formatCurrency(selectedCard.valorDivida) : ''}
                 </div>
               </div>
             </DialogTitle>
           </DialogHeader>
-
-          {selectedClient && (
+          {selectedCard && (
             <div className="space-y-4">
-              {selectedClient.diasAtraso && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                  <div className="text-sm font-medium text-red-800">
-                    Vencido há {selectedClient.diasAtraso} dias
+              {selectedCard.diasAtraso > 0 && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                  <div className="text-sm font-medium text-red-800 dark:text-red-300">
+                    Vencido há {selectedCard.diasAtraso} dias
                   </div>
                 </div>
               )}
-
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Último contato:</span>
-                  <span className="font-medium">
-                    {selectedClient.ultimoContato || 'Nenhum'}
-                  </span>
+                  <span className="text-muted-foreground">Etapa:</span>
+                  <Badge>{COLUMNS.find((c) => c.id === selectedCard.etapa)?.title}</Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Responsável:</span>
+                  <span className="font-medium text-foreground">{selectedCard.responsavelNome}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Contatos:</span>
+                  <span className="font-medium text-foreground">{selectedCard.tentativasContato}x</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Telefone:</span>
-                  <span className="font-medium">{selectedClient.telefone}</span>
+                  <span className="font-medium text-foreground">{selectedCard.clienteTelefone}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Email:</span>
-                  <span className="font-medium">{selectedClient.email}</span>
+                  <span className="font-medium text-foreground">{selectedCard.clienteEmail}</span>
                 </div>
+                {selectedCard.observacao && (
+                  <div className="mt-2 p-2 bg-muted rounded text-xs text-muted-foreground">
+                    <strong>Obs.:</strong> {selectedCard.observacao}
+                  </div>
+                )}
               </div>
-
-              <div className="flex gap-2 pt-4">
-                <Button className="flex-1" variant="outline">
-                  <MessageSquare className="w-4 h-4 mr-2" />
-                  Chat
+              <div className="space-y-2 border-t pt-3">
+                <label className="text-sm font-medium text-foreground">Registrar contato</label>
+                <Textarea placeholder="Observação sobre o contato..." value={contatoObs} onChange={(e) => setContatoObs(e.target.value)} rows={2} />
+                <Button size="sm" onClick={handleRegistrarContato} disabled={registrarContato.isPending} className="w-full">
+                  {registrarContato.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Phone className="w-4 h-4 mr-2" />}
+                  Registrar Contato
                 </Button>
-                <Button className="flex-1" variant="outline">
-                  <Phone className="w-4 h-4 mr-2" />
-                  Ligar
-                </Button>
-                <Button className="flex-1 bg-secondary hover:bg-secondary/90">
-                  <HandshakeIcon className="w-4 h-4 mr-2" />
-                  Proposta
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button className="flex-1" variant="outline" onClick={() => navigate(`/chat?phone=${encodeURIComponent(selectedCard.clienteTelefone)}`)}><MessageSquare className="w-4 h-4 mr-2" />Chat</Button>
+                <Button className="flex-1" variant="outline" onClick={() => window.open(`tel:${selectedCard.clienteTelefone}`, '_self')}><Phone className="w-4 h-4 mr-2" />Ligar</Button>
+                <Button className="flex-1 bg-secondary hover:bg-secondary/90" onClick={() => {
+                  updateCard.mutate({ id: selectedCard.id, updates: { etapa: 'negociacao' } }, {
+                    onSuccess: () => { toast.success('Enviado para negociação'); setSelectedCard(null); },
+                  });
+                }}>
+                  <HandshakeIcon className="w-4 h-4 mr-2" />Negociar
                 </Button>
               </div>
             </div>

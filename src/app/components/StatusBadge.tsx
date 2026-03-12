@@ -18,17 +18,17 @@ export function StatusBadge({ status }: StatusBadgeProps) {
   const config = {
     em_dia: {
       label: 'EM DIA',
-      className: 'bg-green-100 text-green-800 hover:bg-green-100',
-      dot: 'bg-green-500',
+      className: 'bg-emerald-100/80 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 hover:bg-emerald-100/80 dark:hover:bg-emerald-900/30',
+      dot: 'bg-emerald-500',
     },
     a_vencer: {
       label: 'À VENCER',
-      className: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100',
-      dot: 'bg-yellow-500',
+      className: 'bg-amber-100/80 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 hover:bg-amber-100/80 dark:hover:bg-amber-900/30',
+      dot: 'bg-amber-500',
     },
     vencido: {
       label: 'VENCIDO',
-      className: 'bg-red-100 text-red-800 hover:bg-red-100',
+      className: 'bg-red-100/80 text-red-700 dark:bg-red-900/30 dark:text-red-300 hover:bg-red-100/80 dark:hover:bg-red-900/30',
       dot: 'bg-red-500',
     },
   };

@@ -74,6 +74,11 @@ export function useUpdateParcela() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
       queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+      queryClient.invalidateQueries({ queryKey: ['clientes'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-stats'] });
     },
   });
 }
@@ -95,6 +100,10 @@ export function useRegistrarPagamento() {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
       queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
       queryClient.invalidateQueries({ queryKey: ['clientes'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-stats'] });
     },
   });
 }

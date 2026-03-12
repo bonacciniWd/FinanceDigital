@@ -11,31 +11,110 @@
  * @access Protegido — todos os perfis autenticados
  * @see mockEvoluacaoFinanceira, mockComposicaoCarteira
  */
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Input } from '../components/ui/input';
-import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, TrendingDown, Users, Percent, DollarSign, Search, MessageSquare, Eye, Edit } from 'lucide-react';
-import { mockEvoluacaoFinanceira, mockComposicaoCarteira } from '../lib/mockData';
+import { TrendingUp, TrendingDown, Users, Percent, DollarSign, Search, MessageSquare, Eye, Edit, Loader2 } from 'lucide-react';
+import { LWCChart } from '../components/charts/LWCChart';
+import { DonutChart } from '../components/charts/DonutChart';
 import { useClientes } from '../hooks/useClientes';
+import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useDashboardStats, useFinancialSummary } from '../hooks/useDashboardStats';
 import { StatusBadge } from '../components/StatusBadge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 
-const COLORS = ['var(--chart-5)', 'var(--chart-3)', 'var(--chart-4)'];
+const DONUT_COLORS = ['#22c55e', '#eab308', '#ef4444'];
+
+const PERIODO_MESES: Record<string, number> = { '7': 1, '30': 2, '90': 3, '365': 12 };
 
 export default function DashboardPage() {
   const [selectedClient, setSelectedClient] = useState<any>(null);
+  const [periodo, setPeriodo] = useState('30');
+  const [statusFilter, setStatusFilter] = useState('todos');
+  const [grupoFilter, setGrupoFilter] = useState('todos');
+  const [busca, setBusca] = useState('');
+
   const { data: clientes = [] } = useClientes();
+  const { data: emprestimos = [] } = useEmprestimos();
+  const { data: stats, isLoading: loadingStats } = useDashboardStats();
+  const { data: evoluacaoFinanceira = [] } = useFinancialSummary(PERIODO_MESES[periodo] ?? 2);
 
-  // Calcular métricas
-  const totalFaturamento = 1245890;
-  const taxaInadimplencia = 5.2;
-  const clientesAtivos = 1245;
-  const taxaConversao = 68;
+  // Derivar inadimplência real a partir dos empréstimos
+  const clienteIdsInadimplentes = new Set(
+    emprestimos.filter(e => e.status === 'inadimplente').map(e => e.clienteId)
+  );
+  const vencidosReal = clienteIdsInadimplentes.size;
 
-  const clientesRecentes = clientes.slice(0, 6);
+  // KPIs reais do RPC (com fallback derivado dos empréstimos)
+  const totalCarteira = stats?.total_carteira ?? 0;
+  const taxaInadimplenciaReal = clientes.length > 0
+    ? Math.round((vencidosReal / clientes.length) * 100)
+    : (stats?.taxa_inadimplencia ?? 0);
+  const clientesAtivos = stats?.total_clientes ?? clientes.length;
+  // Taxa conversão = aprovados / (aprovados + recusados) — derivado de clientes em_dia / total
+  const taxaConversao = clientesAtivos > 0
+    ? Math.round(((stats?.clientes_em_dia ?? 0) / clientesAtivos) * 100)
+    : 0;
+
+  // Effective status per client — empréstimos are source of truth for 'vencido'
+  const getEffectiveStatus = (c: typeof clientes[0]) =>
+    clienteIdsInadimplentes.has(c.id) ? 'vencido' : c.status;
+
+  // Derive rede options from indicadoPor chain (same logic as RedeIndicacoesPage)
+  const { redesOptions, clienteRootMap } = useMemo(() => {
+    const clienteById = new Map(clientes.map((c) => [c.id, c]));
+
+    function findRoot(id: string): string {
+      const visited = new Set<string>();
+      let cur = id;
+      while (true) {
+        if (visited.has(cur)) break;
+        visited.add(cur);
+        const parent = clienteById.get(cur)?.indicadoPor;
+        if (!parent || !clienteById.has(parent)) break;
+        cur = parent;
+      }
+      return cur;
+    }
+
+    const rootMap = new Map<string, string>();
+    for (const c of clientes) rootMap.set(c.id, findRoot(c.id));
+
+    // Only include roots that at least one other client points to (real networks)
+    const hasFollowers = new Set(clientes.filter((c) => c.indicadoPor).map((c) => c.indicadoPor!));
+    const seenRoots = new Set<string>();
+    const options: { id: string; nome: string }[] = [];
+    for (const [, rootId] of rootMap) {
+      if (!seenRoots.has(rootId) && hasFollowers.has(rootId)) {
+        seenRoots.add(rootId);
+        const rc = clienteById.get(rootId);
+        if (rc) options.push({ id: rootId, nome: rc.nome });
+      }
+    }
+    return {
+      redesOptions: options.sort((a, b) => a.nome.localeCompare(b.nome)),
+      clienteRootMap: rootMap,
+    };
+  }, [clientes]);
+
+  const clientesRecentes = clientes
+    .filter((c) => statusFilter === 'todos' || getEffectiveStatus(c) === statusFilter)
+    .filter((c) => grupoFilter === 'todos' || clienteRootMap.get(c.id) === grupoFilter)
+    .filter((c) => !busca.trim() || c.nome.toLowerCase().includes(busca.toLowerCase()))
+    .slice(0, 6);
+
+  // Composição da carteira derivada dos empréstimos (fonte de verdade)
+  const totalCl = clientes.length || 1;
+  const vencidos = vencidosReal;
+  const emDia = clientes.filter(c => !clienteIdsInadimplentes.has(c.id) && c.status !== 'a_vencer').length;
+  const aVencer = clientes.filter(c => !clienteIdsInadimplentes.has(c.id) && c.status === 'a_vencer').length;
+  const composicaoCarteira = [
+    { status: 'Em dia', clientes: emDia, porcentagem: Math.round((emDia / totalCl) * 100) },
+    { status: 'À vencer', clientes: aVencer, porcentagem: Math.round((aVencer / totalCl) * 100) },
+    { status: 'Vencidos', clientes: vencidos, porcentagem: Math.round((vencidos / totalCl) * 100) },
+  ];
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -60,7 +139,7 @@ export default function DashboardPage() {
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-wrap gap-4">
-            <Select defaultValue="30">
+            <Select value={periodo} onValueChange={setPeriodo}>
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="Período" />
               </SelectTrigger>
@@ -72,7 +151,7 @@ export default function DashboardPage() {
               </SelectContent>
             </Select>
 
-            <Select defaultValue="todos">
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
@@ -84,21 +163,27 @@ export default function DashboardPage() {
               </SelectContent>
             </Select>
 
-            <Select defaultValue="todos">
+            <Select value={grupoFilter} onValueChange={setGrupoFilter}>
               <SelectTrigger className="w-48">
-                <SelectValue placeholder="Grupo/Rede" />
+                <SelectValue placeholder="Rede (Pioneiro)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="todos">Todos</SelectItem>
-                <SelectItem value="rede_a">Rede A</SelectItem>
-                <SelectItem value="rede_b">Rede B</SelectItem>
+                <SelectItem value="todos">Todas as Redes</SelectItem>
+                {redesOptions.map((r) => (
+                  <SelectItem key={r.id} value={r.id}>{r.nome}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
 
             <div className="flex-1 min-w-64">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input placeholder="Buscar cliente..." className="pl-10" />
+                <Input
+                  placeholder="Buscar cliente..."
+                  className="pl-10"
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
+                />
               </div>
             </div>
           </div>
@@ -110,15 +195,14 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Faturamento
+              Carteira Ativa
             </CardTitle>
             <DollarSign className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(totalFaturamento)}</div>
-            <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
-              <TrendingUp className="w-3 h-3" />
-              +12% vs mês passado
+            <div className="text-2xl font-bold">{loadingStats ? '...' : formatCurrency(totalCarteira)}</div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+              {stats?.total_emprestimos_ativos ?? 0} empréstimos ativos
             </p>
           </CardContent>
         </Card>
@@ -131,10 +215,9 @@ export default function DashboardPage() {
             <Percent className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{taxaInadimplencia}%</div>
-            <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
-              <TrendingDown className="w-3 h-3" />
-              -0,8% vs mês passado
+            <div className="text-2xl font-bold">{loadingStats ? '...' : `${taxaInadimplenciaReal}%`}</div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+              {vencidosReal} clientes vencidos
             </p>
           </CardContent>
         </Card>
@@ -147,10 +230,9 @@ export default function DashboardPage() {
             <Users className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{clientesAtivos.toLocaleString('pt-BR')}</div>
-            <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
-              <TrendingUp className="w-3 h-3" />
-              +34 novos
+            <div className="text-2xl font-bold">{loadingStats ? '...' : clientesAtivos.toLocaleString('pt-BR')}</div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+              {stats?.clientes_a_vencer ?? 0} a vencer
             </p>
           </CardContent>
         </Card>
@@ -163,10 +245,9 @@ export default function DashboardPage() {
             <Percent className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{taxaConversao}%</div>
-            <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
-              <TrendingUp className="w-3 h-3" />
-              +5% vs mês passado
+            <div className="text-2xl font-bold">{loadingStats ? '...' : `${taxaConversao}%`}</div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+              clientes em dia / total
             </p>
           </CardContent>
         </Card>
@@ -179,32 +260,35 @@ export default function DashboardPage() {
             <CardTitle>Evolução de Receita x Inadimplência</CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={mockEvoluacaoFinanceira}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="mes" />
-                <YAxis yAxisId="left" />
-                <YAxis yAxisId="right" orientation="right" />
-                <Tooltip />
-                <Legend />
-                <Line
-                  yAxisId="left"
-                  type="monotone"
-                  dataKey="receita"
-                  stroke="var(--chart-1)"
-                  strokeWidth={2}
-                  name="Receita (R$)"
-                />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="inadimplencia"
-                  stroke="var(--chart-4)"
-                  strokeWidth={2}
-                  name="Inadimplência (%)"
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <LWCChart
+              height={300}
+              series={[
+                {
+                  label: 'Receita (R$)',
+                  color: '#3b82f6',
+                  type: 'area',
+                  data: evoluacaoFinanceira.map((m) => ({ time: m.mes, value: m.receita })),
+                },
+                {
+                  label: 'Inadimplência (%)',
+                  color: '#ef4444',
+                  type: 'line',
+                  data: evoluacaoFinanceira.map((m) => ({ time: m.mes, value: m.inadimplencia })),
+                },
+              ]}
+              emptyText="Aguardando dados do servidor…"
+            />
+            {/* Legenda manual */}
+            <div className="flex gap-6 justify-center mt-3">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="w-3 h-0.5 bg-blue-500 inline-block rounded" />
+                Receita
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="w-3 h-0.5 bg-red-500 inline-block rounded" />
+                Inadimplência
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -212,43 +296,16 @@ export default function DashboardPage() {
           <CardHeader>
             <CardTitle>Status dos Clientes</CardTitle>
           </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={mockComposicaoCarteira}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ status, porcentagem }) => `${status}: ${porcentagem}%`}
-                  outerRadius={80}
-                  fill="var(--chart-1)"
-                  dataKey="clientes"
-                >
-                  {mockComposicaoCarteira.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-
-            <div className="mt-4 space-y-2">
-              {mockComposicaoCarteira.map((item, index) => (
-                <div key={item.status} className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="w-3 h-3 rounded-full"
-                      style={{ backgroundColor: COLORS[index] }}
-                    />
-                    <span>{item.status}</span>
-                  </div>
-                  <span className="font-medium">
-                    {item.clientes} ({item.porcentagem}%)
-                  </span>
-                </div>
-              ))}
-            </div>
+          <CardContent className="flex justify-center">
+            <DonutChart
+              size={210}
+              data={composicaoCarteira.map((item, i) => ({
+                name: item.status,
+                value: item.clientes,
+                color: DONUT_COLORS[i % DONUT_COLORS.length],
+              }))}
+              centerLabel={String(clientes.length)}
+            />
           </CardContent>
         </Card>
       </div>

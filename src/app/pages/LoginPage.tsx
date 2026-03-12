@@ -9,7 +9,7 @@
  * @route /login
  * @access Público (única rota não protegida)
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/button';
@@ -19,8 +19,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { Mail, Lock, Eye, EyeOff, Sun, Moon } from 'lucide-react';
 
-import logo from '../assets/logo.png';
+import logo from '../assets/logo-login.png';
 import { useTheme } from '../contexts/ThemeContext';
+import { AnimatedBackground } from '../components/AnimatedBackground';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -29,9 +30,14 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const { login } = useAuth();
+  const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
+
+  // Se já está autenticado, redireciona direto
+  useEffect(() => {
+    if (isAuthenticated) navigate('/dashboard', { replace: true });
+  }, [isAuthenticated, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,19 +59,20 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#000] to-[#1A3B9F] dark:from-[#0B1120] dark:to-[#0F1729] flex items-center justify-center p-4 transition-colors duration-300">
+    <div className="min-h-screen flex items-center justify-center p-4 transition-colors duration-300 relative">
+      <AnimatedBackground />
       {/* Theme toggle */}
       <button
         onClick={toggleTheme}
-        className="absolute top-4 right-4 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+        className="absolute top-4 right-4 z-20 p-2 rounded-full glass hover:bg-white/20 dark:hover:bg-white/10 text-foreground transition-colors"
         title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
       >
         {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
       </button>
 
-      <Card className="w-full max-w-lg shadow-2xl">
+      <Card className="w-full max-w-xl shadow-2xl relative z-10">
         <CardHeader className="space-y-4 text-center">
-          <img src={logo} alt="Logo" className="w-82 h-auto mx-auto" />
+          <img src={logo} alt="Logo" className="w-96 h-[150px] mx-auto" />
           <div>
             <CardDescription className="mt-2">
               Plataforma de Gestão de Crédito
@@ -126,7 +133,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              className="w-full bg-primary hover:bg-primary/90"
+              className="w-full liquid-metal-btn-active text-primary-foreground hover:brightness-110 border-0"
               disabled={loading}
             >
               {loading ? 'Entrando...' : 'Entrar'}
@@ -141,18 +148,6 @@ export default function LoginPage() {
               </a>
             </div>
           </form>
-
-          <div className="mt-6 pt-6 border-t border-border">
-            <p className="text-xs text-muted-foreground text-center">
-              <strong>Contas de teste:</strong>
-            </p>
-            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-              <p>• Admin: admin@financeira.com</p>
-              <p>• Gerente: gerente@financeira.com</p>
-              <p>• Cobrança: cobranca@financeira.com</p>
-              <p className="mt-2 italic">Qualquer senha funciona no modo demo.</p>
-            </div>
-          </div>
         </CardContent>
       </Card>
     </div>

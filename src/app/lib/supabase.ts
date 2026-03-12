@@ -47,14 +47,3 @@ export async function getCurrentUserId(): Promise<string | null> {
   return user?.id ?? null;
 }
 
-/**
- * Verifica se o Supabase está configurado com credenciais reais.
- */
-export function isSupabaseConfigured(): boolean {
-  return (
-    !!supabaseUrl &&
-    !!supabaseAnonKey &&
-    !supabaseUrl.includes('YOUR_PROJECT_ID') &&
-    !supabaseAnonKey.includes('your-anon-key')
-  );
-}

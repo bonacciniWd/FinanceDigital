@@ -2,36 +2,68 @@
  * @module ClientesPage
  * @description Listagem e gestão de clientes do sistema.
  *
- * Tabela paginada com busca, filtro por status/score e ordenação.
+ * Tabela paginada com busca, filtro por status e ordenação.
  * Permite cadastrar novo cliente (com campo sexo para mensagens
  * personalizadas), editar e visualizar detalhes. Exibe CPF,
  * telefone, limite de crédito e score interno de cada cliente.
+ * Dados reais via Supabase com hooks React Query.
  *
  * @route /clientes
  * @access Protegido — todos os perfis autenticados
- * @see mockClientes
  */
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { Search, Grid, List, MessageSquare, Edit, History, Ban, Eye } from 'lucide-react';
-import { useClientes } from '../hooks/useClientes';
+import { Search, Grid, List, Edit, History, Ban, Eye, Phone, Loader2, Plus } from 'lucide-react';
+import { useClientes, useIndicados, useCreateCliente, useUpdateCliente } from '../hooks/useClientes';
+import { useParcelasByCliente } from '../hooks/useParcelas';
 import { StatusBadge } from '../components/StatusBadge';
-import type { Cliente } from '../lib/mockData';
+import { toast } from 'sonner';
+import type { Cliente } from '../lib/view-types';
+import type { ClienteInsert, ClienteUpdate, Sexo } from '../lib/database.types';
 
 type ViewMode = 'table' | 'cards';
 
+type ClienteFormData = {
+  nome: string;
+  email: string;
+  telefone: string;
+  cpf: string;
+  sexo: Sexo;
+  vencimento: string;
+  limiteCredito: string;
+};
+
+const EMPTY_FORM: ClienteFormData = {
+  nome: '', email: '', telefone: '', cpf: '', sexo: 'masculino',
+  vencimento: new Date().toISOString().slice(0, 10), limiteCredito: '0',
+};
+
 export default function ClientesPage() {
+  const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
   const [selectedClient, setSelectedClient] = useState<Cliente | null>(null);
 
+  // Create / Edit modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<ClienteFormData>(EMPTY_FORM);
+
   const { data: clientes = [], isLoading } = useClientes();
+  const { data: indicados = [] } = useIndicados(selectedClient?.id);
+  const { data: parcelasCliente = [], isLoading: loadingParcelas } = useParcelasByCliente(selectedClient?.id);
+  const createCliente = useCreateCliente();
+  const updateCliente = useUpdateCliente();
+
+  const isSaving = createCliente.isPending || updateCliente.isPending;
 
   const filteredClientes = clientes.filter((cliente) => {
     const matchesSearch = cliente.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -39,6 +71,80 @@ export default function ClientesPage() {
     const matchesStatus = statusFilter === 'todos' || cliente.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  const openCreateModal = useCallback(() => {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+    setModalOpen(true);
+  }, []);
+
+  const openEditModal = useCallback((c: Cliente) => {
+    setEditingId(c.id);
+    setForm({
+      nome: c.nome,
+      email: c.email,
+      telefone: c.telefone,
+      cpf: c.cpf || '',
+      sexo: c.sexo,
+      vencimento: c.vencimento.slice(0, 10),
+      limiteCredito: String(c.limiteCredito),
+    });
+    setSelectedClient(null);
+    setModalOpen(true);
+  }, []);
+
+  const handleSave = useCallback(() => {
+    if (!form.nome || !form.email || !form.telefone) {
+      toast.error('Preencha nome, email e telefone');
+      return;
+    }
+    if (editingId) {
+      const updates: ClienteUpdate = {
+        nome: form.nome,
+        email: form.email,
+        telefone: form.telefone,
+        cpf: form.cpf || null,
+        sexo: form.sexo,
+        vencimento: form.vencimento,
+        limite_credito: Number(form.limiteCredito) || 0,
+      };
+      updateCliente.mutate(
+        { id: editingId, data: updates },
+        {
+          onSuccess: () => { toast.success('Cliente atualizado'); setModalOpen(false); },
+          onError: (err) => toast.error(`Erro: ${err.message}`),
+        },
+      );
+    } else {
+      const payload: ClienteInsert = {
+        nome: form.nome,
+        email: form.email,
+        telefone: form.telefone,
+        cpf: form.cpf || null,
+        sexo: form.sexo,
+        vencimento: form.vencimento,
+        limite_credito: Number(form.limiteCredito) || 0,
+      };
+      createCliente.mutate(payload, {
+        onSuccess: () => { toast.success('Cliente criado'); setModalOpen(false); setForm(EMPTY_FORM); },
+        onError: (err) => toast.error(`Erro: ${err.message}`),
+      });
+    }
+  }, [form, editingId, createCliente, updateCliente]);
+
+  const handleBloquear = useCallback((c: Cliente) => {
+    const novoStatus = c.status === 'vencido' ? 'em_dia' : 'vencido';
+    updateCliente.mutate(
+      { id: c.id, data: { status: novoStatus } },
+      {
+        onSuccess: () => {
+          toast.success(novoStatus === 'vencido' ? 'Cliente bloqueado' : 'Cliente desbloqueado');
+          setSelectedClient(null);
+        },
+        onError: (err) => toast.error(`Erro: ${err.message}`),
+      },
+    );
+  }, [updateCliente]);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -60,8 +166,8 @@ export default function ClientesPage() {
             {isLoading ? 'Carregando...' : `${filteredClientes.length} cliente(s) encontrado(s)`}
           </p>
         </div>
-        <Button className="bg-primary hover:bg-primary/90">
-          Novo Cliente
+        <Button className="bg-primary hover:bg-primary/90" onClick={openCreateModal}>
+          <Plus className="w-4 h-4 mr-2" />Novo Cliente
         </Button>
       </div>
 
@@ -78,18 +184,6 @@ export default function ClientesPage() {
                 <SelectItem value="em_dia">Em dia</SelectItem>
                 <SelectItem value="a_vencer">À vencer</SelectItem>
                 <SelectItem value="vencido">Vencidos</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Select defaultValue="todos">
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="Data" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="todos">Todas as datas</SelectItem>
-                <SelectItem value="7">Últimos 7 dias</SelectItem>
-                <SelectItem value="30">Últimos 30 dias</SelectItem>
-                <SelectItem value="90">Últimos 90 dias</SelectItem>
               </SelectContent>
             </Select>
 
@@ -177,8 +271,14 @@ export default function ClientesPage() {
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" title="Chat">
-                            <MessageSquare className="w-4 h-4" />
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title="WhatsApp"
+                            className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                            onClick={() => navigate(`/whatsapp?telefone=${encodeURIComponent(cliente.telefone)}`)}
+                          >
+                            <Phone className="w-4 h-4" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -188,10 +288,10 @@ export default function ClientesPage() {
                           >
                             <Eye className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" title="Editar">
+                          <Button variant="ghost" size="sm" title="Editar" onClick={() => openEditModal(cliente)}>
                             <Edit className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="sm" title="Histórico">
+                          <Button variant="ghost" size="sm" title="Histórico" onClick={() => navigate('/clientes/historico')}>
                             <History className="w-4 h-4" />
                           </Button>
                         </div>
@@ -247,9 +347,14 @@ export default function ClientesPage() {
                   </div>
                 )}
                 <div className="flex gap-2 pt-2">
-                  <Button variant="outline" size="sm" className="flex-1">
-                    <MessageSquare className="w-4 h-4 mr-1" />
-                    Chat
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="flex-1 text-green-600 border-green-200 hover:bg-green-50 hover:text-green-700"
+                    onClick={() => navigate(`/whatsapp?telefone=${encodeURIComponent(cliente.telefone)}`)}
+                  >
+                    <Phone className="w-4 h-4 mr-1" />
+                    WhatsApp
                   </Button>
                   <Button
                     variant="outline"
@@ -260,7 +365,7 @@ export default function ClientesPage() {
                     <Eye className="w-4 h-4 mr-1" />
                     Ver
                   </Button>
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" onClick={() => openEditModal(cliente)}>
                     <Edit className="w-4 h-4" />
                   </Button>
                 </div>
@@ -315,20 +420,30 @@ export default function ClientesPage() {
 
               <div>
                 <h3 className="font-medium mb-3">📅 Histórico de Pagamentos</h3>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm py-2 border-b">
-                    <span>• 15/05/2026 - Parcela 5/12</span>
-                    <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Pago</Badge>
+                {loadingParcelas ? (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                   </div>
-                  <div className="flex items-center justify-between text-sm py-2 border-b">
-                    <span>• 15/04/2026 - Parcela 4/12</span>
-                    <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Pago</Badge>
+                ) : parcelasCliente.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nenhuma parcela registrada.</p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {parcelasCliente.map((p) => {
+                      const statusColor = p.status === 'paga'
+                        ? 'bg-green-100 text-green-800 hover:bg-green-100'
+                        : p.status === 'vencida'
+                        ? 'bg-red-100 text-red-800 hover:bg-red-100'
+                        : 'bg-yellow-100 text-yellow-800 hover:bg-yellow-100';
+                      const statusLabel = p.status === 'paga' ? 'Pago' : p.status === 'vencida' ? 'Vencida' : 'Pendente';
+                      return (
+                        <div key={p.id} className="flex items-center justify-between text-sm py-2 border-b">
+                          <span>• {formatDate(p.dataVencimento)} - Parcela {p.numero} - {formatCurrency(p.valor)}</span>
+                          <Badge className={statusColor}>{statusLabel}</Badge>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="flex items-center justify-between text-sm py-2 border-b">
-                    <span>• 15/03/2026 - Parcela 3/12</span>
-                    <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Pago</Badge>
-                  </div>
-                </div>
+                )}
               </div>
 
               <div>
@@ -337,14 +452,23 @@ export default function ClientesPage() {
                   <p>
                     <span className="text-muted-foreground">Indicou:</span>{' '}
                     <span className="font-medium">
-                      {selectedClient.indicou?.length || 0} pessoa(s)
+                      {indicados.length} pessoa(s)
                     </span>
                   </p>
+                  {indicados.length > 0 && (
+                    <div className="ml-4 mt-1 space-y-1">
+                      {indicados.map((ind: any) => (
+                        <p key={ind.id} className="text-xs text-muted-foreground">
+                          • {ind.nome}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                   {selectedClient.indicadoPor && (
                     <p>
                       <span className="text-muted-foreground">Indicado por:</span>{' '}
                       <span className="font-medium">
-                        {clientes.find((c) => c.id === selectedClient.indicadoPor)?.nome}
+                        {clientes.find((c) => c.id === selectedClient.indicadoPor)?.nome ?? 'N/A'}
                       </span>
                     </p>
                   )}
@@ -358,21 +482,85 @@ export default function ClientesPage() {
               </div>
 
               <div className="flex gap-2">
-                <Button className="flex-1 bg-primary hover:bg-primary/90">
+                <Button className="flex-1 bg-primary hover:bg-primary/90" onClick={() => openEditModal(selectedClient!)}>
                   <Edit className="w-4 h-4 mr-2" />
                   Editar
                 </Button>
-                <Button variant="outline" className="flex-1">
-                  <MessageSquare className="w-4 h-4 mr-2" />
-                  Chat
+                <Button
+                  variant="outline"
+                  className="flex-1 text-green-600 border-green-200 hover:bg-green-50"
+                  onClick={() => {
+                    setSelectedClient(null);
+                    navigate(`/whatsapp?telefone=${encodeURIComponent(selectedClient!.telefone)}`);
+                  }}
+                >
+                  <Phone className="w-4 h-4 mr-2" />
+                  WhatsApp
                 </Button>
-                <Button variant="destructive" className="flex-1">
+                <Button variant="destructive" className="flex-1" onClick={() => handleBloquear(selectedClient!)}>
                   <Ban className="w-4 h-4 mr-2" />
-                  Bloquear
+                  {selectedClient!.status === 'vencido' ? 'Desbloquear' : 'Bloquear'}
                 </Button>
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+      {/* Modal Criar / Editar Cliente */}
+      <Dialog open={modalOpen} onOpenChange={(open) => { if (!open) { setModalOpen(false); setEditingId(null); setForm(EMPTY_FORM); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>{editingId ? 'Editar Cliente' : 'Novo Cliente'}</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Nome *</Label>
+                <Input value={form.nome} onChange={(e) => setForm(p => ({ ...p, nome: e.target.value }))} placeholder="Nome completo" />
+              </div>
+              <div>
+                <Label>Email *</Label>
+                <Input type="email" value={form.email} onChange={(e) => setForm(p => ({ ...p, email: e.target.value }))} placeholder="email@exemplo.com" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Telefone *</Label>
+                <Input value={form.telefone} onChange={(e) => setForm(p => ({ ...p, telefone: e.target.value }))} placeholder="5511999999999" />
+              </div>
+              <div>
+                <Label>CPF</Label>
+                <Input value={form.cpf} onChange={(e) => setForm(p => ({ ...p, cpf: e.target.value }))} placeholder="000.000.000-00" />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <Label>Sexo</Label>
+                <Select value={form.sexo} onValueChange={(v) => setForm(p => ({ ...p, sexo: v as Sexo }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="masculino">Masculino</SelectItem>
+                    <SelectItem value="feminino">Feminino</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Vencimento</Label>
+                <Input type="date" value={form.vencimento} onChange={(e) => setForm(p => ({ ...p, vencimento: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Limite Crédito</Label>
+                <Input type="number" value={form.limiteCredito} onChange={(e) => setForm(p => ({ ...p, limiteCredito: e.target.value }))} />
+              </div>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button className="flex-1 bg-primary hover:bg-primary/90" onClick={handleSave} disabled={isSaving || !form.nome || !form.email || !form.telefone}>
+                {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {editingId ? 'Atualizar' : 'Criar Cliente'}
+              </Button>
+              <Button className="flex-1" variant="outline" onClick={() => { setModalOpen(false); setEditingId(null); setForm(EMPTY_FORM); }}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

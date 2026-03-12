@@ -15,19 +15,31 @@ import { Button } from '../components/ui/button';
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { AlertTriangle, MessageSquare, HandshakeIcon } from 'lucide-react';
 import { useClientes } from '../hooks/useClientes';
+import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useCardsCobranca } from '../hooks/useKanbanCobranca';
 import { StatusBadge } from '../components/StatusBadge';
 
 export default function DashboardCobrancaPage() {
   const { data: allClientes = [] } = useClientes();
-  // Filtrar apenas clientes inadimplentes
-  const clientesInadimplentes = allClientes.filter((c) => c.status === 'vencido');
+  const { data: emprestimos = [] } = useEmprestimos();
+  const { data: cardsCobranca = [] } = useCardsCobranca();
+
+  // Derivar inadimplentes a partir dos empréstimos (fonte de verdade),
+  // não do campo clientes.status que pode estar desatualizado
+  const clienteIdsInadimplentes = new Set(
+    emprestimos.filter(e => e.status === 'inadimplente').map(e => e.clienteId)
+  );
+  const clientesInadimplentes = allClientes.filter(c => clienteIdsInadimplentes.has(c.id));
 
   const totalInadimplentes = clientesInadimplentes.length;
   const valorTotal = clientesInadimplentes.reduce((acc, c) => acc + c.valor, 0);
-  const mediaDiasAtraso = Math.round(
-    clientesInadimplentes.reduce((acc, c) => acc + (c.diasAtraso || 0), 0) / totalInadimplentes
-  );
-  const negociacoesAtivas = 23; // Mock
+  const mediaDiasAtraso = totalInadimplentes > 0
+    ? Math.round(clientesInadimplentes.reduce((acc, c) => acc + (c.diasAtraso || 0), 0) / totalInadimplentes)
+    : 0;
+  // Negociações ativas = cards no kanban de cobrança em etapa negociacao ou acordo
+  const negociacoesAtivas = cardsCobranca.filter(
+    (c) => c.etapa === 'negociacao' || c.etapa === 'acordo'
+  ).length;
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {

@@ -1,1 +1,5 @@
 node_modules
+dist/
+
+# Fly.io — não versionar estado local
+fly-evolution/.fly/

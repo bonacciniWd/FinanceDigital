@@ -20,6 +20,7 @@ export function useFuncionarios() {
     queryKey: [QUERY_KEY],
     queryFn: () => funcionariosService.getFuncionarios(),
     select: (data) => data.map((f) => dbFuncionarioToView(f)),
+    refetchInterval: 30000,
   });
 }
 
@@ -53,6 +54,24 @@ export function useSessoesByFuncionario(funcionarioId: string | undefined) {
   });
 }
 
+/** Todas as sessões de hoje (todos os funcionários) — para Monitoramento */
+export function useAllSessoesHoje() {
+  return useQuery({
+    queryKey: [QUERY_KEY, 'sessoes-hoje'],
+    queryFn: () => funcionariosService.getAllSessoesHoje(),
+    refetchInterval: 30000,
+  });
+}
+
+/** Logs de atividade de hoje — para Monitoramento/Alertas */
+export function useLogsAtividadeHoje() {
+  return useQuery({
+    queryKey: ['logs-atividade', 'hoje'],
+    queryFn: () => funcionariosService.getLogsAtividadeHoje(),
+    refetchInterval: 30000,
+  });
+}
+
 /** Estatísticas dos funcionários (para dashboard de monitoramento) */
 export function useFuncionarioStats() {
   return useQuery({
@@ -68,6 +87,18 @@ export function useUpdateFuncionarioStatus() {
   return useMutation({
     mutationFn: ({ id, status }: { id: string; status: 'online' | 'offline' | 'ausente' }) =>
       funcionariosService.updateFuncionarioStatus(id, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
+    },
+  });
+}
+
+/** Atualizar meta diária de um funcionário */
+export function useUpdateMetaDiaria() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, metaDiaria }: { id: string; metaDiaria: number }) =>
+      funcionariosService.updateMetaDiaria(id, metaDiaria),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
     },

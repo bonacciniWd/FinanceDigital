@@ -1,6 +1,6 @@
 /**
  * @module RelatoriosOperacionaisPage
- * @description Relatórios operacionais com abas temáticas.
+ * @description Relatórios operacionais com abas temáticas — dados reais do Supabase.
  *
  * Tabs: Cobrança, Crédito, Atendimento. Cada aba exibe
  * métricas específicas com gráficos, tabelas resumo e
@@ -9,48 +9,172 @@
  * @route /relatorios/operacionais
  * @access Protegido — perfis admin, gerente
  */
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, AreaChart, Area, Legend } from 'recharts';
-import { Download, Calendar, TrendingUp, AlertCircle, DollarSign, Users } from 'lucide-react';
+import { Download, TrendingUp, AlertCircle, DollarSign, Users, Loader2 } from 'lucide-react';
+import { useParcelas } from '../hooks/useParcelas';
+import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useCardsCobranca } from '../hooks/useKanbanCobranca';
+import { useClientes } from '../hooks/useClientes';
 
-const inadimplencia = [
-  { mes: 'Jan', taxa: 4.2 }, { mes: 'Fev', taxa: 3.8 }, { mes: 'Mar', taxa: 5.1 },
-  { mes: 'Abr', taxa: 4.7 }, { mes: 'Mai', taxa: 4.3 }, { mes: 'Jun', taxa: 3.9 },
-];
+const MESES_NOME = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
-const volumeOperacoes = [
-  { mes: 'Jan', emprestimos: 45, valor: 180000 },
-  { mes: 'Fev', emprestimos: 52, valor: 210000 },
-  { mes: 'Mar', emprestimos: 48, valor: 195000 },
-  { mes: 'Abr', emprestimos: 61, valor: 248000 },
-  { mes: 'Mai', emprestimos: 55, valor: 225000 },
-  { mes: 'Jun', emprestimos: 67, valor: 275000 },
-];
-
-const recebimentosDiarios = [
-  { dia: '01', previsto: 12500, recebido: 11800 },
-  { dia: '05', previsto: 15000, recebido: 14200 },
-  { dia: '10', previsto: 18000, recebido: 16500 },
-  { dia: '15', previsto: 22000, recebido: 20800 },
-  { dia: '20', previsto: 16000, recebido: 15200 },
-  { dia: '25', previsto: 19000, recebido: 17800 },
-  { dia: '30', previsto: 14000, recebido: 13500 },
-];
-
-const cobrancaEficiencia = [
-  { etapa: '1° Contato', total: 120, sucesso: 42, taxa: 35 },
-  { etapa: '2° Contato', total: 78, sucesso: 28, taxa: 36 },
-  { etapa: 'Negociação', total: 50, sucesso: 35, taxa: 70 },
-  { etapa: 'Acordo', total: 35, sucesso: 30, taxa: 86 },
-  { etapa: 'Jurídico', total: 15, sucesso: 5, taxa: 33 },
-];
+/** Retorna quantos meses olhar atrás com base no valor do select */
+function periodoParaMeses(p: string): number {
+  switch (p) {
+    case '1m': return 1;
+    case '3m': return 3;
+    case '6m': return 6;
+    case '12m': return 12;
+    default: return 6;
+  }
+}
 
 export default function RelatoriosOperacionaisPage() {
   const [periodo, setPeriodo] = useState('6m');
+  const meses = periodoParaMeses(periodo);
+
+  const { data: parcelas, isLoading: loadingParcelas } = useParcelas();
+  const { data: emprestimos, isLoading: loadingEmprestimos } = useEmprestimos();
+  const { data: cardsCobranca, isLoading: loadingCards } = useCardsCobranca();
+  const { data: clientes, isLoading: loadingClientes } = useClientes();
+
+  const loading = loadingParcelas || loadingEmprestimos || loadingCards || loadingClientes;
+
+  // ── Dados de Inadimplência por mês ──
+  const inadimplenciaData = useMemo(() => {
+    if (!parcelas) return [];
+    const now = new Date();
+    const result: { mes: string; taxa: number }[] = [];
+    for (let i = meses - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const mesNum = d.getMonth();
+      const anoNum = d.getFullYear();
+      const doMes = parcelas.filter((p) => {
+        const dv = new Date(p.dataVencimento);
+        return dv.getMonth() === mesNum && dv.getFullYear() === anoNum;
+      });
+      const vencidas = doMes.filter((p) => p.status === 'vencida').length;
+      const taxa = doMes.length > 0 ? parseFloat(((vencidas / doMes.length) * 100).toFixed(1)) : 0;
+      result.push({ mes: MESES_NOME[mesNum], taxa });
+    }
+    return result;
+  }, [parcelas, meses]);
+
+  // ── Volume de Operações por mês ──
+  const volumeData = useMemo(() => {
+    if (!emprestimos) return [];
+    const now = new Date();
+    const result: { mes: string; emprestimos: number; valor: number }[] = [];
+    for (let i = meses - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const mesNum = d.getMonth();
+      const anoNum = d.getFullYear();
+      const doMes = emprestimos.filter((e) => {
+        const dc = new Date(e.dataContrato);
+        return dc.getMonth() === mesNum && dc.getFullYear() === anoNum;
+      });
+      result.push({
+        mes: MESES_NOME[mesNum],
+        emprestimos: doMes.length,
+        valor: doMes.reduce((s, e) => s + e.valor, 0),
+      });
+    }
+    return result;
+  }, [emprestimos, meses]);
+
+  // ── Recebimentos Diários (mês atual) ──
+  const recebimentosData = useMemo(() => {
+    if (!parcelas) return [];
+    const now = new Date();
+    const mesAtual = now.getMonth();
+    const anoAtual = now.getFullYear();
+    // Agrupa por dia (5 em 5 dias)
+    const diasChave = [1, 5, 10, 15, 20, 25, 30];
+    return diasChave.map((dia) => {
+      const diaInicio = dia;
+      const diaFim = diasChave[diasChave.indexOf(dia) + 1] || 32;
+      const previstas = parcelas.filter((p) => {
+        const dv = new Date(p.dataVencimento);
+        return (
+          dv.getMonth() === mesAtual &&
+          dv.getFullYear() === anoAtual &&
+          dv.getDate() >= diaInicio &&
+          dv.getDate() < diaFim
+        );
+      });
+      const previsto = previstas.reduce((s, p) => s + p.valor, 0);
+      const recebido = previstas
+        .filter((p) => p.status === 'paga')
+        .reduce((s, p) => s + p.valor, 0);
+      return { dia: String(dia).padStart(2, '0'), previsto, recebido };
+    });
+  }, [parcelas]);
+
+  // ── Eficiência de Cobrança por Etapa ──
+  const cobrancaData = useMemo(() => {
+    if (!cardsCobranca) return [];
+    const etapas: { etapa: string; key: string }[] = [
+      { etapa: '1° Contato', key: 'contatado' },
+      { etapa: 'Negociação', key: 'negociacao' },
+      { etapa: 'Acordo', key: 'acordo' },
+      { etapa: 'Pago', key: 'pago' },
+      { etapa: 'Perdido', key: 'perdido' },
+    ];
+    return etapas.map(({ etapa, key }) => {
+      const cards = cardsCobranca.filter((c) => c.etapa === key);
+      const total = cards.length;
+      // "sucesso" = cards em etapas avançadas (acordo ou pago)
+      const sucesso =
+        key === 'pago'
+          ? total
+          : key === 'acordo'
+          ? total
+          : key === 'negociacao'
+          ? cards.filter((c) => c.tentativasContato >= 2).length
+          : key === 'contatado'
+          ? cards.filter((c) => c.tentativasContato >= 1).length
+          : 0;
+      const taxa = total > 0 ? Math.round((sucesso / total) * 100) : 0;
+      return { etapa, total, sucesso, taxa };
+    });
+  }, [cardsCobranca]);
+
+  // ── KPIs ──
+  const kpis = useMemo(() => {
+    if (!emprestimos || !parcelas || !clientes || !cardsCobranca) {
+      return { volumeTotal: 0, inadimplencia: 0, clientesAtivos: 0, taxaRecuperacao: 0 };
+    }
+    const now = new Date();
+    const limiteInicio = new Date(now.getFullYear(), now.getMonth() - meses, 1);
+
+    const empPeriodo = emprestimos.filter((e) => new Date(e.dataContrato) >= limiteInicio);
+    const volumeTotal = empPeriodo.reduce((s, e) => s + e.valor, 0);
+
+    const parcelasPeriodo = parcelas.filter((p) => new Date(p.dataVencimento) >= limiteInicio);
+    const vencidas = parcelasPeriodo.filter((p) => p.status === 'vencida').length;
+    const inadimplencia =
+      parcelasPeriodo.length > 0
+        ? parseFloat(((vencidas / parcelasPeriodo.length) * 100).toFixed(1))
+        : 0;
+
+    const clientesAtivos = clientes.filter((c) => c.status !== 'vencido').length;
+
+    const totalCobranca = cardsCobranca.length;
+    const pagos = cardsCobranca.filter((c) => c.etapa === 'pago' || c.etapa === 'acordo').length;
+    const taxaRecuperacao = totalCobranca > 0 ? Math.round((pagos / totalCobranca) * 100) : 0;
+
+    return { volumeTotal, inadimplencia, clientesAtivos, taxaRecuperacao };
+  }, [emprestimos, parcelas, clientes, cardsCobranca, meses]);
+
+  const formatBRL = (v: number) =>
+    v >= 1_000_000
+      ? `R$ ${(v / 1_000_000).toFixed(2).replace('.', ',')}M`
+      : `R$ ${v.toLocaleString('pt-BR')}`;
 
   return (
     <div className="space-y-6">
@@ -84,8 +208,9 @@ export default function RelatoriosOperacionaisPage() {
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
               <DollarSign className="w-3 h-3" /> Volume Total
             </div>
-            <p className="text-2xl font-bold">R$ 1.33M</p>
-            <p className="text-xs text-green-600">+15% vs período anterior</p>
+            <p className="text-2xl font-bold">
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : formatBRL(kpis.volumeTotal)}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -93,8 +218,9 @@ export default function RelatoriosOperacionaisPage() {
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
               <AlertCircle className="w-3 h-3" /> Inadimplência
             </div>
-            <p className="text-2xl font-bold">4.3%</p>
-            <p className="text-xs text-green-600">-0.8% vs período anterior</p>
+            <p className="text-2xl font-bold">
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : `${kpis.inadimplencia}%`}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -102,8 +228,9 @@ export default function RelatoriosOperacionaisPage() {
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
               <Users className="w-3 h-3" /> Clientes Ativos
             </div>
-            <p className="text-2xl font-bold">328</p>
-            <p className="text-xs text-green-600">+23 novos no período</p>
+            <p className="text-2xl font-bold">
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : kpis.clientesAtivos}
+            </p>
           </CardContent>
         </Card>
         <Card>
@@ -111,8 +238,9 @@ export default function RelatoriosOperacionaisPage() {
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
               <TrendingUp className="w-3 h-3" /> Taxa Recuperação
             </div>
-            <p className="text-2xl font-bold">72%</p>
-            <p className="text-xs text-green-600">+5% vs período anterior</p>
+            <p className="text-2xl font-bold">
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : `${kpis.taxaRecuperacao}%`}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -129,15 +257,25 @@ export default function RelatoriosOperacionaisPage() {
           <Card>
             <CardHeader><CardTitle className="text-base">Evolução da Inadimplência (%)</CardTitle></CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <LineChart data={inadimplencia}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" />
-                  <YAxis domain={[0, 8]} tickFormatter={v => `${v}%`} />
-                  <Tooltip formatter={(v: number) => `${v}%`} />
-                  <Line type="monotone" dataKey="taxa" stroke="var(--chart-4)" strokeWidth={2} dot={{ r: 4 }} name="Taxa de Inadimplência" />
-                </LineChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div className="flex items-center justify-center h-[350px]">
+                  <Loader2 className="w-6 h-6 animate-spin mr-2" /> Carregando...
+                </div>
+              ) : inadimplenciaData.length === 0 ? (
+                <div className="flex items-center justify-center h-[350px] text-muted-foreground">
+                  Sem dados no período
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={350}>
+                  <LineChart data={inadimplenciaData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="mes" />
+                    <YAxis domain={[0, 'auto']} tickFormatter={v => `${v}%`} />
+                    <Tooltip formatter={(v: number) => `${v}%`} />
+                    <Line type="monotone" dataKey="taxa" stroke="var(--chart-4)" strokeWidth={2} dot={{ r: 4 }} name="Taxa de Inadimplência" />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -146,18 +284,28 @@ export default function RelatoriosOperacionaisPage() {
           <Card>
             <CardHeader><CardTitle className="text-base">Volume de Operações por Mês</CardTitle></CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <BarChart data={volumeOperacoes}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="mes" />
-                  <YAxis yAxisId="left" />
-                  <YAxis yAxisId="right" orientation="right" tickFormatter={v => `R$ ${(v/1000).toFixed(0)}k`} />
-                  <Tooltip formatter={(v: number, name: string) => name === 'valor' ? `R$ ${v.toLocaleString('pt-BR')}` : v} />
-                  <Legend />
-                  <Bar yAxisId="left" dataKey="emprestimos" fill="var(--chart-1)" name="Qtd. Empréstimos" />
-                  <Bar yAxisId="right" dataKey="valor" fill="var(--chart-5)" name="Valor Total" />
-                </BarChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div className="flex items-center justify-center h-[350px]">
+                  <Loader2 className="w-6 h-6 animate-spin mr-2" /> Carregando...
+                </div>
+              ) : volumeData.length === 0 ? (
+                <div className="flex items-center justify-center h-[350px] text-muted-foreground">
+                  Sem dados no período
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={350}>
+                  <BarChart data={volumeData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="mes" />
+                    <YAxis yAxisId="left" />
+                    <YAxis yAxisId="right" orientation="right" tickFormatter={v => `R$ ${(v/1000).toFixed(0)}k`} />
+                    <Tooltip formatter={(v: number, name: string) => name === 'valor' ? `R$ ${v.toLocaleString('pt-BR')}` : v} />
+                    <Legend />
+                    <Bar yAxisId="left" dataKey="emprestimos" fill="var(--chart-1)" name="Qtd. Empréstimos" />
+                    <Bar yAxisId="right" dataKey="valor" fill="var(--chart-5)" name="Valor Total" />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -166,17 +314,27 @@ export default function RelatoriosOperacionaisPage() {
           <Card>
             <CardHeader><CardTitle className="text-base">Recebimentos Diários - Previsto vs Realizado</CardTitle></CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={350}>
-                <AreaChart data={recebimentosDiarios}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="dia" />
-                  <YAxis tickFormatter={v => `R$ ${(v/1000).toFixed(0)}k`} />
-                  <Tooltip formatter={(v: number) => `R$ ${v.toLocaleString('pt-BR')}`} />
-                  <Legend />
-                  <Area type="monotone" dataKey="previsto" fill="var(--chart-1)" stroke="var(--chart-1)" fillOpacity={0.3} name="Previsto" />
-                  <Area type="monotone" dataKey="recebido" fill="var(--chart-5)" stroke="var(--chart-5)" fillOpacity={0.3} name="Recebido" />
-                </AreaChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div className="flex items-center justify-center h-[350px]">
+                  <Loader2 className="w-6 h-6 animate-spin mr-2" /> Carregando...
+                </div>
+              ) : recebimentosData.every((d) => d.previsto === 0 && d.recebido === 0) ? (
+                <div className="flex items-center justify-center h-[350px] text-muted-foreground">
+                  Sem dados no mês atual
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={350}>
+                  <AreaChart data={recebimentosData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="dia" />
+                    <YAxis tickFormatter={v => `R$ ${(v/1000).toFixed(0)}k`} />
+                    <Tooltip formatter={(v: number) => `R$ ${v.toLocaleString('pt-BR')}`} />
+                    <Legend />
+                    <Area type="monotone" dataKey="previsto" fill="var(--chart-1)" stroke="var(--chart-1)" fillOpacity={0.3} name="Previsto" />
+                    <Area type="monotone" dataKey="recebido" fill="var(--chart-5)" stroke="var(--chart-5)" fillOpacity={0.3} name="Recebido" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -185,22 +343,34 @@ export default function RelatoriosOperacionaisPage() {
           <Card>
             <CardHeader><CardTitle className="text-base">Eficiência por Etapa de Cobrança</CardTitle></CardHeader>
             <CardContent>
-              <div className="space-y-4">
-                {cobrancaEficiencia.map((etapa, i) => (
-                  <div key={i} className="border rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-semibold text-sm">{etapa.etapa}</span>
-                      <span className="text-sm text-muted-foreground">{etapa.sucesso}/{etapa.total} ({etapa.taxa}%)</span>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin mr-2" /> Carregando...
+                </div>
+              ) : cobrancaData.length === 0 ? (
+                <div className="flex items-center justify-center py-8 text-muted-foreground">
+                  Sem dados de cobrança
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {cobrancaData.map((etapa, i) => (
+                    <div key={i} className="border rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-semibold text-sm">{etapa.etapa}</span>
+                        <span className="text-sm text-muted-foreground">
+                          {etapa.sucesso}/{etapa.total} ({etapa.taxa}%)
+                        </span>
+                      </div>
+                      <div className="w-full bg-muted rounded-full h-3">
+                        <div
+                          className={`rounded-full h-3 transition-all ${etapa.taxa >= 70 ? 'bg-green-500' : etapa.taxa >= 35 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                          style={{ width: `${etapa.taxa}%` }}
+                        />
+                      </div>
                     </div>
-                    <div className="w-full bg-muted rounded-full h-3">
-                      <div
-                        className={`rounded-full h-3 transition-all ${etapa.taxa >= 70 ? 'bg-green-500' : etapa.taxa >= 35 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                        style={{ width: `${etapa.taxa}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

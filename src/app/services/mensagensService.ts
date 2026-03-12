@@ -6,34 +6,12 @@
  *
  * @see database.types para tipagem completa
  */
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { mockMensagens } from '../lib/mockData';
+import { supabase } from '../lib/supabase';
 import type { Mensagem, MensagemInsert } from '../lib/database.types';
-
-// ── Adaptador mock → DB types ──────────────────────────────
-
-function adaptMockMensagem(mock: (typeof mockMensagens)[0]): Mensagem {
-  return {
-    id: mock.id,
-    cliente_id: mock.clienteId,
-    remetente: mock.remetente,
-    conteudo: mock.conteudo,
-    timestamp: mock.timestamp,
-    lida: mock.lida,
-    tipo: mock.tipo,
-    created_at: mock.timestamp,
-  };
-}
-
 // ── Queries ────────────────────────────────────────────────
 
 /** Buscar mensagens de um cliente, ordenadas por timestamp */
 export async function getMensagensByCliente(clienteId: string): Promise<Mensagem[]> {
-  if (!isSupabaseConfigured()) {
-    return mockMensagens
-      .filter((m) => m.clienteId === clienteId)
-      .map(adaptMockMensagem);
-  }
 
   const { data, error } = await supabase
     .from('mensagens')
@@ -47,9 +25,6 @@ export async function getMensagensByCliente(clienteId: string): Promise<Mensagem
 
 /** Buscar todas as mensagens não lidas (para badge no sidebar) */
 export async function getMensagensNaoLidas(): Promise<number> {
-  if (!isSupabaseConfigured()) {
-    return mockMensagens.filter((m) => !m.lida).length;
-  }
 
   const { count, error } = await supabase
     .from('mensagens')
@@ -62,19 +37,6 @@ export async function getMensagensNaoLidas(): Promise<number> {
 
 /** Buscar últimas mensagens por cliente (para lista de conversas) */
 export async function getUltimasMensagens(): Promise<Mensagem[]> {
-  if (!isSupabaseConfigured()) {
-    // Agrupar por clienteId e pegar a última
-    const ultimasPorCliente = new Map<string, Mensagem>();
-    mockMensagens.forEach((m) => {
-      const adapted = adaptMockMensagem(m);
-      const existing = ultimasPorCliente.get(m.clienteId);
-      if (!existing || new Date(adapted.timestamp) > new Date(existing.timestamp)) {
-        ultimasPorCliente.set(m.clienteId, adapted);
-      }
-    });
-    return Array.from(ultimasPorCliente.values());
-  }
-
   // Supabase: usar distinct on (precisa de raw query ou view)
   const { data, error } = await supabase
     .from('mensagens')
@@ -98,20 +60,6 @@ export async function getUltimasMensagens(): Promise<Mensagem[]> {
 
 /** Enviar nova mensagem */
 export async function enviarMensagem(mensagem: MensagemInsert): Promise<Mensagem> {
-  if (!isSupabaseConfigured()) {
-    // Mock: retornar mensagem fake
-    return {
-      id: crypto.randomUUID(),
-      cliente_id: mensagem.cliente_id,
-      remetente: mensagem.remetente,
-      conteudo: mensagem.conteudo,
-      timestamp: new Date().toISOString(),
-      lida: false,
-      tipo: mensagem.tipo ?? 'texto',
-      created_at: new Date().toISOString(),
-    };
-  }
-
   const { data, error } = await supabase
     .from('mensagens')
     .insert(mensagem)
@@ -124,7 +72,6 @@ export async function enviarMensagem(mensagem: MensagemInsert): Promise<Mensagem
 
 /** Marcar mensagens como lidas */
 export async function marcarComoLida(clienteId: string): Promise<void> {
-  if (!isSupabaseConfigured()) return;
 
   const { error } = await supabase
     .from('mensagens')
@@ -145,11 +92,6 @@ export function subscribeToMensagens(
   clienteId: string,
   onNewMessage: (mensagem: Mensagem) => void
 ): () => void {
-  if (!isSupabaseConfigured()) {
-    // Noop para mock
-    return () => {};
-  }
-
   const channel = supabase
     .channel(`mensagens:${clienteId}`)
     .on(

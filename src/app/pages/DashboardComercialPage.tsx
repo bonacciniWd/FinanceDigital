@@ -2,47 +2,94 @@
  * @module DashboardComercialPage
  * @description Dashboard comercial com métricas de vendas e captação.
  *
- * Exibe novos clientes, volume de empréstimos originados,
- * taxa de conversão de leads e meta mensal. Gráficos de
- * desempenho da equipe comercial (BarChart por vendedor).
+ * Dados reais via hooks: useAnalises (pipeline), useMembrosRede (indicadores),
+ * useEmprestimos (crédito aprovado), useClientes (novos clientes).
  *
  * @route /dashboard/comercial
  * @access Protegido — perfis admin, gerente, comercial
  */
+import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
-import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Users, Target, TrendingUp, UserPlus, ArrowUpRight } from 'lucide-react';
-
-
-const conversoesMensais = [
-  { mes: 'Set', leads: 120, convertidos: 45, taxa: 37.5 },
-  { mes: 'Out', leads: 145, convertidos: 58, taxa: 40.0 },
-  { mes: 'Nov', leads: 160, convertidos: 72, taxa: 45.0 },
-  { mes: 'Dez', leads: 130, convertidos: 52, taxa: 40.0 },
-  { mes: 'Jan', leads: 175, convertidos: 82, taxa: 46.9 },
-  { mes: 'Fev', leads: 155, convertidos: 75, taxa: 48.4 },
-];
-
-const topIndicadores = [
-  { nome: 'João Silva', indicacoes: 12, convertidos: 8, bonus: 2400 },
-  { nome: 'Fernanda Lima', indicacoes: 9, convertidos: 6, bonus: 1800 },
-  { nome: 'Paulo Mendes', indicacoes: 7, convertidos: 5, bonus: 1500 },
-  { nome: 'Pedro Oliveira', indicacoes: 5, convertidos: 3, bonus: 900 },
-];
-
-const pipelineLeads = [
-  { etapa: 'Prospect', quantidade: 45 },
-  { etapa: 'Contato', quantidade: 32 },
-  { etapa: 'Análise', quantidade: 22 },
-  { etapa: 'Proposta', quantidade: 15 },
-  { etapa: 'Aprovado', quantidade: 8 },
-];
+import { Users, Target, TrendingUp, UserPlus, ArrowUpRight, Loader2 } from 'lucide-react';
+import { CategoryBarChart } from '../components/charts/CategoryBarChart';
+import { useAnalises } from '../hooks/useAnaliseCredito';
+import { useMembrosRede } from '../hooks/useRedeIndicacoes';
+import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useClientes } from '../hooks/useClientes';
 
 export default function DashboardComercialPage() {
+  const { data: analises = [], isLoading: loadingAnalises } = useAnalises();
+  const { data: membros = [] } = useMembrosRede();
+  const { data: emprestimos = [] } = useEmprestimos();
+  const { data: clientes = [] } = useClientes();
+
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+
+  // KPIs reais
+  // Leads = total de análises de crédito (cada análise é um lead)
+  const totalLeads = analises.length;
+  // Conversões = análises aprovadas
+  const conversoes = analises.filter((a) => a.status === 'aprovado').length;
+  const taxaConversao = totalLeads > 0 ? ((conversoes / totalLeads) * 100).toFixed(1) : '0';
+  // Indicações ativas = membros da rede com status ativo
+  const indicacoesAtivas = membros.filter((m) => m.status === 'ativo').length;
+  // Crédito aprovado = soma do valor_solicitado das análises aprovadas
+  const creditoAprovado = analises
+    .filter((a) => a.status === 'aprovado')
+    .reduce((sum, a) => sum + (a.valorSolicitado ?? a.valor_solicitado ?? 0), 0);
+
+  // Pipeline de leads (agrupado por status da análise)
+  const pipelineLeads = useMemo(() => [
+    { etapa: 'Pendente', quantidade: analises.filter((a) => a.status === 'pendente').length },
+    { etapa: 'Em Análise', quantidade: analises.filter((a) => a.status === 'em_analise').length },
+    { etapa: 'Aprovado', quantidade: analises.filter((a) => a.status === 'aprovado').length },
+    { etapa: 'Recusado', quantidade: analises.filter((a) => a.status === 'recusado').length },
+  ], [analises]);
+
+  // Conversões por mês (agrupa análises por mês de criação)
+  const conversoesMensais = useMemo(() => {
+    const meses: Record<string, { leads: number; convertidos: number }> = {};
+    analises.forEach((a) => {
+      const date = new Date(a.dataSolicitacao ?? a.data_solicitacao ?? a.created_at);
+      const key = date.toLocaleString('pt-BR', { month: 'short' }).replace('.', '');
+      if (!meses[key]) meses[key] = { leads: 0, convertidos: 0 };
+      meses[key].leads++;
+      if (a.status === 'aprovado') meses[key].convertidos++;
+    });
+    return Object.entries(meses).map(([mes, v]) => ({
+      mes: mes.charAt(0).toUpperCase() + mes.slice(1),
+      leads: v.leads,
+      convertidos: v.convertidos,
+    }));
+  }, [analises]);
+
+  // Top indicadores: clientes que mais indicaram (extraído da rede)
+  const topIndicadores = useMemo(() => {
+    const indicadorMap: Record<string, { nome: string; indicacoes: number; bonus: number }> = {};
+    membros.forEach((m) => {
+      const indicadorId = m.indicadoPor ?? m.indicado_por;
+      if (!indicadorId) return;
+      const cli = clientes.find((c) => c.id === indicadorId);
+      if (!cli) return;
+      if (!indicadorMap[indicadorId]) {
+        indicadorMap[indicadorId] = { nome: cli.nome, indicacoes: 0, bonus: cli.bonusAcumulado ?? cli.bonus_acumulado ?? 0 };
+      }
+      indicadorMap[indicadorId].indicacoes++;
+    });
+    return Object.values(indicadorMap)
+      .sort((a, b) => b.indicacoes - a.indicacoes)
+      .slice(0, 5);
+  }, [membros, clientes]);
+
+  if (loadingAnalises) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -55,12 +102,12 @@ export default function DashboardComercialPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Leads Este Mês</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Leads (Análises)</CardTitle>
             <Users className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">155</div>
-            <div className="flex items-center text-sm text-red-500 mt-1">-11.4% vs mês anterior</div>
+            <div className="text-2xl font-bold">{totalLeads}</div>
+            <div className="text-xs text-muted-foreground mt-1">total de análises de crédito</div>
           </CardContent>
         </Card>
         <Card>
@@ -69,9 +116,9 @@ export default function DashboardComercialPage() {
             <Target className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">75</div>
+            <div className="text-2xl font-bold">{conversoes}</div>
             <div className="flex items-center text-sm text-green-600 mt-1">
-              <ArrowUpRight className="w-4 h-4" /> Taxa: 48.4%
+              <ArrowUpRight className="w-4 h-4" /> Taxa: {taxaConversao}%
             </div>
           </CardContent>
         </Card>
@@ -81,10 +128,8 @@ export default function DashboardComercialPage() {
             <UserPlus className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">33</div>
-            <div className="flex items-center text-sm text-green-600 mt-1">
-              <ArrowUpRight className="w-4 h-4" /> +15% vs mês anterior
-            </div>
+            <div className="text-2xl font-bold">{indicacoesAtivas}</div>
+            <div className="text-xs text-muted-foreground mt-1">membros ativos na rede</div>
           </CardContent>
         </Card>
         <Card>
@@ -93,30 +138,27 @@ export default function DashboardComercialPage() {
             <TrendingUp className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(485000)}</div>
-            <div className="flex items-center text-sm text-green-600 mt-1">
-              <ArrowUpRight className="w-4 h-4" /> +8.2% vs mês anterior
-            </div>
+            <div className="text-2xl font-bold">{formatCurrency(creditoAprovado)}</div>
+            <div className="text-xs text-muted-foreground mt-1">valor total aprovado</div>
           </CardContent>
         </Card>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Conversões */}
+        {/* Conversões por mês */}
         <Card>
           <CardHeader><CardTitle>Leads vs Conversões</CardTitle></CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={conversoesMensais}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="mes" />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="leads" name="Leads" fill="var(--chart-1)" />
-                <Bar dataKey="convertidos" name="Convertidos" fill="var(--chart-2)" />
-              </BarChart>
-            </ResponsiveContainer>
+            <CategoryBarChart
+              data={conversoesMensais.map((m) => ({ label: m.mes, leads: m.leads, convertidos: m.convertidos }))}
+              series={[
+                { label: 'Leads', color: '#3b82f6', dataKey: 'leads' },
+                { label: 'Convertidos', color: '#22c55e', dataKey: 'convertidos' },
+              ]}
+              labelKey="label"
+              height={300}
+              emptyText="Nenhuma análise registrada ainda"
+            />
           </CardContent>
         </Card>
 
@@ -124,15 +166,13 @@ export default function DashboardComercialPage() {
         <Card>
           <CardHeader><CardTitle>Pipeline de Leads</CardTitle></CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={pipelineLeads} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis type="number" />
-                <YAxis dataKey="etapa" type="category" width={80} />
-                <Tooltip />
-                <Bar dataKey="quantidade" fill="var(--chart-1)" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <CategoryBarChart
+              data={pipelineLeads.map((p) => ({ label: p.etapa, quantidade: p.quantidade }))}
+              series={[{ label: 'Quantidade', color: '#8b5cf6', dataKey: 'quantidade' }]}
+              labelKey="label"
+              layout="horizontal"
+              height={240}
+            />
           </CardContent>
         </Card>
       </div>
@@ -141,32 +181,34 @@ export default function DashboardComercialPage() {
       <Card>
         <CardHeader><CardTitle>Top Indicadores</CardTitle></CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-3 font-medium text-muted-foreground">Indicador</th>
-                  <th className="text-center py-3 font-medium text-muted-foreground">Indicações</th>
-                  <th className="text-center py-3 font-medium text-muted-foreground">Convertidos</th>
-                  <th className="text-center py-3 font-medium text-muted-foreground">Taxa</th>
-                  <th className="text-right py-3 font-medium text-muted-foreground">Bônus</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topIndicadores.map((ind, i) => (
-                  <tr key={i} className="border-b hover:bg-muted/50">
-                    <td className="py-3 font-medium">{ind.nome}</td>
-                    <td className="py-3 text-center">{ind.indicacoes}</td>
-                    <td className="py-3 text-center">
-                      <Badge variant="secondary">{ind.convertidos}</Badge>
-                    </td>
-                    <td className="py-3 text-center">{((ind.convertidos / ind.indicacoes) * 100).toFixed(0)}%</td>
-                    <td className="py-3 text-right font-medium text-green-600">{formatCurrency(ind.bonus)}</td>
+          {topIndicadores.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-3 font-medium text-muted-foreground">Indicador</th>
+                    <th className="text-center py-3 font-medium text-muted-foreground">Indicações</th>
+                    <th className="text-right py-3 font-medium text-muted-foreground">Bônus Acumulado</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {topIndicadores.map((ind, i) => (
+                    <tr key={i} className="border-b hover:bg-muted/50">
+                      <td className="py-3 font-medium">{ind.nome}</td>
+                      <td className="py-3 text-center">
+                        <Badge variant="secondary">{ind.indicacoes}</Badge>
+                      </td>
+                      <td className="py-3 text-right font-medium text-green-600">{formatCurrency(ind.bonus)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-6 text-muted-foreground text-sm">
+              Nenhuma indicação registrada ainda
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

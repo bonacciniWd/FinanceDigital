@@ -1,44 +1,92 @@
 /**
  * @module ClienteAreaPage
- * @description Área de autoatendimento do cliente (portal do cliente).
+ * @description Área de autoatendimento / portal do cliente.
  *
- * Visão do cliente sobre seus empréstimos, parcelas, boletos
- * e histórico de pagamentos. Botões de compartilhamento,
- * chat com atendente e download de documentos.
+ * Mostra dados reais do cliente selecionado: empréstimos ativos,
+ * parcelas (extrato), indicados e bônus. Dados via Supabase hooks.
+ * Como o sistema não possui login de cliente, um seletor permite
+ * ao admin/operador visualizar a área de qualquer cliente.
  *
- * @route /area-cliente
- * @access Protegido — perfil cliente
- * @see mockClientes, mockEmprestimos
+ * @route /cliente
+ * @access Protegido — admin, gerência
  */
+import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { Share2, MessageSquare, FileText, User } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Share2, MessageSquare, FileText, User, Loader2, Copy, Check } from 'lucide-react';
 import { useClientes } from '../hooks/useClientes';
+import { useEmprestimosByCliente } from '../hooks/useEmprestimos';
+import { useParcelasByCliente } from '../hooks/useParcelas';
+import { useIndicados } from '../hooks/useClientes';
+import { toast } from 'sonner';
 
 export default function ClienteAreaPage() {
-  const { data: clientes = [] } = useClientes();
-  // Simular cliente logado (primeiro da lista)
-  const cliente = clientes[0];
+  const { data: clientes = [], isLoading: loadingClientes } = useClientes();
+  const [selectedClienteId, setSelectedClienteId] = useState<string>('');
+  const [copied, setCopied] = useState(false);
+  const navigate = useNavigate();
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    }).format(value);
+  // Auto-select first client when data loads
+  const clienteId = selectedClienteId || clientes[0]?.id || '';
+  const cliente = useMemo(() => clientes.find((c) => c.id === clienteId), [clientes, clienteId]);
+
+  const { data: emprestimos = [] } = useEmprestimosByCliente(clienteId || undefined);
+  const { data: parcelas = [] } = useParcelasByCliente(clienteId || undefined);
+  const { data: indicados = [] } = useIndicados(clienteId || undefined);
+
+  const formatCurrency = (value: number) =>
+    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+
+  const formatDate = (dateStr: string) =>
+    new Date(dateStr).toLocaleDateString('pt-BR');
+
+  const statusBadge = (status: string) => {
+    const map: Record<string, { label: string; className: string }> = {
+      em_dia: { label: '✅ Em dia', className: 'bg-green-100 text-green-800' },
+      a_vencer: { label: '⏳ A vencer', className: 'bg-yellow-100 text-yellow-800' },
+      vencido: { label: '🔴 Vencido', className: 'bg-red-100 text-red-800' },
+      paga: { label: 'Pago', className: 'bg-green-100 text-green-800' },
+      pendente: { label: 'Pendente', className: 'bg-yellow-100 text-yellow-800' },
+      vencida: { label: 'Vencida', className: 'bg-red-100 text-red-800' },
+      cancelada: { label: 'Cancelada', className: 'bg-gray-100 text-gray-800' },
+    };
+    const s = map[status] || { label: status, className: '' };
+    return <Badge className={`${s.className} hover:${s.className}`}>{s.label}</Badge>;
   };
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('pt-BR');
+  const totalEmprestado = emprestimos.reduce((sum, e) => sum + e.valor, 0);
+  const emprestimosAtivos = emprestimos.filter((e) => e.status === 'ativo');
+  const proximaParcela = parcelas
+    .filter((p) => p.status === 'pendente')
+    .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento))[0];
+
+  const handleCopyLink = () => {
+    if (!cliente) return;
+    navigator.clipboard.writeText(`https://fintechflow.com/indicacao/${cliente.id}`);
+    setCopied(true);
+    toast.success('Link copiado!');
+    setTimeout(() => setCopied(false), 2000);
   };
 
-  const historicoTransacoes = [
-    { data: '2026-06-15', descricao: 'Parcela 5/12', valor: 500, status: 'Pago' },
-    { data: '2026-05-15', descricao: 'Parcela 4/12', valor: 500, status: 'Pago' },
-    { data: '2026-04-15', descricao: 'Parcela 3/12', valor: 500, status: 'Pago' },
-    { data: '2026-03-15', descricao: 'Parcela 2/12', valor: 500, status: 'Pago' },
-    { data: '2026-02-15', descricao: 'Parcela 1/12', valor: 500, status: 'Pago' },
-  ];
+  if (loadingClientes) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <span className="ml-3 text-muted-foreground">Carregando...</span>
+      </div>
+    );
+  }
+
+  if (!cliente) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <p className="text-muted-foreground">Nenhum cliente encontrado.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-muted">
@@ -49,13 +97,21 @@ export default function ClienteAreaPage() {
             <div className="w-10 h-10 bg-secondary rounded flex items-center justify-center font-bold text-lg">
               F
             </div>
-            <span className="font-semibold text-lg">FintechFlow</span>
+            <span className="font-semibold text-lg">FinanceDigital</span>
           </div>
           <div className="flex items-center gap-4">
-            <span>Olá, {cliente.nome}!</span>
-            <Button variant="ghost" size="sm" className="text-primary-foreground hover:text-primary-foreground hover:bg-primary-foreground/20">
-              Sair
-            </Button>
+            <Select value={clienteId} onValueChange={setSelectedClienteId}>
+              <SelectTrigger className="w-64 bg-primary-foreground/10 border-primary-foreground/20 text-primary-foreground">
+                <SelectValue placeholder="Selecionar cliente" />
+              </SelectTrigger>
+              <SelectContent>
+                {clientes.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.nome}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </header>
@@ -68,7 +124,7 @@ export default function ClienteAreaPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <User className="w-5 h-5" />
-                Meus Dados
+                Dados do Cliente
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -84,9 +140,16 @@ export default function ClienteAreaPage() {
                 <div className="text-sm text-muted-foreground">Telefone</div>
                 <div className="font-medium">{cliente.telefone}</div>
               </div>
-              <Button variant="outline" className="w-full mt-4">
-                Editar Dados
-              </Button>
+              {cliente.cpf && (
+                <div>
+                  <div className="text-sm text-muted-foreground">CPF</div>
+                  <div className="font-medium">{cliente.cpf}</div>
+                </div>
+              )}
+              <div>
+                <div className="text-sm text-muted-foreground">Status</div>
+                <div className="mt-1">{statusBadge(cliente.status)}</div>
+              </div>
             </CardContent>
           </Card>
 
@@ -94,31 +157,48 @@ export default function ClienteAreaPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="w-5 h-5" />
-                Meus Empréstimos
+                Empréstimos
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">Total:</span>
-                  <span className="font-semibold text-lg">
-                    {formatCurrency(cliente.valor)}
-                  </span>
+              {emprestimos.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">Nenhum empréstimo registrado.</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Total emprestado:</span>
+                    <span className="font-semibold text-lg">{formatCurrency(totalEmprestado)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Ativos:</span>
+                    <span className="font-medium">{emprestimosAtivos.length}</span>
+                  </div>
+                  {proximaParcela && (
+                    <div className="flex justify-between">
+                      <span className="text-sm text-muted-foreground">Próx. vencimento:</span>
+                      <span className="font-medium">{formatDate(proximaParcela.dataVencimento)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-sm text-muted-foreground">Situação:</span>
+                    {statusBadge(cliente.status)}
+                  </div>
+
+                  {/* Lista resumida */}
+                  <div className="space-y-2 pt-2 border-t">
+                    {emprestimos.map((e) => (
+                      <div key={e.id} className="flex justify-between items-center text-sm">
+                        <span className="text-muted-foreground">
+                          {formatCurrency(e.valor)} — {e.parcelasPagas}/{e.parcelas} pagas
+                        </span>
+                        <Badge variant="outline" className="text-xs">
+                          {e.status === 'ativo' ? '🟢 Ativo' : e.status === 'quitado' ? '✅ Quitado' : '🔴 Inadimplente'}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">Próxima parcela:</span>
-                  <span className="font-medium">{formatDate(cliente.vencimento)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-muted-foreground">Status:</span>
-                  <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                    ✅ Em dia
-                  </Badge>
-                </div>
-              </div>
-              <Button className="w-full mt-4 bg-primary hover:bg-primary/90">
-                Ver Detalhes
-              </Button>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -128,16 +208,16 @@ export default function ClienteAreaPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Share2 className="w-5 h-5" />
-              Indicar Amigos
+              Indicações
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="bg-secondary/10 border-2 border-secondary rounded-lg p-4">
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <div className="font-semibold">Compartilhe seu link de indicação</div>
+                  <div className="font-semibold">Link de indicação</div>
                   <div className="text-sm text-muted-foreground">
-                    Ganhe bônus para cada amigo aprovado!
+                    Compartilhe para indicar novos clientes
                   </div>
                 </div>
               </div>
@@ -146,11 +226,11 @@ export default function ClienteAreaPage() {
                   type="text"
                   value={`https://fintechflow.com/indicacao/${cliente.id}`}
                   readOnly
-                  className="flex-1 px-3 py-2 border rounded-md bg-card"
+                  className="flex-1 px-3 py-2 border rounded-md bg-card text-sm"
                 />
-                <Button className="bg-secondary hover:bg-secondary/90">
-                  <Share2 className="w-4 h-4 mr-2" />
-                  Compartilhar
+                <Button className="bg-secondary hover:bg-secondary/90" onClick={handleCopyLink}>
+                  {copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
+                  {copied ? 'Copiado!' : 'Copiar'}
                 </Button>
               </div>
             </div>
@@ -158,9 +238,9 @@ export default function ClienteAreaPage() {
             <div className="grid grid-cols-3 gap-4">
               <div className="bg-muted p-4 rounded-lg text-center">
                 <div className="text-2xl font-bold text-secondary">
-                  {cliente.indicou?.length || 0}
+                  {indicados.length}
                 </div>
-                <div className="text-sm text-muted-foreground">Seus indicados</div>
+                <div className="text-sm text-muted-foreground">Indicados</div>
               </div>
               <div className="bg-muted p-4 rounded-lg text-center">
                 <div className="text-2xl font-bold text-green-600">
@@ -171,12 +251,25 @@ export default function ClienteAreaPage() {
               <div className="bg-muted p-4 rounded-lg text-center">
                 <Button
                   className="w-full bg-primary hover:bg-primary/90"
-                  onClick={() => alert('Função de visualização da rede em desenvolvimento')}
+                  onClick={() => navigate('/indicacoes')}
                 >
                   Ver Rede
                 </Button>
               </div>
             </div>
+
+            {/* Lista de indicados */}
+            {indicados.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-foreground">Indicados:</h4>
+                {indicados.map((ind) => (
+                  <div key={ind.id} className="flex items-center justify-between p-2 bg-card rounded border text-sm">
+                    <span className="font-medium">{ind.nome}</span>
+                    {statusBadge(ind.status)}
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -192,49 +285,54 @@ export default function ClienteAreaPage() {
             <div className="bg-muted p-8 rounded-lg text-center">
               <MessageSquare className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
               <p className="text-muted-foreground mb-4">
-                Precisa de ajuda? Nossa equipe está pronta para atendê-lo!
+                Abrir conversa com este cliente no chat de atendimento.
               </p>
-              <Button className="bg-secondary hover:bg-secondary/90">
+              <Button
+                className="bg-secondary hover:bg-secondary/90"
+                onClick={() => navigate(`/chat?phone=${encodeURIComponent(cliente.telefone)}`)}
+              >
                 Abrir Chat
               </Button>
             </div>
           </CardContent>
         </Card>
 
-        {/* Extrato de Pagamentos */}
+        {/* Extrato de Parcelas */}
         <Card>
           <CardHeader>
-            <CardTitle>Extrato de Pagamentos</CardTitle>
+            <CardTitle>Extrato de Parcelas</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-3 px-4 font-medium">Data</th>
-                    <th className="text-left py-3 px-4 font-medium">Descrição</th>
-                    <th className="text-left py-3 px-4 font-medium">Valor</th>
-                    <th className="text-left py-3 px-4 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historicoTransacoes.map((transacao, index) => (
-                    <tr key={index} className="border-b hover:bg-muted/50">
-                      <td className="py-3 px-4">{formatDate(transacao.data)}</td>
-                      <td className="py-3 px-4">{transacao.descricao}</td>
-                      <td className="py-3 px-4 font-medium">
-                        {formatCurrency(transacao.valor)}
-                      </td>
-                      <td className="py-3 px-4">
-                        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                          {transacao.status}
-                        </Badge>
-                      </td>
+            {parcelas.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">Nenhuma parcela registrada.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-3 px-4 font-medium">Nº</th>
+                      <th className="text-left py-3 px-4 font-medium">Vencimento</th>
+                      <th className="text-left py-3 px-4 font-medium">Valor</th>
+                      <th className="text-left py-3 px-4 font-medium">Pagamento</th>
+                      <th className="text-left py-3 px-4 font-medium">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {parcelas.map((p) => (
+                      <tr key={p.id} className="border-b hover:bg-muted/50">
+                        <td className="py-3 px-4">#{p.numero}</td>
+                        <td className="py-3 px-4">{formatDate(p.dataVencimento)}</td>
+                        <td className="py-3 px-4 font-medium">{formatCurrency(p.valor)}</td>
+                        <td className="py-3 px-4">
+                          {p.dataPagamento ? formatDate(p.dataPagamento) : '—'}
+                        </td>
+                        <td className="py-3 px-4">{statusBadge(p.status)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </CardContent>
         </Card>
       </main>
