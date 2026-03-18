@@ -65,8 +65,8 @@ import { useActivityTracker } from '../hooks/useActivityTracker';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useState } from 'react';
-import logo from '../assets/logo-login.png';
 import { AnimatedBackground } from './AnimatedBackground';
+import { FloatingChat } from './FloatingChat';
 
 export function MainLayout() {
   const { user, logout } = useAuth();
@@ -184,8 +184,8 @@ export function MainLayout() {
       >
         {/* Logo */}
         <div className="p-5 border-b border-sidebar-border/50 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-           <img src={logo} alt="Logo" className="w-48 h-auto" />
+          <div className="flex text-3xl items-center">
+            <span className="animated-logo ml-2 flex flex-col leading-tight"><span className="font-bold">FINTECH</span> DIGITAL</span>
           </div>
         </div>
 
@@ -289,6 +289,9 @@ export function MainLayout() {
           <Outlet />
         </main>
       </div>
+
+      {/* Chat Interno Flutuante */}
+      <FloatingChat />
     </div>
   );
 }

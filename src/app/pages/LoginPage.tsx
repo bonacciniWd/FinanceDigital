@@ -72,7 +72,7 @@ export default function LoginPage() {
 
       <Card className="w-full max-w-xl shadow-2xl relative z-10">
         <CardHeader className="space-y-4 text-center">
-          <img src={logo} alt="Logo" className="w-96 h-[150px] mx-auto" />
+          <img src={logo} alt="Logo" className="w-80 h-auto mx-auto" />
           <div>
             <CardDescription className="mt-2">
               Plataforma de Gestão de Crédito

@@ -1,6 +1,6 @@
 # FintechFlow — Documentação Técnica Completa
 
-> **Atualizado:** 11 de março de 2026 (v6.1 — Produtividade Kanban · Auto-Ticket WhatsApp)  
+> **Atualizado:** 17 de março de 2026 (v7.1 — Kanban Cobrança: Negociação Pix Woovi + Normalização Telefone)  
 > **Stack:** React 18 · TypeScript 5 · Vite 6 · Tailwind CSS v4 · Supabase · React Query (TanStack)
 
 ---
@@ -29,7 +29,8 @@
 20. [Bot WhatsApp — Auto-Reply Score/Status](#20-bot-whatsapp--auto-reply-scorestatus-v60--07032026)
 21. [Produtividade da Equipe — Kanban + Auto-Ticket](#21-produtividade-da-equipe--kanban--auto-ticket-v61--11032026)
 22. [Integração Woovi (OpenPix) — Pagamentos Pix](#22-integração-woovi-openpix--pagamentos-pix)
-23. [Métricas do Projeto](#23-métricas-do-projeto-v70--woovi)
+23. [Kanban Cobrança — Negociação Pix + Normalização Telefone](#23-kanban-cobrança--negociação-pix--normalização-telefone-v71--17032026)
+24. [Métricas do Projeto](#24-métricas-do-projeto-v71)
 
 ---
 
@@ -2858,7 +2859,163 @@ supabase functions deploy woovi --no-verify-jwt
 
 ---
 
-## 23. Métricas do Projeto (v7.0 — Woovi)
+## 23. Kanban Cobrança — Negociação Pix + Normalização Telefone (v7.1 — 17/03/2026)
+
+### 23.1 Visão Geral
+
+Esta atualização integra a **geração de cobranças Pix (Woovi/OpenPix)** diretamente no fluxo de negociação do Kanban de Cobrança e corrige o problema de **números de telefone sem DDI** que impediam o envio de mensagens via WhatsApp.
+
+**Arquivos alterados:**
+
+| Arquivo | Alteração |
+|---------|----------|
+| `src/app/pages/KanbanCobrancaPage.tsx` | Integração Woovi no modal de negociação, normalização de telefone |
+| `supabase/functions/send-whatsapp/index.ts` | Normalização automática de DDI 55 no backend |
+
+---
+
+### 23.2 Normalização Automática de Telefone (DDI 55)
+
+**Problema:** Números cadastrados sem o código do país (ex: `47989279037`) retornavam erro "Número não encontrado no WhatsApp" porque a Evolution API espera o formato internacional completo (`5547989279037`).
+
+**Solução — duas camadas de proteção:**
+
+#### Backend: `send-whatsapp/index.ts`
+
+Antes de enviar para a Evolution API, o número é normalizado automaticamente:
+
+```ts
+let formattedNumber = telefone.replace(/@.*$/, "").replace(/\D/g, "");
+
+// Garantir DDI 55 (Brasil): números com 10-11 dígitos sem prefixo 55
+if (formattedNumber.length >= 10 && formattedNumber.length <= 11 && !formattedNumber.startsWith("55")) {
+  formattedNumber = "55" + formattedNumber;
+}
+```
+
+Regras:
+- **10 dígitos** (DDD + fixo): `4732221234` → `554732221234`
+- **11 dígitos** (DDD + celular com 9): `47989279037` → `5547989279037`
+- **12-13 dígitos** (já com DDI): mantém como está
+- Números com `@lid` (WhatsApp internal): bypass, enviado como está
+
+#### Frontend: `KanbanCobrancaPage.tsx`
+
+Função `normalizePhoneBR()` aplicada em todos os pontos de saída:
+
+```ts
+const normalizePhoneBR = (tel: string) => {
+  const digits = tel.replace(/\D/g, '');
+  if (digits.length >= 10 && digits.length <= 11 && !digits.startsWith('55')) {
+    return '55' + digits;
+  }
+  return digits;
+};
+```
+
+Pontos de aplicação:
+- `handleEnviarWhatsappCobranca()` — envio via Evolution API
+- `handleWhatsappDireto()` — abertura do wa.me
+- Navegação para `/whatsapp?telefone=` (card dropdown e modal)
+
+---
+
+### 23.3 Geração de Cobrança Pix no Modal de Negociação
+
+O modal de negociação do Kanban de Cobrança agora permite gerar uma **cobrança Pix via Woovi** diretamente, com expiração de 24 horas.
+
+#### Fluxo Completo
+
+```
+Usuário abre Negociação
+  ├─ Define valor acordado (pré-preenchido com valor da dívida)
+  ├─ Clica "Gerar Pix (24h)"
+  │   └─ Chama useCriarCobrancaWoovi() → Edge Function woovi → API Woovi
+  │       └─ Retorna: QR Code + Link de Pagamento + BRCode
+  ├─ Seleciona template de mensagem
+  │   └─ Variáveis substituídas: {nome}, {valor}, {dias_atraso}, {valor_acordado}, {link_pix}
+  ├─ Envia mensagem via WhatsApp Business (com link do Pix)
+  └─ Card move para "Contatado"
+```
+
+#### Novos Estados no Componente
+
+```ts
+const [negValorAcordado, setNegValorAcordado] = useState('');
+const [negCobrancaCriada, setNegCobrancaCriada] = useState<{
+  paymentLink?: string;
+  qrCodeImage?: string;
+  brCode?: string;
+  correlationID?: string;
+} | null>(null);
+```
+
+#### Handler: `handleGerarPix()`
+
+1. Valida o valor acordado (> 0)
+2. Busca o empréstimo ativo/inadimplente do cliente para vincular
+3. Chama `criarCobrancaWoovi.mutate()` com:
+   - `cliente_id`, `emprestimo_id`
+   - `valor` (valor acordado)
+   - `expiration_minutes: 1440` (24h)
+   - `cliente_nome`, `descricao`
+4. Ao sucesso, armazena `paymentLink`, `qrCodeImage`, `brCode` no estado
+5. Se já havia um template aplicado, substitui `{link_pix}` na mensagem
+
+#### UI do Modal (ordem dos elementos)
+
+1. **Valor Acordado (R$)** — input numérico + botão "Gerar Pix (24h)"
+2. **Cobrança Pix Gerada** — QR Code, link copiável, código Pix Copia e Cola (exibido após gerar)
+3. **Template de Mensagem** — selector com templates de cobrança e negociação
+4. **Mensagem** — textarea editável com variáveis substituídas
+5. **Instância WhatsApp** — selector de instância conectada
+6. **Botões de Envio** — "Enviar via WhatsApp Business" + "App/Web"
+7. **Mover sem enviar** — botão ghost para mover para Negociação
+
+#### Variáveis de Template Suportadas
+
+| Variável | Valor |
+|----------|-------|
+| `{nome}` | Nome do cliente |
+| `{valor}` | Valor total da dívida (formatado R$) |
+| `{dias_atraso}` | Dias em atraso |
+| `{valor_acordado}` | Valor acordado na negociação (formatado R$) |
+| `{link_pix}` | Link de pagamento Woovi (substituído após gerar Pix) |
+
+---
+
+### 23.4 Auto-Atualização ao Receber Pagamento
+
+Quando o cliente paga o Pix gerado, o webhook da Woovi (`OPENPIX:CHARGE_COMPLETED`) dispara a seguinte cadeia:
+
+```
+Woovi → webhook-woovi Edge Function
+  ├─ Atualiza woovi_charges.status = COMPLETED
+  ├─ Marca parcela como paga (data_pagamento = hoje)
+  ├─ Incrementa parcelas_pagas no empréstimo
+  ├─ Se todas as parcelas pagas → status = quitado
+  ├─ Registra transação em woovi_transactions
+  └─ Processa split para indicador (se aplicável)
+
+Próximo acesso ao Kanban → syncCobrancas()
+  └─ Remove card do cliente sem dívida ativa
+```
+
+O Realtime do Supabase (`subscribeToCharges`) também invalida os caches React Query automaticamente.
+
+---
+
+### 23.5 Dependências Adicionadas ao Componente
+
+```ts
+import { useCriarCobrancaWoovi } from '../hooks/useWoovi';
+```
+
+Hook utilizado: `useCriarCobrancaWoovi()` — mutation que chama `wooviService.criarCobranca()` e invalida caches de cobranças, parcelas e stats.
+
+---
+
+## 24. Métricas do Projeto (v7.1)
 
 | Métrica | Valor |
 |---------|-------|
@@ -2873,3 +3030,4 @@ supabase functions deploy woovi --no-verify-jwt
 | Dados mock | 0 (zero) |
 | Tabelas PostgreSQL | 20+ |
 | Políticas RLS | todas as tabelas |
+| Integrações externas | WhatsApp (Evolution API), Pix (Woovi/OpenPix) |

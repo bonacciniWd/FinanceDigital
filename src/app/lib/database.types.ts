@@ -69,6 +69,31 @@ export interface Database {
         };
       };
 
+      chat_interno: {
+        Row: {
+          id: string;
+          de_user_id: string;
+          para_user_id: string;
+          conteudo: string;
+          lida: boolean;
+          tipo: string;
+          metadata: Record<string, unknown> | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          de_user_id: string;
+          para_user_id: string;
+          conteudo: string;
+          lida?: boolean;
+          tipo?: string;
+          metadata?: Record<string, unknown>;
+        };
+        Update: {
+          lida?: boolean;
+        };
+      };
+
       clientes: {
         Row: {
           id: string;
@@ -1108,6 +1133,11 @@ export type TicketAtendimentoUpdate = Database['public']['Tables']['tickets_aten
 export type KanbanCobranca = Database['public']['Tables']['kanban_cobranca']['Row'];
 export type KanbanCobrancaInsert = Database['public']['Tables']['kanban_cobranca']['Insert'];
 export type KanbanCobrancaUpdate = Database['public']['Tables']['kanban_cobranca']['Update'];
+
+/** Linha da tabela chat_interno */
+export type ChatInterno = Database['public']['Tables']['chat_interno']['Row'];
+export type ChatInternoInsert = Database['public']['Tables']['chat_interno']['Insert'];
+export type ChatInternoUpdate = Database['public']['Tables']['chat_interno']['Update'];
 
 // ── Tipos com JOINs (views compostas) ────────────────────────────
 

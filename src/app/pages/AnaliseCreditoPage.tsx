@@ -25,6 +25,7 @@ import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus } fr
 import { toast } from 'sonner';
 
 import { useAnalises, useCreateAnalise, useUpdateAnalise } from '../hooks/useAnaliseCredito';
+import { useClientes } from '../hooks/useClientes';
 import type { AnaliseCredito } from '../lib/view-types';
 
 export default function AnaliseCreditoPage() {
@@ -44,11 +45,22 @@ export default function AnaliseCreditoPage() {
     rendaMensal: '',
     scoreSerasa: '',
   });
+  const [buscaCliente, setBuscaCliente] = useState('');
+  const [showClienteResults, setShowClienteResults] = useState(false);
 
   // ── React Query ──────────────────────────────────────────
   const { data: analises, isLoading, isError } = useAnalises();
   const createMutation = useCreateAnalise();
   const updateMutation = useUpdateAnalise();
+  const { data: clientes } = useClientes();
+
+  const clientesFiltrados = useMemo(() => {
+    if (!clientes || !buscaCliente.trim()) return [];
+    const q = buscaCliente.toLowerCase();
+    return clientes.filter(
+      (c) => c.nome.toLowerCase().includes(q) || (c.cpf && c.cpf.includes(q))
+    ).slice(0, 8);
+  }, [clientes, buscaCliente]);
 
   // ── Filtros ──────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -155,6 +167,7 @@ export default function AnaliseCreditoPage() {
           toast.success('Análise criada com sucesso!');
           setShowNovaAnalise(false);
           setFormNova({ clienteNome: '', cpf: '', valorSolicitado: '', rendaMensal: '', scoreSerasa: '' });
+          setBuscaCliente('');
         },
         onError: (err) => toast.error(`Erro ao criar análise: ${err.message}`),
       }
@@ -450,6 +463,48 @@ export default function AnaliseCreditoPage() {
             <DialogTitle>Nova Análise de Crédito</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {/* Busca de cliente existente */}
+            <div className="relative">
+              <Label>Buscar Cliente (nome ou CPF)</Label>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Digite nome ou CPF para buscar..."
+                  className="pl-8"
+                  value={buscaCliente}
+                  onChange={(e) => {
+                    setBuscaCliente(e.target.value);
+                    setShowClienteResults(true);
+                  }}
+                  onFocus={() => buscaCliente.trim() && setShowClienteResults(true)}
+                />
+              </div>
+              {showClienteResults && clientesFiltrados.length > 0 && (
+                <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                  {clientesFiltrados.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-accent flex items-center justify-between"
+                      onClick={() => {
+                        setFormNova({ ...formNova, clienteNome: c.nome, cpf: c.cpf ?? '' });
+                        setBuscaCliente('');
+                        setShowClienteResults(false);
+                      }}
+                    >
+                      <span className="font-medium truncate">{c.nome}</span>
+                      <span className="text-muted-foreground text-xs ml-2 shrink-0">{c.cpf ?? '—'}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {showClienteResults && buscaCliente.trim() && clientesFiltrados.length === 0 && (
+                <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg px-3 py-2 text-sm text-muted-foreground">
+                  Nenhum cliente encontrado
+                </div>
+              )}
+            </div>
+
             <div>
               <Label htmlFor="nome">Nome do Cliente *</Label>
               <Input

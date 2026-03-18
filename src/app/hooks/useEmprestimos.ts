@@ -13,6 +13,24 @@ import * as emprestimosService from '../services/emprestimosService';
 import { dbEmprestimoToView } from '../lib/adapters';
 import type { EmprestimoInsert, EmprestimoUpdate } from '../lib/database.types';
 
+/** Quitar empréstimo (empréstimo + parcelas + kanban) */
+export function useQuitarEmprestimo() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, totalParcelas }: { id: string; totalParcelas: number }) =>
+      emprestimosService.quitarEmprestimo(id, totalParcelas),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+      queryClient.invalidateQueries({ queryKey: ['clientes'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-summary'] });
+    },
+  });
+}
+
 const QUERY_KEY = 'emprestimos';
 
 /** Buscar todos os empréstimos (com nome do cliente) — retorna camelCase */

@@ -10,7 +10,7 @@
  * @route /kanban/cobranca
  * @access Protegido — perfis admin, gerência, cobrança
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -18,6 +18,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import {
   MessageSquare,
   Phone,
@@ -27,6 +28,15 @@ import {
   Loader2,
   AlertCircle,
   UserCheck,
+  Banknote,
+  AlertOctagon,
+  CheckCircle2,
+  RefreshCw,
+  Send,
+  ExternalLink,
+  CheckCheck,
+  XCircle,
+  FileText,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -34,8 +44,14 @@ import {
   useMoverCardCobranca,
   useRegistrarContato,
   useUpdateCardCobranca,
+  useSyncCobrancas,
 } from '../hooks/useKanbanCobranca';
-import type { KanbanCobrancaView } from '../lib/view-types';
+import { useEmprestimos, useUpdateEmprestimo, useQuitarEmprestimo } from '../hooks/useEmprestimos';
+import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
+import { useTemplatesByCategoria } from '../hooks/useTemplates';
+import { useCriarCobrancaWoovi } from '../hooks/useWoovi';
+import { useAuth } from '../contexts/AuthContext';
+import type { KanbanCobrancaView, Emprestimo } from '../lib/view-types';
 import type { KanbanCobrancaEtapa } from '../lib/database.types';
 
 interface ColumnDef {
@@ -55,18 +71,103 @@ const COLUMNS: ColumnDef[] = [
 
 export default function KanbanCobrancaPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [selectedCard, setSelectedCard] = useState<KanbanCobrancaView | null>(null);
   const [busca, setBusca] = useState('');
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const [contatoObs, setContatoObs] = useState('');
 
-  const { data: allCards = [], isLoading, error } = useCardsCobranca();
+  // Chat dropdown state
+  const [chatMenuCard, setChatMenuCard] = useState<string | null>(null);
+
+  // Negociação modal state
+  const [showNegociacao, setShowNegociacao] = useState(false);
+  const [negociacaoCard, setNegociacaoCard] = useState<KanbanCobrancaView | null>(null);
+  const [negMsg, setNegMsg] = useState('');
+  const [negInstanciaId, setNegInstanciaId] = useState('');
+  const [negTemplateId, setNegTemplateId] = useState('');
+  const [negValorAcordado, setNegValorAcordado] = useState('');
+  const [negCobrancaCriada, setNegCobrancaCriada] = useState<{
+    paymentLink?: string;
+    qrCodeImage?: string;
+    brCode?: string;
+    correlationID?: string;
+  } | null>(null);
+
+  const { data: allCards = [], isLoading, error, refetch } = useCardsCobranca();
+  const { data: emprestimos = [] } = useEmprestimos();
+  const { data: instancias = [] } = useInstancias();
+  const { data: templatesCobranca = [] } = useTemplatesByCategoria('cobranca');
+  const { data: templatesNegociacao = [] } = useTemplatesByCategoria('negociacao');
   const moverCard = useMoverCardCobranca();
   const registrarContato = useRegistrarContato();
   const updateCard = useUpdateCardCobranca();
+  const updateEmprestimo = useUpdateEmprestimo();
+  const quitarEmprestimo = useQuitarEmprestimo();
+  const syncCobrancas = useSyncCobrancas();
+  const enviarWhatsapp = useEnviarWhatsapp();
+  const criarCobrancaWoovi = useCriarCobrancaWoovi();
+
+  const instanciasConectadas = useMemo(
+    () => instancias.filter((i) => i.status === 'conectado'),
+    [instancias]
+  );
+
+  const allTemplates = useMemo(
+    () => [...templatesCobranca, ...templatesNegociacao],
+    [templatesCobranca, templatesNegociacao]
+  );
+
+  // Sync automático na montagem (uma vez)
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (syncedRef.current) return;
+    syncedRef.current = true;
+    syncCobrancas.mutate(undefined, {
+      onSuccess: (result) => {
+        if (result.created > 0 || result.removed > 0) {
+          refetch();
+        }
+      },
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSyncManual = () => {
+    syncCobrancas.mutate(undefined, {
+      onSuccess: (result) => {
+        refetch();
+        const parts: string[] = [];
+        if (result.created > 0) parts.push(`${result.created} criado(s)`);
+        if (result.updated > 0) parts.push(`${result.updated} atualizado(s)`);
+        if (result.removed > 0) parts.push(`${result.removed} removido(s)`);
+        toast.success(parts.length > 0 ? `Sincronizado: ${parts.join(', ')}` : 'Tudo sincronizado — sem alterações');
+      },
+      onError: (err) => toast.error(`Erro ao sincronizar: ${err.message}`),
+    });
+  };
+
+  // Empréstimos agrupados por clienteId
+  const emprestimosByCliente = useMemo(() => {
+    const map = new Map<string, Emprestimo[]>();
+    for (const emp of emprestimos) {
+      const list = map.get(emp.clienteId) || [];
+      list.push(emp);
+      map.set(emp.clienteId, list);
+    }
+    return map;
+  }, [emprestimos]);
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+
+  /** Normaliza telefone brasileiro: garante DDI 55 */
+  const normalizePhoneBR = (tel: string) => {
+    const digits = tel.replace(/\D/g, '');
+    if (digits.length >= 10 && digits.length <= 11 && !digits.startsWith('55')) {
+      return '55' + digits;
+    }
+    return digits;
+  };
 
   const filteredCards = useMemo(() => {
     if (!busca.trim()) return allCards;
@@ -122,10 +223,29 @@ export default function KanbanCobrancaPage() {
     const card = allCards.find((c) => c.id === cardId);
     if (!card || card.etapa === columnId) return;
 
+    const novaEtapa = columnId as KanbanCobrancaEtapa;
     moverCard.mutate(
-      { id: cardId, etapa: columnId as KanbanCobrancaEtapa },
+      { id: cardId, etapa: novaEtapa },
       {
-        onSuccess: () => toast.success(`Card movido para ${COLUMNS.find((c) => c.id === columnId)?.title}`),
+        onSuccess: () => {
+          toast.success(`Card movido para ${COLUMNS.find((c) => c.id === columnId)?.title}`);
+          // Sync: ao mover para "pago", quitar empréstimos (empréstimo + parcelas + kanban)
+          if (novaEtapa === 'pago') {
+            const clienteEmps = emprestimosByCliente.get(card.clienteId) ?? [];
+            const ativos = clienteEmps.filter((e) => e.status === 'ativo' || e.status === 'inadimplente');
+            for (const emp of ativos) {
+              quitarEmprestimo.mutate({ id: emp.id, totalParcelas: emp.parcelas });
+            }
+          }
+          // Sync: ao mover para "vencido", marcar empréstimos ativos como inadimplente
+          if (novaEtapa === 'vencido') {
+            const clienteEmps = emprestimosByCliente.get(card.clienteId) ?? [];
+            const ativos = clienteEmps.filter((e) => e.status === 'ativo');
+            for (const emp of ativos) {
+              updateEmprestimo.mutate({ id: emp.id, data: { status: 'inadimplente' } });
+            }
+          }
+        },
         onError: (err) => toast.error(`Erro ao mover: ${err.message}`),
       }
     );
@@ -141,6 +261,222 @@ export default function KanbanCobrancaPage() {
           setContatoObs('');
           setSelectedCard(null);
         },
+        onError: (err) => toast.error(`Erro: ${err.message}`),
+      }
+    );
+  };
+
+  // Enviar mensagem via WhatsApp Business e mover card para contatado
+  const handleEnviarWhatsappCobranca = (card: KanbanCobrancaView, instanciaId: string, mensagem: string) => {
+    if (!mensagem.trim()) { toast.error('Escreva ou selecione uma mensagem'); return; }
+    enviarWhatsapp.mutate(
+      { instancia_id: instanciaId, telefone: normalizePhoneBR(card.clienteTelefone), conteudo: mensagem },
+      {
+        onSuccess: () => {
+          const inst = instancias.find((i) => i.id === instanciaId);
+          const obs = `Mensagem enviada via ${inst?.instance_name || 'WhatsApp'} por ${user?.name || 'Sistema'}`;
+          // Mover para contatado + registrar contato
+          updateCard.mutate({ id: card.id, updates: {
+            etapa: 'contatado',
+            tentativas_contato: card.tentativasContato + 1,
+            ultimo_contato: new Date().toISOString(),
+            observacao: obs,
+          }});
+          toast.success('Mensagem enviada e card movido para Contatado');
+          setShowNegociacao(false);
+          setNegociacaoCard(null);
+          setNegMsg('');
+          setNegCobrancaCriada(null);
+          setSelectedCard(null);
+        },
+        onError: (err) => toast.error(`Erro ao enviar: ${err.message}`),
+      }
+    );
+  };
+
+  // Abrir WhatsApp direto (app/web) com mensagem
+  const handleWhatsappDireto = (telefone: string, mensagem?: string) => {
+    const num = normalizePhoneBR(telefone);
+    const url = mensagem
+      ? `https://wa.me/${num}?text=${encodeURIComponent(mensagem)}`
+      : `https://wa.me/${num}`;
+    window.open(url, '_blank');
+  };
+
+  // Abrir modal de negociação
+  const handleAbrirNegociacao = (card: KanbanCobrancaView) => {
+    setNegociacaoCard(card);
+    setNegMsg('');
+    setNegTemplateId('');
+    setNegInstanciaId(instanciasConectadas[0]?.id || '');
+    setNegValorAcordado(String(card.valorDivida));
+    setNegCobrancaCriada(null);
+    setShowNegociacao(true);
+  };
+
+  // Aplicar template à mensagem de negociação
+  const handleAplicarTemplate = (templateId: string, card: KanbanCobrancaView) => {
+    setNegTemplateId(templateId);
+    const tpl = allTemplates.find((t) => t.id === templateId);
+    if (!tpl) return;
+    let msg = tpl.mensagemMasculino;
+    // Substituir variáveis
+    msg = msg.replace(/\{nome\}/gi, card.clienteNome);
+    msg = msg.replace(/\{valor\}/gi, formatCurrency(card.valorDivida));
+    msg = msg.replace(/\{dias_atraso\}/gi, String(card.diasAtraso));
+    msg = msg.replace(/\{valor_acordado\}/gi, negValorAcordado ? formatCurrency(Number(negValorAcordado)) : formatCurrency(card.valorDivida));
+    if (negCobrancaCriada?.paymentLink) {
+      msg = msg.replace(/\{link_pix\}/gi, negCobrancaCriada.paymentLink);
+    }
+    setNegMsg(msg);
+  };
+
+  // Gerar cobrança Pix via Woovi
+  const handleGerarPix = (card: KanbanCobrancaView) => {
+    const valor = Number(negValorAcordado);
+    if (!valor || valor <= 0) { toast.error('Informe o valor acordado'); return; }
+
+    // Buscar empréstimo ativo do cliente para vincular
+    const emps = emprestimosByCliente.get(card.clienteId) ?? [];
+    const ativoEmp = emps.find((e) => e.status === 'ativo' || e.status === 'inadimplente');
+
+    criarCobrancaWoovi.mutate(
+      {
+        cliente_id: card.clienteId,
+        emprestimo_id: ativoEmp?.id,
+        valor,
+        descricao: `Negociação - ${card.clienteNome}`,
+        cliente_nome: card.clienteNome,
+        expiration_minutes: 1440, // 24h = 1 dia
+      },
+      {
+        onSuccess: (result) => {
+          const woovi = (result as Record<string, unknown>).woovi as {
+            paymentLinkUrl?: string;
+            qrCodeImage?: string;
+            brCode?: string;
+            correlationID?: string;
+          } | undefined;
+          setNegCobrancaCriada({
+            paymentLink: woovi?.paymentLinkUrl,
+            qrCodeImage: woovi?.qrCodeImage,
+            brCode: woovi?.brCode,
+            correlationID: woovi?.correlationID,
+          });
+          // Atualizar mensagem com link do Pix se template já foi aplicado
+          if (negMsg && woovi?.paymentLinkUrl) {
+            setNegMsg((prev) => prev.replace(/\{link_pix\}/gi, woovi.paymentLinkUrl!));
+          }
+          toast.success('Cobrança Pix gerada com sucesso! Válida por 24h.');
+        },
+        onError: (err) => toast.error(`Erro ao gerar Pix: ${err.message}`),
+      }
+    );
+  };
+
+  /**
+   * Fechar Acordo com Pix: gera cobrança Woovi + envia WhatsApp + move card para "acordo".
+   * Fluxo completo em um clique.
+   */
+  const handleFecharAcordoComPix = (card: KanbanCobrancaView) => {
+    const valor = Number(negValorAcordado);
+    if (!valor || valor <= 0) { toast.error('Informe o valor acordado'); return; }
+    if (!negInstanciaId) { toast.error('Selecione uma instância WhatsApp'); return; }
+
+    const emps = emprestimosByCliente.get(card.clienteId) ?? [];
+    const ativoEmp = emps.find((e) => e.status === 'ativo' || e.status === 'inadimplente');
+
+    toast.loading('Gerando cobrança Pix e enviando via WhatsApp...', { id: 'acordo-pix' });
+
+    criarCobrancaWoovi.mutate(
+      {
+        cliente_id: card.clienteId,
+        emprestimo_id: ativoEmp?.id,
+        valor,
+        descricao: `Acordo - ${card.clienteNome}`,
+        cliente_nome: card.clienteNome,
+        expiration_minutes: 1440,
+      },
+      {
+        onSuccess: (result) => {
+          const woovi = (result as Record<string, unknown>).woovi as {
+            paymentLinkUrl?: string;
+            qrCodeImage?: string;
+            brCode?: string;
+            correlationID?: string;
+          } | undefined;
+
+          setNegCobrancaCriada({
+            paymentLink: woovi?.paymentLinkUrl,
+            qrCodeImage: woovi?.qrCodeImage,
+            brCode: woovi?.brCode,
+            correlationID: woovi?.correlationID,
+          });
+
+          // Montar mensagem: usa template aplicado ou monta mensagem padrão
+          let mensagemFinal = negMsg.trim();
+          if (!mensagemFinal) {
+            mensagemFinal = `Olá ${card.clienteNome}! 🤝\n\nFechamos um acordo no valor de ${formatCurrency(valor)}.\n\nSegue o link para pagamento via Pix (válido por 24h):\n${woovi?.paymentLinkUrl || '(link indisponível)'}\n\nApós o pagamento, seu status será atualizado automaticamente.\n\nQualquer dúvida, estamos à disposição!`;
+          } else {
+            // Substituir {link_pix} se ainda estava como variável
+            if (woovi?.paymentLinkUrl) {
+              mensagemFinal = mensagemFinal.replace(/\{link_pix\}/gi, woovi.paymentLinkUrl);
+            }
+            // Substituir {valor_acordado} caso ainda esteja presente
+            mensagemFinal = mensagemFinal.replace(/\{valor_acordado\}/gi, formatCurrency(valor));
+          }
+
+          // Enviar via WhatsApp Business
+          enviarWhatsapp.mutate(
+            { instancia_id: negInstanciaId, telefone: normalizePhoneBR(card.clienteTelefone), conteudo: mensagemFinal },
+            {
+              onSuccess: () => {
+                const inst = instancias.find((i) => i.id === negInstanciaId);
+                const obs = `Acordo fechado: ${formatCurrency(valor)} · Pix enviado via ${inst?.instance_name || 'WhatsApp'} por ${user?.name || 'Sistema'}`;
+                // Mover card para "acordo"
+                updateCard.mutate({ id: card.id, updates: {
+                  etapa: 'acordo',
+                  tentativas_contato: card.tentativasContato + 1,
+                  ultimo_contato: new Date().toISOString(),
+                  observacao: obs,
+                }});
+                toast.success('Acordo fechado! Pix gerado e enviado via WhatsApp.', { id: 'acordo-pix' });
+                setShowNegociacao(false);
+                setNegociacaoCard(null);
+                setNegMsg('');
+                setNegCobrancaCriada(null);
+                setSelectedCard(null);
+              },
+              onError: (err) => {
+                toast.error(`Pix gerado, mas erro ao enviar WhatsApp: ${err.message}`, { id: 'acordo-pix' });
+              },
+            }
+          );
+        },
+        onError: (err) => {
+          toast.error(`Erro ao gerar Pix: ${err.message}`, { id: 'acordo-pix' });
+        },
+      }
+    );
+  };
+
+  // Confirmar contato (contatado → acordo)
+  const handleConfirmarContato = (card: KanbanCobrancaView) => {
+    moverCard.mutate(
+      { id: card.id, etapa: 'acordo' },
+      {
+        onSuccess: () => toast.success(`${card.clienteNome} movido para Acordos`),
+        onError: (err) => toast.error(`Erro: ${err.message}`),
+      }
+    );
+  };
+
+  // Cancelar contato (contatado → vencido de volta)
+  const handleCancelarContato = (card: KanbanCobrancaView) => {
+    moverCard.mutate(
+      { id: card.id, etapa: 'vencido' },
+      {
+        onSuccess: () => toast.success(`${card.clienteNome} retornou para Vencidos`),
         onError: (err) => toast.error(`Erro: ${err.message}`),
       }
     );
@@ -167,9 +503,15 @@ export default function KanbanCobrancaPage() {
             Gerencie o fluxo de cobrança visualmente — arraste os cards entre colunas
           </p>
         </div>
-        <div className="relative w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input placeholder="Buscar cliente..." className="pl-10" value={busca} onChange={(e) => setBusca(e.target.value)} />
+        <div className="flex items-center gap-3">
+          <div className="relative w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Buscar cliente..." className="pl-10" value={busca} onChange={(e) => setBusca(e.target.value)} />
+          </div>
+          <Button variant="outline" size="sm" onClick={handleSyncManual} disabled={syncCobrancas.isPending}>
+            {syncCobrancas.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+            Sincronizar
+          </Button>
         </div>
       </div>
 
@@ -220,7 +562,7 @@ export default function KanbanCobrancaPage() {
                                 <div className="font-semibold text-sm text-foreground">{card.clienteNome}</div>
                                 <div className="text-xs text-muted-foreground mt-0.5">{card.clienteEmail}</div>
                               </div>
-                              <span className="text-lg">{column.emoji}</span>
+                              <span className="text-lg"></span>
                             </div>
                             <div className="space-y-1 text-xs">
                               <div className="flex justify-between">
@@ -233,6 +575,18 @@ export default function KanbanCobrancaPage() {
                                   <span className="font-semibold text-red-600 dark:text-red-400">{card.diasAtraso} dias</span>
                                 </div>
                               )}
+                              {(() => {
+                                const emps = emprestimosByCliente.get(card.clienteId) ?? [];
+                                const ativos = emps.filter((e) => e.status === 'ativo' || e.status === 'inadimplente');
+                                if (ativos.length === 0) return null;
+                                const totalEmps = ativos.reduce((s, e) => s + e.valor, 0);
+                                return (
+                                  <div className="flex justify-between">
+                                    <span className="text-muted-foreground">Empréstimos:</span>
+                                    <span className="font-medium text-foreground">{ativos.length}x · {formatCurrency(totalEmps)}</span>
+                                  </div>
+                                );
+                              })()}
                               {card.tentativasContato > 0 && (
                                 <div className="flex justify-between">
                                   <span className="text-muted-foreground">Contatos:</span>
@@ -246,14 +600,46 @@ export default function KanbanCobrancaPage() {
                                 </div>
                               )}
                             </div>
-                            <div className="flex gap-1 pt-2">
-                              <Button size="sm" variant="outline" className="flex-1 h-8 text-xs" onClick={(e) => { e.stopPropagation(); navigate(`/chat?phone=${encodeURIComponent(card.clienteTelefone)}`); }}>
-                                <MessageSquare className="w-3 h-3 mr-1" />Chat
-                              </Button>
+                            <div className="flex gap-1 pt-2 relative">
+                              <div className="flex-1 relative">
+                                <Button size="sm" variant="outline" className="flex-1 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); setChatMenuCard(chatMenuCard === card.id ? null : card.id); }}>
+                                  <MessageSquare className="w-3 h-3 mr-1" />Chat
+                                </Button>
+                                {chatMenuCard === card.id && (
+                                  <div className="absolute bottom-full left-0 mb-1 bg-popover border border-border rounded-lg shadow-lg z-50 w-56 p-1" onClick={(e) => e.stopPropagation()}>
+                                    <button className="w-full text-left px-3 py-2 text-xs hover:bg-muted rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(card.clienteTelefone))}`); }}>
+                                      <MessageSquare className="w-3.5 h-3.5 text-green-600" />
+                                      <span>WhatsApp Business (sistema)</span>
+                                    </button>
+                                    <button className="w-full text-left px-3 py-2 text-xs hover:bg-muted rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); handleWhatsappDireto(card.clienteTelefone); }}>
+                                      <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
+                                      <span>WhatsApp App / Web</span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                               <Button size="sm" variant="outline" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
                                 <ChevronRight className="w-4 h-4" />
                               </Button>
                             </div>
+                            {/* Contatado: exibir info do contato + botões confirmar/cancelar */}
+                            {card.etapa === 'contatado' && (
+                              <>
+                                {card.observacao && (
+                                  <div className="text-[10px] text-muted-foreground bg-blue-50 dark:bg-blue-900/20 rounded px-2 py-1 mt-1 truncate" title={card.observacao}>
+                                    {card.observacao}
+                                  </div>
+                                )}
+                                <div className="flex gap-1 pt-1">
+                                  <Button size="sm" className="flex-1 h-7 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={(e) => { e.stopPropagation(); handleAbrirNegociacao(card); }}>
+                                    <HandshakeIcon className="w-3 h-3 mr-1" />Acordo + Pix
+                                  </Button>
+                                  <Button size="sm" variant="destructive" className="flex-1 h-7 text-xs" onClick={(e) => { e.stopPropagation(); handleCancelarContato(card); }}>
+                                    <XCircle className="w-3 h-3 mr-1" />Vencido
+                                  </Button>
+                                </div>
+                              </>
+                            )}
                           </div>
                         </CardContent>
                       </Card>
@@ -350,6 +736,79 @@ export default function KanbanCobrancaPage() {
                   </div>
                 )}
               </div>
+              {/* ── Empréstimos do Cliente ─────────────────────── */}
+              {(() => {
+                const emps = emprestimosByCliente.get(selectedCard.clienteId) ?? [];
+                if (emps.length === 0) return null;
+                const statusBadge = (s: string) => {
+                  const m: Record<string, { label: string; cls: string }> = {
+                    ativo: { label: 'Ativo', cls: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
+                    quitado: { label: 'Quitado', cls: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
+                    inadimplente: { label: 'Inadimplente', cls: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
+                  };
+                  const c = m[s] || { label: s, cls: '' };
+                  return <Badge className={c.cls}>{c.label}</Badge>;
+                };
+                return (
+                  <div className="space-y-2 border-t pt-3">
+                    <div className="flex items-center gap-2">
+                      <Banknote className="w-4 h-4 text-muted-foreground" />
+                      <label className="text-sm font-medium text-foreground">Empréstimos ({emps.length})</label>
+                    </div>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {emps.map((emp) => (
+                        <div key={emp.id} className="bg-muted/50 rounded-lg p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-semibold text-foreground">{formatCurrency(emp.valor)}</span>
+                            {statusBadge(emp.status)}
+                          </div>
+                          <div className="grid grid-cols-2 gap-1 text-xs">
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Parcelas:</span>
+                              <span className="font-medium">{emp.parcelasPagas}/{emp.parcelas}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Juros:</span>
+                              <span className="font-medium">{emp.taxaJuros}% {emp.tipoJuros === 'mensal' ? 'a.m.' : emp.tipoJuros === 'semanal' ? 'a.s.' : 'a.d.'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Parcela:</span>
+                              <span className="font-medium">{formatCurrency(emp.valorParcela)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Venc.:</span>
+                              <span className="font-medium">{new Date(emp.proximoVencimento).toLocaleDateString('pt-BR')}</span>
+                            </div>
+                          </div>
+                          {(emp.status === 'ativo' || emp.status === 'inadimplente') && (
+                            <div className="flex gap-1 pt-1">
+                              {emp.status === 'ativo' && (
+                                <Button size="sm" variant="outline" className="flex-1 h-7 text-xs text-red-600 border-red-200 hover:bg-red-50" onClick={() => {
+                                  updateEmprestimo.mutate({ id: emp.id, data: { status: 'inadimplente' } }, {
+                                    onSuccess: () => toast.success('Empréstimo marcado como inadimplente'),
+                                    onError: (err) => toast.error(`Erro: ${err.message}`),
+                                  });
+                                }}>
+                                  <AlertOctagon className="w-3 h-3 mr-1" />Inadimplente
+                                </Button>
+                              )}
+                              <Button size="sm" variant="outline" className="flex-1 h-7 text-xs text-green-600 border-green-200 hover:bg-green-50" onClick={() => {
+                                quitarEmprestimo.mutate({ id: emp.id, totalParcelas: emp.parcelas }, {
+                                  onSuccess: () => toast.success('Empréstimo quitado!'),
+                                  onError: (err) => toast.error(`Erro: ${err.message}`),
+                                });
+                              }}>
+                                <CheckCircle2 className="w-3 h-3 mr-1" />Quitar
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="space-y-2 border-t pt-3">
                 <label className="text-sm font-medium text-foreground">Registrar contato</label>
                 <Textarea placeholder="Observação sobre o contato..." value={contatoObs} onChange={(e) => setContatoObs(e.target.value)} rows={2} />
@@ -359,16 +818,231 @@ export default function KanbanCobrancaPage() {
                 </Button>
               </div>
               <div className="flex gap-2 pt-2">
-                <Button className="flex-1" variant="outline" onClick={() => navigate(`/chat?phone=${encodeURIComponent(selectedCard.clienteTelefone)}`)}><MessageSquare className="w-4 h-4 mr-2" />Chat</Button>
+                <Button className="flex-1" variant="outline" onClick={() => navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(selectedCard.clienteTelefone))}`)}><MessageSquare className="w-4 h-4 mr-2" />Chat</Button>
                 <Button className="flex-1" variant="outline" onClick={() => window.open(`tel:${selectedCard.clienteTelefone}`, '_self')}><Phone className="w-4 h-4 mr-2" />Ligar</Button>
                 <Button className="flex-1 bg-secondary hover:bg-secondary/90" onClick={() => {
-                  updateCard.mutate({ id: selectedCard.id, updates: { etapa: 'negociacao' } }, {
-                    onSuccess: () => { toast.success('Enviado para negociação'); setSelectedCard(null); },
-                  });
+                  handleAbrirNegociacao(selectedCard);
+                  setSelectedCard(null);
                 }}>
                   <HandshakeIcon className="w-4 h-4 mr-2" />Negociar
                 </Button>
               </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Modal de Negociação ─────────────────────────── */}
+      <Dialog open={showNegociacao} onOpenChange={(open) => { if (!open) { setShowNegociacao(false); setNegociacaoCard(null); setNegCobrancaCriada(null); } }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3">
+              <HandshakeIcon className="w-6 h-6 text-orange-500" />
+              <div>
+                <div className="text-foreground">Negociação — {negociacaoCard?.clienteNome}</div>
+                <div className="text-sm text-muted-foreground font-normal">
+                  Dívida: {negociacaoCard ? formatCurrency(negociacaoCard.valorDivida) : ''} · {negociacaoCard?.diasAtraso || 0} dias em atraso
+                </div>
+              </div>
+            </DialogTitle>
+          </DialogHeader>
+          {negociacaoCard && (
+            <div className="space-y-4">
+              {/* ── Valor Acordado + Gerar Pix ─────────────── */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium flex items-center gap-2">
+                  <Banknote className="w-4 h-4 text-muted-foreground" />
+                  Valor Acordado (R$)
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0,00"
+                    value={negValorAcordado}
+                    onChange={(e) => setNegValorAcordado(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    disabled={criarCobrancaWoovi.isPending || !negValorAcordado || Number(negValorAcordado) <= 0}
+                    onClick={() => handleGerarPix(negociacaoCard)}
+                    className="whitespace-nowrap"
+                  >
+                    {criarCobrancaWoovi.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Banknote className="w-4 h-4 mr-2" />}
+                    Gerar Pix (24h)
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Gera cobrança Pix via Woovi com expiração de 24h. Ao pagar, o sistema atualiza automaticamente.
+                </p>
+              </div>
+
+              {/* ── Cobrança Pix Gerada ────────────────────── */}
+              {negCobrancaCriada && (
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-3 space-y-3">
+                  <div className="text-sm font-medium text-green-800 dark:text-green-300 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Cobrança Pix gerada — expira em 24h
+                  </div>
+                  {negCobrancaCriada.qrCodeImage && (
+                    <div className="flex justify-center">
+                      <img src={negCobrancaCriada.qrCodeImage} alt="QR Code Pix" className="w-40 h-40 rounded" />
+                    </div>
+                  )}
+                  {negCobrancaCriada.paymentLink && (
+                    <div className="flex gap-2">
+                      <Input value={negCobrancaCriada.paymentLink} readOnly className="text-xs flex-1" />
+                      <Button size="sm" variant="outline" onClick={() => {
+                        navigator.clipboard.writeText(negCobrancaCriada.paymentLink!);
+                        toast.success('Link copiado!');
+                      }}>
+                        Copiar
+                      </Button>
+                    </div>
+                  )}
+                  {negCobrancaCriada.brCode && (
+                    <Button size="sm" variant="ghost" className="w-full text-xs" onClick={() => {
+                      navigator.clipboard.writeText(negCobrancaCriada.brCode!);
+                      toast.success('Código Pix Copia e Cola copiado!');
+                    }}>
+                      Copiar código Pix Copia e Cola
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {/* Template selector */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-muted-foreground" />
+                  Template de Mensagem
+                </label>
+                <Select value={negTemplateId} onValueChange={(v) => handleAplicarTemplate(v, negociacaoCard)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecionar template..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allTemplates.length === 0 && (
+                      <SelectItem value="_none" disabled>Nenhum template cadastrado</SelectItem>
+                    )}
+                    {allTemplates.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        <span className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[10px] px-1">{t.categoria}</Badge>
+                          {t.nome}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  Variáveis: {'{nome}'}, {'{valor}'}, {'{dias_atraso}'}, {'{valor_acordado}'}, {'{link_pix}'}
+                </p>
+              </div>
+
+              {/* Mensagem */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Mensagem</label>
+                <Textarea
+                  rows={5}
+                  placeholder="Escreva a mensagem de negociação ou selecione um template acima..."
+                  value={negMsg}
+                  onChange={(e) => setNegMsg(e.target.value)}
+                />
+              </div>
+
+              {/* Instância selector */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Enviar via instância</label>
+                {instanciasConectadas.length === 0 ? (
+                  <p className="text-xs text-red-500">Nenhuma instância WhatsApp conectada</p>
+                ) : (
+                  <Select value={negInstanciaId} onValueChange={setNegInstanciaId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecionar instância..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {instanciasConectadas.map((inst) => (
+                        <SelectItem key={inst.id} value={inst.id}>
+                          {inst.instance_name} ({inst.phone_number || 'sem número'})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              {/* Ações */}
+              <div className="space-y-2 pt-2">
+                {/* ── Ação principal: Fechar Acordo + Pix + WhatsApp ── */}
+                <Button
+                  className="w-full bg-green-600 hover:bg-green-700 text-white"
+                  disabled={criarCobrancaWoovi.isPending || enviarWhatsapp.isPending || !negInstanciaId || !negValorAcordado || Number(negValorAcordado) <= 0}
+                  onClick={() => handleFecharAcordoComPix(negociacaoCard)}
+                >
+                  {(criarCobrancaWoovi.isPending || enviarWhatsapp.isPending) ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCheck className="w-4 h-4 mr-2" />}
+                  Fechar Acordo — Gerar Pix + Enviar WhatsApp
+                </Button>
+                <p className="text-[10px] text-muted-foreground text-center">
+                  Gera cobrança Pix (24h), envia mensagem com link ao cliente e move o card para Acordos
+                </p>
+
+                <div className="relative py-2">
+                  <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
+                  <div className="relative flex justify-center text-xs"><span className="bg-background px-2 text-muted-foreground">ou envie manualmente</span></div>
+                </div>
+
+                {/* ── Ações manuais ── */}
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1"
+                    variant="outline"
+                    disabled={enviarWhatsapp.isPending || !negInstanciaId || !negMsg.trim()}
+                    onClick={() => handleEnviarWhatsappCobranca(negociacaoCard, negInstanciaId, negMsg)}
+                  >
+                    {enviarWhatsapp.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
+                    Enviar Mensagem
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      handleWhatsappDireto(negociacaoCard.clienteTelefone, negMsg);
+                      const obs = `Mensagem enviada via WhatsApp app/web por ${user?.name || 'Sistema'}`;
+                      updateCard.mutate({ id: negociacaoCard.id, updates: {
+                        etapa: 'contatado',
+                        tentativas_contato: negociacaoCard.tentativasContato + 1,
+                        ultimo_contato: new Date().toISOString(),
+                        observacao: obs,
+                      }});
+                      toast.success('WhatsApp aberto — card movido para Contatado');
+                      setShowNegociacao(false);
+                      setNegociacaoCard(null);
+                      setNegCobrancaCriada(null);
+                    }}
+                  >
+                    <ExternalLink className="w-4 h-4 mr-2" />App/Web
+                  </Button>
+                </div>
+              </div>
+
+              {/* Mover para negociação sem enviar */}
+              <Button
+                variant="ghost"
+                className="w-full text-muted-foreground text-xs"
+                onClick={() => {
+                  updateCard.mutate({ id: negociacaoCard.id, updates: { etapa: 'negociacao' } }, {
+                    onSuccess: () => {
+                      toast.success('Card movido para Negociação');
+                      setShowNegociacao(false);
+                      setNegociacaoCard(null);
+                    },
+                  });
+                }}
+              >
+                Apenas mover para Negociação (sem enviar mensagem)
+              </Button>
             </div>
           )}
         </DialogContent>

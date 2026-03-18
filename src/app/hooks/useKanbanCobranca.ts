@@ -139,3 +139,15 @@ export function useKanbanStats() {
     queryFn: () => kanbanService.getKanbanStats(),
   });
 }
+
+/** Sincronizar kanban com empréstimos/parcelas */
+export function useSyncCobrancas() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => kanbanService.syncCobrancas(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
+      queryClient.invalidateQueries({ queryKey: [STATS_KEY] });
+    },
+  });
+}

@@ -11,8 +11,8 @@
  * @route /clientes
  * @access Protegido — todos os perfis autenticados
  */
-import { useState, useCallback } from 'react';
-import { useNavigate } from 'react-router';
+import { useState, useCallback, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -47,6 +47,7 @@ const EMPTY_FORM: ClienteFormData = {
 
 export default function ClientesPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
@@ -62,6 +63,17 @@ export default function ClientesPage() {
   const { data: parcelasCliente = [], isLoading: loadingParcelas } = useParcelasByCliente(selectedClient?.id);
   const createCliente = useCreateCliente();
   const updateCliente = useUpdateCliente();
+
+  // Abre ficha pelo param ?clienteId=
+  useEffect(() => {
+    const clienteId = searchParams.get('clienteId');
+    if (!clienteId || clientes.length === 0) return;
+    const found = clientes.find((c) => c.id === clienteId);
+    if (found) {
+      setSelectedClient(found);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, clientes]);
 
   const isSaving = createCliente.isPending || updateCliente.isPending;
 

@@ -81,6 +81,51 @@ export async function updateEmprestimo(id: string, updates: EmprestimoUpdate): P
   return data;
 }
 
+/** Quitar empréstimo: atualiza status, dá baixa em todas as parcelas pendentes e remove card do kanban */
+export async function quitarEmprestimo(id: string, totalParcelas: number): Promise<void> {
+  // 1) Marcar empréstimo como quitado
+  const { error: empErr } = await supabase
+    .from('emprestimos')
+    .update({ status: 'quitado', parcelas_pagas: totalParcelas })
+    .eq('id', id);
+  if (empErr) throw new Error(empErr.message);
+
+  // 2) Dar baixa em todas as parcelas pendentes/vencidas deste empréstimo
+  const hoje = new Date().toISOString().slice(0, 10);
+  const { error: parcErr } = await supabase
+    .from('parcelas')
+    .update({ status: 'paga', data_pagamento: hoje })
+    .eq('emprestimo_id', id)
+    .in('status', ['pendente', 'vencida']);
+  if (parcErr) throw new Error(parcErr.message);
+
+  // 3) Buscar cliente_id para remover card do kanban
+  const { data: emp } = await supabase
+    .from('emprestimos')
+    .select('cliente_id')
+    .eq('id', id)
+    .single();
+
+  if (emp?.cliente_id) {
+    // Verificar se o cliente tem outros empréstimos ativos/inadimplentes
+    const { data: outros } = await supabase
+      .from('emprestimos')
+      .select('id')
+      .eq('cliente_id', emp.cliente_id)
+      .in('status', ['ativo', 'inadimplente'])
+      .neq('id', id)
+      .limit(1);
+
+    // Se não tem mais dívidas, remover card do kanban
+    if (!outros || outros.length === 0) {
+      await supabase
+        .from('kanban_cobranca')
+        .delete()
+        .eq('cliente_id', emp.cliente_id);
+    }
+  }
+}
+
 /** Excluir empréstimo */
 export async function deleteEmprestimo(id: string): Promise<void> {
 

@@ -12,7 +12,7 @@
  * @access Protegido — todos os perfis autenticados
  */
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -29,13 +29,14 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { useEmprestimos, useCreateEmprestimo, useUpdateEmprestimo } from '../hooks/useEmprestimos';
+import { useEmprestimos, useCreateEmprestimo, useUpdateEmprestimo, useQuitarEmprestimo } from '../hooks/useEmprestimos';
 import { useClientes, useIndicados, useUpdateCliente } from '../hooks/useClientes';
 import { useParcelasByEmprestimo, useUpdateParcela, useRegistrarPagamento } from '../hooks/useParcelas';
 import type { Emprestimo, Parcela } from '../lib/view-types';
 
 export default function EmprestimosAtivosPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedEmprestimo, setSelectedEmprestimo] = useState<Emprestimo | null>(null);
   const [filtroStatus, setFiltroStatus] = useState('todos');
   const [searchTerm, setSearchTerm] = useState('');
@@ -78,7 +79,19 @@ export default function EmprestimosAtivosPage() {
   const { data: clientes = [] } = useClientes();
   const createMutation = useCreateEmprestimo();
   const updateMutation = useUpdateEmprestimo();
+  const quitarMutation = useQuitarEmprestimo();
   const updateClienteMutation = useUpdateCliente();
+
+  // Abre empréstimo pelo param ?emprestimoId=
+  useEffect(() => {
+    const id = searchParams.get('emprestimoId');
+    if (!id || emprestimos.length === 0) return;
+    const found = emprestimos.find((e) => e.id === id);
+    if (found) {
+      setSelectedEmprestimo(found);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, emprestimos]);
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -230,8 +243,8 @@ export default function EmprestimosAtivosPage() {
   };
 
   const handleMarcarQuitado = (emp: Emprestimo) => {
-    updateMutation.mutate(
-      { id: emp.id, data: { status: 'quitado', parcelas_pagas: emp.parcelas } },
+    quitarMutation.mutate(
+      { id: emp.id, totalParcelas: emp.parcelas },
       {
         onSuccess: () => {
           toast.success(`Empréstimo de ${emp.clienteNome} quitado com sucesso!`);

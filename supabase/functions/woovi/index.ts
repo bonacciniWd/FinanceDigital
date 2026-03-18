@@ -61,8 +61,11 @@ async function wooviRequest({ method, path, body }: WooviRequestInit) {
     const data = await response.json();
 
     if (!response.ok) {
+      const errMsg = data?.error || data?.message || data?.errors?.[0]?.message || '';
       throw new Error(
-        data?.error || data?.message || `Woovi API error: ${response.status}`
+        errMsg
+          ? `Woovi API (${response.status}): ${errMsg}`
+          : `Woovi API error: ${response.status} — verifique se WOOVI_APP_ID está correto e a conta está ativa`
       );
     }
 
@@ -579,12 +582,11 @@ Deno.serve(async (req: Request) => {
     }
   } catch (err) {
     console.error("Erro na Edge Function woovi:", err);
-    return jsonResponse(
-      {
-        error: err instanceof Error ? err.message : "Erro interno",
-        success: false,
-      },
-      500
-    );
+    // Retornar 200 com success:false para que o Supabase client repasse o body
+    // ao frontend (status 5xx faz o client descartar o body e mostrar erro genérico).
+    return jsonResponse({
+      error: err instanceof Error ? err.message : "Erro interno",
+      success: false,
+    });
   }
 });

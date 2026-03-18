@@ -114,7 +114,13 @@ Deno.serve(async (req: Request) => {
     // A Evolution API aplica as regras de formatação de número (ex: Brasil remove o 9º dígito
     // em DDDs < 31 ou quando o número começa com dígito < 7). Passar o JID completo impede
     // esse ajuste automático e causa erro "número não encontrado".
-    const formattedNumber = telefone.replace(/@.*$/, "").replace(/\D/g, "");
+    let formattedNumber = telefone.replace(/@.*$/, "").replace(/\D/g, "");
+
+    // Garantir DDI 55 (Brasil): números com 10-11 dígitos (DDD + telefone) sem prefixo 55
+    // precisam receber o código do país para serem encontrados no WhatsApp.
+    if (formattedNumber.length >= 10 && formattedNumber.length <= 11 && !formattedNumber.startsWith("55")) {
+      formattedNumber = "55" + formattedNumber;
+    }
     // @lid = ID interno do WhatsApp (multi-device). A Evolution API v1.x rejeita envio
     // direto para @lid (valida existência do número), mas permitimos a tentativa para que
     // o erro seja tratado de forma clara ao invés de silenciosamente bloqueado.
