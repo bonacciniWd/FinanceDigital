@@ -22,14 +22,26 @@ VALUES ('chat-audio', 'chat-audio', true)
 ON CONFLICT (id) DO NOTHING;
 
 -- RLS para o bucket chat-audio
-CREATE POLICY "Authenticated can upload chat audio"
-ON storage.objects FOR INSERT TO authenticated
-WITH CHECK (bucket_id = 'chat-audio');
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated can upload chat audio' AND tablename = 'objects') THEN
+    CREATE POLICY "Authenticated can upload chat audio"
+    ON storage.objects FOR INSERT TO authenticated
+    WITH CHECK (bucket_id = 'chat-audio');
+  END IF;
+END $$;
 
-CREATE POLICY "Authenticated can update chat audio"
-ON storage.objects FOR UPDATE TO authenticated
-USING (bucket_id = 'chat-audio');
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated can update chat audio' AND tablename = 'objects') THEN
+    CREATE POLICY "Authenticated can update chat audio"
+    ON storage.objects FOR UPDATE TO authenticated
+    USING (bucket_id = 'chat-audio');
+  END IF;
+END $$;
 
-CREATE POLICY "Public read chat audio"
-ON storage.objects FOR SELECT TO public
-USING (bucket_id = 'chat-audio');
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Public read chat audio' AND tablename = 'objects') THEN
+    CREATE POLICY "Public read chat audio"
+    ON storage.objects FOR SELECT TO public
+    USING (bucket_id = 'chat-audio');
+  END IF;
+END $$;

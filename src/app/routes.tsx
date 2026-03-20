@@ -28,7 +28,6 @@ import RedeIndicacoesPage from './pages/RedeIndicacoesPage';
 import BonusComissoesPage from './pages/BonusComissoesPage';
 import GruposBloqueadosPage from './pages/GruposBloqueadosPage';
 import IndicarNovoPage from './pages/IndicarNovoPage';
-import ChatPage from './pages/ChatPage';
 import WhatsAppPage from './pages/WhatsAppPage';
 import FluxosChatPage from './pages/FluxosChatPage';
 import FluxoEditorPage from './pages/FluxoEditorPage';
@@ -48,6 +47,7 @@ import MonitoramentoAtividadePage from './pages/MonitoramentoAtividadePage';
 import ProdutividadePage from './pages/ProdutividadePage';
 import ClienteAreaPage from './pages/ClienteAreaPage';
 import PagamentosWooviPage from './pages/PagamentosWooviPage';
+import VerifyIdentityPage from './pages/VerifyIdentityPage';
 
 export const router = createBrowserRouter([
   {
@@ -74,6 +74,11 @@ export const router = createBrowserRouter([
         <FluxoEditorPage />
       </ProtectedRoute>
     ),
+  },
+  // Verificação de identidade — standalone, acesso via magic link
+  {
+    path: '/verify-identity',
+    element: <VerifyIdentityPage />,
   },
   {
     path: '/',
@@ -106,7 +111,6 @@ export const router = createBrowserRouter([
       { path: 'rede/indicar', element: <IndicarNovoPage /> },
 
       // Comunicação
-      { path: 'chat', element: <ChatPage /> },
       { path: 'whatsapp', element: <WhatsAppPage /> },
       { path: 'chat/fluxos', element: <FluxosChatPage /> },
       { path: 'chat/templates', element: <TemplatesMensagensPage /> },

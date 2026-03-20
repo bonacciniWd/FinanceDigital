@@ -903,7 +903,7 @@ function RedeFlow() {
                 <Button size="sm" variant="outline" className="flex-1" onClick={() => { setSelectedMembro(null); navigate('/clientes'); }}>
                   Ver no Clientes
                 </Button>
-                <Button size="sm" variant="outline" className="flex-1" onClick={() => { setSelectedMembro(null); navigate(`/chat?phone=${encodeURIComponent(selectedMembro.clienteTelefone)}`); }}>
+                <Button size="sm" variant="outline" className="flex-1" onClick={() => { setSelectedMembro(null); navigate(`/whatsapp?telefone=${encodeURIComponent(selectedMembro.clienteTelefone)}`); }}>
                   Enviar Mensagem
                 </Button>
               </div>

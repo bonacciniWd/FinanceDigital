@@ -11,15 +11,18 @@
  * @route /kanban/analise
  * @access Protegido — perfis admin, gerência
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
-import { Search, Loader2, AlertCircle, CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
+import { Alert, AlertDescription } from '../components/ui/alert';
+import { Search, Loader2, AlertCircle, CheckCircle, XCircle, Clock, FileText, Shield, Bell } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAnalises, useUpdateAnalise } from '../hooks/useAnaliseCredito';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
+import AnaliseDetalhadaModal from '../components/AnaliseDetalhadaModal';
 import type { AnaliseCredito } from '../lib/view-types';
 import type { AnaliseCreditoStatus } from '../lib/database.types';
 
@@ -38,12 +41,51 @@ const COLUMNS: ColumnDef[] = [
 ];
 
 export default function KanbanAnalisePage() {
-  const [selectedAnalise, setSelectedAnalise] = useState<AnaliseCredito | null>(null);
   const [busca, setBusca] = useState('');
+  const [selectedAnalise, setSelectedAnalise] = useState<AnaliseCredito | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
-
   const { data: allAnalises = [], isLoading, error } = useAnalises();
   const updateAnalise = useUpdateAnalise();
+  const { user } = useAuth();
+
+  // ── Contagem de verificações pendentes com mídia ─────────
+  const [pendingVerifCount, setPendingVerifCount] = useState(0);
+  useEffect(() => {
+    async function fetchPending() {
+      const { count } = await supabase
+        .from('identity_verifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending')
+        .not('video_url', 'is', null);
+      setPendingVerifCount(count ?? 0);
+    }
+    fetchPending();
+    // Refresh every 30s
+    const interval = setInterval(fetchPending, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ── Enviar Link de Verificação via WhatsApp ──────────────
+  const [sendingLink, setSendingLink] = useState(false);
+  const handleSendMagicLink = async (analiseId: string) => {
+    if (!user || sendingLink) return;
+    setSendingLink(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-verification-link', {
+        body: { analise_id: analiseId },
+      });
+      if (error) throw error;
+      if (data?.success) {
+        toast.success(data.message || 'Link de verificação enviado via WhatsApp!');
+      } else {
+        toast.error(data?.error || 'Erro ao enviar link de verificação.');
+      }
+    } catch (err: any) {
+      toast.error(`Erro ao enviar link: ${err.message}`);
+    } finally {
+      setSendingLink(false);
+    }
+  };
 
   const formatCurrency = (v: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
@@ -125,6 +167,17 @@ export default function KanbanAnalisePage() {
           <Input placeholder="Buscar por nome ou CPF..." className="pl-10" value={busca} onChange={(e) => setBusca(e.target.value)} />
         </div>
       </div>
+
+      {/* Alerta de verificações pendentes */}
+      {pendingVerifCount > 0 && (
+        <Alert className="border-amber-300 bg-amber-50 dark:bg-amber-950/30">
+          <Bell className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-800 dark:text-amber-300 flex items-center gap-2">
+            <strong>{pendingVerifCount}</strong> verificação(ões) de identidade aguardando revisão.
+            Clique em um card e vá na aba &quot;Verificação&quot; para analisar.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {isLoading ? (
         <div className="flex items-center justify-center h-64">
@@ -234,78 +287,13 @@ export default function KanbanAnalisePage() {
         </Card>
       </div>
 
-      {/* Modal de Detalhes */}
-      <Dialog open={!!selectedAnalise} onOpenChange={() => setSelectedAnalise(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="text-foreground">{selectedAnalise?.clienteNome}</DialogTitle>
-          </DialogHeader>
-          {selectedAnalise && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <span className="text-muted-foreground block">CPF</span>
-                  <span className="font-medium text-foreground">{selectedAnalise.cpf}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block">Valor Solicitado</span>
-                  <span className="font-medium text-foreground">{formatCurrency(selectedAnalise.valorSolicitado)}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block">Renda Mensal</span>
-                  <span className="font-medium text-foreground">{formatCurrency(selectedAnalise.rendaMensal)}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block">Score Serasa</span>
-                  <span className={`font-bold ${getScoreColor(selectedAnalise.scoreSerasa)}`}>{selectedAnalise.scoreSerasa}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block">Score Interno</span>
-                  <span className={`font-bold ${getScoreColor(selectedAnalise.scoreInterno)}`}>{selectedAnalise.scoreInterno}</span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block">Data</span>
-                  <span className="font-medium text-foreground">{new Date(selectedAnalise.dataSolicitacao).toLocaleDateString('pt-BR')}</span>
-                </div>
-              </div>
-              {selectedAnalise.motivo && (
-                <div className="p-3 bg-muted rounded-lg text-sm">
-                  <strong className="text-foreground">Motivo:</strong>
-                  <p className="text-muted-foreground mt-1">{selectedAnalise.motivo}</p>
-                </div>
-              )}
-              <div className="flex gap-2 pt-2">
-                <Button
-                  className="flex-1"
-                  variant="outline"
-                  disabled={selectedAnalise.status === 'aprovado'}
-                  onClick={() => {
-                    updateAnalise.mutate(
-                      { id: selectedAnalise.id, updates: { status: 'aprovado' } },
-                      { onSuccess: () => { toast.success('Análise aprovada'); setSelectedAnalise(null); } }
-                    );
-                  }}
-                >
-                  <CheckCircle className="w-4 h-4 mr-2" />Aprovar
-                </Button>
-                <Button
-                  className="flex-1"
-                  variant="destructive"
-                  disabled={selectedAnalise.status === 'recusado'}
-                  onClick={() => {
-                    updateAnalise.mutate(
-                      { id: selectedAnalise.id, updates: { status: 'recusado' } },
-                      { onSuccess: () => { toast.success('Análise recusada'); setSelectedAnalise(null); } }
-                    );
-                  }}
-                >
-                  <XCircle className="w-4 h-4 mr-2" />Recusar
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Modal de Detalhes (Verificação de Identidade integrada) */}
+      <AnaliseDetalhadaModal
+        analise={selectedAnalise}
+        open={!!selectedAnalise}
+        onClose={() => setSelectedAnalise(null)}
+        onSendMagicLink={handleSendMagicLink}
+      />
     </div>
   );
 }

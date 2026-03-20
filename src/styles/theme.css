@@ -1,5 +1,9 @@
 @custom-variant dark (&:is(.dark *));
 
+html {
+  zoom: 0.9;
+}
+
 :root {
   --font-size: 14px;
   /* Liquid Glass — Light Theme */

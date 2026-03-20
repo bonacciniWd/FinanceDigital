@@ -21,11 +21,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
 import { Skeleton } from '../components/ui/skeleton';
-import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus, Shield, Send } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useAnalises, useCreateAnalise, useUpdateAnalise } from '../hooks/useAnaliseCredito';
 import { useClientes } from '../hooks/useClientes';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
+import AnaliseDetalhadaModal from '../components/AnaliseDetalhadaModal';
 import type { AnaliseCredito } from '../lib/view-types';
 
 export default function AnaliseCreditoPage() {
@@ -39,6 +42,7 @@ export default function AnaliseCreditoPage() {
 
   // ── Form nova análise ────────────────────────────────────
   const [formNova, setFormNova] = useState({
+    clienteId: '' as string,
     clienteNome: '',
     cpf: '',
     valorSolicitado: '',
@@ -53,6 +57,29 @@ export default function AnaliseCreditoPage() {
   const createMutation = useCreateAnalise();
   const updateMutation = useUpdateAnalise();
   const { data: clientes } = useClientes();
+  const { user } = useAuth();
+
+  // ── Enviar Link de Verificação via WhatsApp ──────────────
+  const [sendingLink, setSendingLink] = useState(false);
+  const handleSendMagicLink = async (analiseId: string) => {
+    if (!user || sendingLink) return;
+    setSendingLink(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-verification-link', {
+        body: { analise_id: analiseId },
+      });
+      if (error) throw error;
+      if (data?.success) {
+        toast.success(data.message || 'Link de verificação enviado via WhatsApp!');
+      } else {
+        toast.error(data?.error || 'Erro ao enviar link de verificação.');
+      }
+    } catch (err: any) {
+      toast.error(`Erro ao enviar link: ${err.message}`);
+    } finally {
+      setSendingLink(false);
+    }
+  };
 
   const clientesFiltrados = useMemo(() => {
     if (!clientes || !buscaCliente.trim()) return [];
@@ -156,6 +183,7 @@ export default function AnaliseCreditoPage() {
     }
     createMutation.mutate(
       {
+        cliente_id: formNova.clienteId || null,
         cliente_nome: formNova.clienteNome,
         cpf: formNova.cpf,
         valor_solicitado: parseFloat(formNova.valorSolicitado),
@@ -166,7 +194,7 @@ export default function AnaliseCreditoPage() {
         onSuccess: () => {
           toast.success('Análise criada com sucesso!');
           setShowNovaAnalise(false);
-          setFormNova({ clienteNome: '', cpf: '', valorSolicitado: '', rendaMensal: '', scoreSerasa: '' });
+          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', rendaMensal: '', scoreSerasa: '' });
           setBuscaCliente('');
         },
         onError: (err) => toast.error(`Erro ao criar análise: ${err.message}`),
@@ -339,6 +367,18 @@ export default function AnaliseCreditoPage() {
                             Iniciar
                           </Button>
                         )}
+                        {(a.status === 'pendente' || a.status === 'em_analise') && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-purple-600"
+                            onClick={() => handleSendMagicLink(a.id)}
+                            disabled={sendingLink}
+                            title="Solicitar verificação de identidade"
+                          >
+                            <Shield className="w-4 h-4" />
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -349,78 +389,13 @@ export default function AnaliseCreditoPage() {
         </CardContent>
       </Card>
 
-      {/* Modal Detalhes */}
-      <Dialog open={!!selectedAnalise} onOpenChange={() => setSelectedAnalise(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Análise — {selectedAnalise?.clienteNome}</DialogTitle>
-          </DialogHeader>
-          {selectedAnalise && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <span className="text-sm text-muted-foreground">CPF</span>
-                  <p className="font-medium">{selectedAnalise.cpf}</p>
-                </div>
-                <div>
-                  <span className="text-sm text-muted-foreground">Renda Mensal</span>
-                  <p className="font-medium">{formatCurrency(selectedAnalise.rendaMensal)}</p>
-                </div>
-                <div>
-                  <span className="text-sm text-muted-foreground">Valor Solicitado</span>
-                  <p className="font-medium">{formatCurrency(selectedAnalise.valorSolicitado)}</p>
-                </div>
-                <div>
-                  <span className="text-sm text-muted-foreground">Comprometimento</span>
-                  <p className="font-medium">
-                    {((selectedAnalise.valorSolicitado / 12) / selectedAnalise.rendaMensal * 100).toFixed(1)}%
-                  </p>
-                </div>
-                <div>
-                  <span className="text-sm text-muted-foreground">Score Serasa</span>
-                  <p className={`font-bold text-lg ${selectedAnalise.scoreSerasa >= 700 ? 'text-green-600' : selectedAnalise.scoreSerasa >= 500 ? 'text-yellow-600' : 'text-red-600'}`}>
-                    {selectedAnalise.scoreSerasa}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-sm text-muted-foreground">Status</span>
-                  <div className="mt-1">{getStatusBadge(selectedAnalise.status)}</div>
-                </div>
-              </div>
-
-              {selectedAnalise.motivo && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-                  <p className="text-sm text-red-800 dark:text-red-400">
-                    <strong>Motivo da Recusa:</strong> {selectedAnalise.motivo}
-                  </p>
-                </div>
-              )}
-
-              {(selectedAnalise.status === 'pendente' || selectedAnalise.status === 'em_analise') && (
-                <div className="flex gap-3">
-                  <Button
-                    className="flex-1 bg-green-600 hover:bg-green-700"
-                    onClick={() => handleAprovar(selectedAnalise)}
-                    disabled={updateMutation.isPending}
-                  >
-                    <CheckCircle className="w-4 h-4 mr-2" />
-                    Aprovar
-                  </Button>
-                  <Button
-                    className="flex-1"
-                    variant="destructive"
-                    onClick={() => handleIniciarRecusa(selectedAnalise)}
-                    disabled={updateMutation.isPending}
-                  >
-                    <XCircle className="w-4 h-4 mr-2" />
-                    Recusar
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Modal Detalhes (com verificação de identidade) */}
+      <AnaliseDetalhadaModal
+        analise={selectedAnalise}
+        open={!!selectedAnalise}
+        onClose={() => setSelectedAnalise(null)}
+        onSendMagicLink={handleSendMagicLink}
+      />
 
       {/* Modal Recusa com Motivo */}
       <Dialog open={showRecusaDialog} onOpenChange={setShowRecusaDialog}>
@@ -487,7 +462,7 @@ export default function AnaliseCreditoPage() {
                       type="button"
                       className="w-full text-left px-3 py-2 text-sm hover:bg-accent flex items-center justify-between"
                       onClick={() => {
-                        setFormNova({ ...formNova, clienteNome: c.nome, cpf: c.cpf ?? '' });
+                        setFormNova({ ...formNova, clienteId: c.id, clienteNome: c.nome, cpf: c.cpf ?? '' });
                         setBuscaCliente('');
                         setShowClienteResults(false);
                       }}

@@ -189,6 +189,63 @@ export interface AnaliseCredito {
 }
 
 /**
+ * Verificação de identidade (view camelCase).
+ * @property analiseId - FK para a análise de crédito correspondente
+ * @property verificationPhrase - Frase que o solicitante deve dizer no vídeo
+ * @property retryCount - Número de tentativas já realizadas (máx. 3)
+ */
+export interface ReferenceContact {
+  name: string;
+  phone: string;
+  relationship: string;
+}
+
+export interface IdentityVerification {
+  id: string;
+  analiseId: string;
+  userId?: string;
+  videoUrl?: string;
+  documentFrontUrl?: string;
+  documentBackUrl?: string;
+  proofOfAddressUrl?: string;
+  residenceVideoUrl?: string;
+  clientAddress?: string;
+  referenceContacts: ReferenceContact[];
+  verificationPhrase: string;
+  status: 'pending' | 'approved' | 'rejected' | 'retry_needed';
+  analyzedBy?: string;
+  analyzedAt?: string;
+  rejectionReason?: string;
+  requiresRetry: boolean;
+  retryCount: number;
+  retryPhrase?: string;
+  magicLinkSentAt?: string;
+  magicLinkExpiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  // Dados da análise (JOIN)
+  clienteNome?: string;
+  cpf?: string;
+  valorSolicitado?: number;
+  rendaMensal?: number;
+  scoreSerasa?: number;
+  analiseStatus?: string;
+}
+
+/**
+ * Log de ação em verificação de identidade (view camelCase).
+ */
+export interface VerificationLog {
+  id: string;
+  verificationId: string;
+  analiseId: string;
+  action: string;
+  performedBy?: string;
+  details: Record<string, unknown>;
+  createdAt: string;
+}
+
+/**
  * Membro da rede de indicações (view camelCase).
  * @property clienteId - ID do cliente na tabela clientes
  * @property indicadoPor - ID do cliente que indicou (null = raiz da rede)

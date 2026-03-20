@@ -19,12 +19,18 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from './ui/select';
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from './ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from './ui/command';
 import { useAuth } from '../contexts/AuthContext';
 import {
   useUsuariosChat,
@@ -41,8 +47,69 @@ import { useClientes } from '../hooks/useClientes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import type { ChatInterno } from '../lib/database.types';
+import Lottie from 'lottie-react';
+
+import Chat from '../assets/animations/chat.json';
 
 type View = 'contacts' | 'chat' | 'atencao';
+
+// ── Combobox pesquisável ──
+function SearchableCombobox({
+  value,
+  onChange,
+  items,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  items: { id: string; label: string; sub?: string }[];
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = items.find((i) => i.id === value);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="w-full h-9 flex items-center justify-between rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm hover:bg-purple-500/40 transition-colors text-left"
+        >
+          <span className="truncate flex-1">
+            {selected ? selected.label : <span className="text-muted-foreground">{placeholder}</span>}
+          </span>
+          <ChevronDown className="w-4 h-4 shrink-0 text-muted-foreground ml-1" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-72 p-0"
+        align="start"
+        side="top"
+        sideOffset={4}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <Command>
+          <CommandInput placeholder="Buscar por nome ou CPF..." className="h-9" />
+          <CommandList className="max-h-52">
+            <CommandEmpty>Nenhum resultado encontrado.</CommandEmpty>
+            <CommandGroup>
+              {items.map((item) => (
+                <CommandItem
+                  key={item.id}
+                  value={`${item.label} ${item.sub ?? ''}`}
+                  onSelect={() => { onChange(item.id); setOpen(false); }}
+                  className="flex flex-col items-start gap-0"
+                >
+                  <span className="font-medium text-sm">{item.label}</span>
+                  {item.sub && <span className="text-[11px] text-muted-foreground">{item.sub}</span>}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 const roleLabel: Record<string, string> = {
   admin: 'Admin',
@@ -460,34 +527,30 @@ export function FloatingChat() {
               </div>
 
               {atencaoTipo === 'cliente' ? (
-                <Select value={atencaoItemId} onValueChange={setAtencaoItemId}>
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="Selecione um cliente..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {clientes.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.nome}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableCombobox
+                  value={atencaoItemId}
+                  onChange={setAtencaoItemId}
+                  placeholder="Selecione um cliente..."
+                  items={clientes.map((c) => ({
+                    id: c.id,
+                    label: c.nome,
+                    sub: [(c as any).cpf, c.telefone].filter(Boolean).join(' · '),
+                  }))}
+                />
               ) : (
-                <Select value={atencaoItemId} onValueChange={setAtencaoItemId}>
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="Selecione um empréstimo..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {emprestimos.map((e) => {
-                      const cn = clientes.find((c) => c.id === e.clienteId)?.nome ?? '';
-                      return (
-                        <SelectItem key={e.id} value={e.id}>
-                          {cn} — R$ {Number(e.valor).toLocaleString('pt-BR')}
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
+                <SearchableCombobox
+                  value={atencaoItemId}
+                  onChange={setAtencaoItemId}
+                  placeholder="Selecione um empréstimo..."
+                  items={emprestimos.map((e) => {
+                    const cli = clientes.find((c) => c.id === e.clienteId);
+                    return {
+                      id: e.id,
+                      label: cli?.nome ?? 'Cliente',
+                      sub: [(cli as any)?.cpf, `R$ ${Number(e.valor).toLocaleString('pt-BR')}`].filter(Boolean).join(' · '),
+                    };
+                  })}
+                />
               )}
 
               {atencaoItemId && (
@@ -528,8 +591,8 @@ export function FloatingChat() {
 
           ) : (
             /* ── Janela de conversa ── */
-            <>
-              <ScrollArea className="flex-1 px-3 py-2">
+            <div className="flex flex-col flex-1 min-h-0">
+              <ScrollArea className="flex-1 min-h-0 px-3 py-2">
                 <div className="space-y-2">
                   {mensagens.length === 0 ? (
                     <p className="text-xs text-muted-foreground text-center py-8">
@@ -545,7 +608,7 @@ export function FloatingChat() {
               </ScrollArea>
 
               {/* Input area */}
-              <div className="p-2 border-t space-y-1.5">
+              <div className="p-2 border-t space-y-1.5 shrink-0">
                 {/* Recording indicator */}
                 {audio.isRecording && (
                   <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-1.5">
@@ -628,7 +691,7 @@ export function FloatingChat() {
                   </div>
                 )}
               </div>
-            </>
+            </div>
           )}
         </div>
       )}
@@ -636,12 +699,16 @@ export function FloatingChat() {
       {/* Botão flutuante */}
       <button
         onClick={() => setOpen(!open)}
-        className="w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center hover:scale-105 active:scale-95 relative"
+        className="w-24 h-24 rounded-full bg-black-800/20 text-primary-foreground shadow-purple-700 shadow-inner hover:shadow-base transition-all duration-200 flex items-center justify-center hover:scale-105 active:scale-95 relative"
       >
         {open ? (
           <ChevronDown className="w-6 h-6" />
         ) : (
-          <MessageCircle className="w-6 h-6" />
+          <Lottie
+            animationData={Chat}
+            loop
+            className="w-24 h-24"
+          />
         )}
         {!open && totalNaoLidas > 0 && (
           <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1">

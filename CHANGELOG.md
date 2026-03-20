@@ -6,6 +6,323 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [7.6.0] — 2026-03-19
+
+### Corrigido — Safari iOS: Upload de Verificação de Identidade
+
+**Problema: WebKitBlobResource error 1 + "new row violates RLS"**
+O Safari iOS faz garbage collection agressivo de Blob backing-data quando o dispositivo está sob pressão de memória.
+Com 2 vídeos + 3 imagens mantidos em estado React ao longo de 7 etapas do wizard, os blobs eram purgados antes do upload final — causando `StorageUnknownError: Load failed`.
+
+**Upload Progressivo** (`VerifyIdentityPage.tsx`)
+- Cada arquivo agora é enviado ao Supabase Storage **imediatamente após captura** — não espera o passo de revisão
+- `uploadToStorage()`: lê o Blob inteiro para `ArrayBuffer` antes de chamar `.upload()` — `ArrayBuffer` vive no heap JS e é imune ao WebKit blob GC
+- Removidas variáveis de estado `videoBlob`, `docFront`, `docBack`, `proofOfAddress`, `residenceVideoBlob`
+- Novo estado `uploadedPaths: { video?, docFront?, docBack?, proofOfAddress?, residenceVideo? }` rastreia paths no storage
+- Novo estado `uploadingFile` para indicadores de loading por etapa
+- `handleSubmit` reduzido a apenas `.update()` no banco + audit log (sem uploads)
+- **Retry automático** com backoff exponencial (3 tentativas, 2s/4s) para redes móveis instáveis
+- Tolerância a "resource already exists" — trata como sucesso e continua
+- `chunksRef.current = []` após criar Blob — libera memória dos chunks imediatamente
+
+**Botões de navegação atualizados**
+- "Próximo" desabilitado até upload concluir (`!uploadedPaths.X || uploadingFile === 'X'`)
+- Spinner "Enviando..." durante upload progressivo em cada etapa
+- "Regravar" desabilitado durante upload
+
+**Storage RLS (Migrations 016-018)**
+- Migration 016: política UPDATE para `anon` em `storage.objects` (bucket `identity-verification`)
+- Migration 017: política DELETE para `anon` em `storage.objects` (necessário para regravar)
+- Migration 018: corrigido conflito entre policy `identity_verif_upload` (migration 012, requeria `authenticated`) e `identity_verif_anon_upload` (migration 014). Dropada policy restritiva e recriada sem filtro de role
+
+**Cache Headers** (`vercel.json`)
+- `index.html` → `no-cache, no-store, must-revalidate` (nunca serve JS velho)
+- `/assets/*` → `public, max-age=31536000, immutable` (hashed assets com cache longo)
+
+### Adicionado — Tutorial Intro com Animações Lottie
+
+**Multi-step tutorial** (`VerifyIdentityPage.tsx`)
+- Intro reescrita como carrossel de 4 slides com animações Lottie:
+  1. **Boas-vindas** (`flow-loader.json`) — Apresentação do processo
+  2. **Selfie e Documentos** (`selfie.json`) — Gravação de vídeo + upload de CNH/RG
+  3. **Endereço e Referências** (`data.json`) — Comprovante + dados + 3 contatos
+  4. **Revisão e Envio** (`sent.json`) — Vídeo fachada + revisão final
+- Indicadores de progresso com dots animados (clicáveis)
+- Navegação Voltar/Próximo com transição entre slides
+- Último slide mostra botão "Começar Verificação"
+
+---
+
+## [7.5.0] — 2026-03-19
+
+### Adicionado — Deploy Vercel + Correções Verificação de Identidade
+
+**Deploy na Vercel**
+- Projeto hospedado em `https://fintechdigital.vercel.app` com HTTPS nativo
+- Criado `vercel.json` com rewrite `/*` → `/index.html` para SPA routing
+- SITE_URL fallback atualizado na edge function `send-verification-link` para o novo domínio
+
+**Verificação de Identidade — Fluxo de Câmera Reescrito**
+
+Edge Function `send-verification-link/index.ts`:
+- Reescrita completa: email OTP → envio de link via WhatsApp (Evolution API)
+- Todas as respostas HTTP agora retornam 200 com `{ success: true/false }` (compatibilidade com `supabase.functions.invoke`)
+- Fallback CPF: se `cliente_id` for NULL, busca cliente pelo CPF e vincula automaticamente
+- Busca de instância WhatsApp: `select("*")` + `.find()` em memória (evita falha do PostgREST com enums)
+- Payload Evolution API v1/v2: `{ number, textMessage: { text }, text }`
+- Normalização DDI 55 para números de 10-11 dígitos
+- Timeout/abort handling com mensagens de erro detalhadas
+
+`AnaliseCreditoPage.tsx` & `KanbanAnalisePage.tsx`:
+- `handleSendMagicLink` reescrito para chamar edge function via `supabase.functions.invoke`
+- Formulário de criação envia `cliente_id` corretamente
+- Removidos hooks de verificação não utilizados
+
+`VerifyIdentityPage.tsx` — Gravação de Vídeo (reescrita completa):
+- **getUserMedia no gesto do usuário**: câmera abre imediatamente no tap (exigência do Safari iOS)
+- **Countdown anti-fraude** (3-5s aleatório): câmera mostra preview, frase só aparece ao iniciar gravação
+- **Frase oculta**: exibida somente durante gravação (`isRecording`); antes mostra "🔒 A frase será exibida quando iniciar a gravação"
+- **Diagnóstico de câmera detalhado**: `NotAllowedError`, `NotFoundError`, `NotReadableError`, `OverconstrainedError` — cada um com mensagem específica
+- **Detecção de HTTPS**: verifica `window.location.protocol` e `navigator.mediaDevices` antes de chamar getUserMedia
+- **Detecção de navegador in-app**: regex para WhatsApp/Instagram/Facebook/etc com botão "Copiar Link" ou "Abrir no Chrome" (Android intent scheme)
+- **Instruções visuais por plataforma**: passo-a-passo para liberar câmera no iPhone (Ajustes → Safari → Câmera) e Android (cadeado → Permissões)
+- **Botão "Tentar Novamente"**: não desabilita mais após falha, permite retry após liberar permissão
+- Removido: fallback de upload de vídeo por arquivo (vulnerável a deepfake/manipulação por IA)
+
+Migration `014_anon_verification_access.sql`:
+- Políticas RLS para acesso anônimo na página de verificação (analise_id como fator de autenticação)
+- `verif_anon_select` (status pending/retry_needed), `verif_anon_update` (status pending)
+- `verif_logs_anon_insert`, `identity_verif_anon_upload`, `identity_verif_anon_select`
+- Sessão Supabase removida da VerifyIdentityPage (cliente acessa sem auth)
+
+Edge Function `approve-credit/index.ts`:
+- Sem alterações nesta versão (deploy mantido)
+
+### Alterado
+
+**UI — Zoom Padrão 0.90**
+- `html { zoom: 0.9 }` adicionado em `theme.css` — reduz escala visual da aplicação inteira
+
+**Migrations 009-014 consolidadas e deployadas**
+- Todas as 14 migrations idempotentes e sincronizadas com Supabase remoto
+- Correção de trigger function name, enums RLS, referências a auth.users
+
+---
+
+## [7.4.0] — 2026-03-19
+
+### Adicionado — Verificação de Identidade para Análise de Crédito
+
+**Migration 012** (`supabase/migrations/012_identity_verification.sql`)
+- Enum `verification_status` (`pending`, `approved`, `rejected`, `retry_needed`)
+- Tabela `identity_verifications` (vídeo-selfie, documentos frente/verso, frase de verificação, status, análise por, motivo de recusa, contagem de retentativas, magic link)
+- Tabela `verification_logs` (auditoria completa de todas as ações: envio de link, upload, aprovação, rejeição, retentativa)
+- Bucket de Storage `identity-verification` (30 MB, `video/*` + `image/*`)
+- Políticas RLS para ambas as tabelas + Storage
+- Colunas adicionadas em `analises_credito`: `verification_required BOOLEAN`, `verification_id UUID`
+
+**Edge Functions**
+- `send-verification-link/index.ts` — Envia magic link por e-mail via `auth.signInWithOtp()`. Cria registro de verificação com frase aleatória. Valida role (admin/gerência), verifica contagem de retentativas (máx 3). Expira em 48h
+- `approve-credit/index.ts` — Aprova crédito, cria empréstimo e dispara pagamento Pix via Woovi. Valida verificação aprovada, impede auto-análise. Pagamento Pix é não-bloqueante (falha permite retry)
+
+**identityVerificationService.ts** (novo service)
+- `getVerificationById()`, `getVerificationsByAnalise()`, `getVerificationsByStatus()`, `getPendingVerifications()`
+- `createVerification()`, `updateVerification()`
+- `getVerificationLogs()`, `createVerificationLog()`
+- `uploadVerificationFile()`, `getSignedUrl()` (Storage signed URLs)
+
+**useIdentityVerification.ts** (novo hook — 9 hooks)
+- `useVerification(id)`, `useVerificationsByAnalise(analiseId)`, `useVerificationsByStatus(status)`, `usePendingVerifications()`
+- `useCreateVerification()`, `useUpdateVerification()`
+- `useVerificationLogs(verificationId)`, `useCreateVerificationLog()`
+- `useUploadVerificationFile()`
+
+**VerifyIdentityPage.tsx** (nova página pública — `/verify-identity`)
+- Wizard multi-etapa: loading → intro → vídeo → documentos → revisão → enviado → erro → expirado
+- Gravação de vídeo-selfie via MediaRecorder API (mín 5s, máx 30s)
+- Upload de documentos (frente e verso, máx 5MB, JPG/PNG/WebP)
+- Frase de verificação exibida durante gravação
+- Verificação de expiração de magic link (48h)
+- Acessada via magic link — sem autenticação de sidebar
+
+**AnaliseDetalhadaModal.tsx** (novo componente)
+- Modal com 3 abas: Dados da Análise / Verificação / Histórico
+- Player de vídeo com signed URLs do Storage
+- Visualização lado a lado dos documentos (frente/verso)
+- Botões de aprovar/rejeitar/solicitar retentativa
+- Formulário de motivo de rejeição e nova frase de retentativa
+- Timeline de auditoria completa
+- Regras de negócio: impede auto-análise, máx 3 retentativas, auto-recusa após 3 rejeições
+
+### Alterado
+
+**AnaliseCreditoPage.tsx**
+- Modal de detalhes substituído por `AnaliseDetalhadaModal` com abas de verificação
+- Botão Shield (Verificação) adicionado nas ações da tabela
+- Função `handleSendMagicLink` para enviar link de verificação via Edge Function
+
+**KanbanAnalisePage.tsx**
+- Dialog de detalhes substituído por `AnaliseDetalhadaModal`
+- Botão de envio de magic link integrado nos cards do Kanban
+
+**database.types.ts**
+- Tipo `VerificationStatus` adicionado
+- Tabelas `identity_verifications` e `verification_logs` na interface Database
+- Campos `verification_required` e `verification_id` na tabela `analises_credito`
+
+**view-types.ts**
+- Interfaces `IdentityVerification` e `VerificationLog` adicionadas
+
+**adapters.ts**
+- Funções `dbIdentityVerificationToView()` e `dbVerificationLogToView()` adicionadas
+
+**routes.tsx**
+- Rota pública `/verify-identity` adicionada (standalone, fora do MainLayout)
+
+---
+
+## [7.3.1] — 2026-03-18
+
+### Alterado — FloatingChat: Combobox Pesquisável (CPF + Nome)
+
+**FloatingChat.tsx**
+- Seletores de cliente e empréstimo no modo "atenção" substituídos por `SearchableCombobox`
+- Busca em tempo real por nome, CPF e telefone (clientes) ou nome, CPF e valor (empréstimos)
+- Implementado com `cmdk` (`Command`, `CommandInput`, `CommandList`, `CommandItem`) dentro de Radix UI `Popover`
+- `PopoverContent` com `side="top"` para abrir para cima sem sobrepor borda inferior do widget
+- Valor de cada `CommandItem` definido como `"${label} ${sub}"` para match unificado por nome + CPF no mesmo campo
+
+---
+
+## [7.3.0] — 2026-03-18
+
+### Adicionado — Chat Interno + FloatingChat Widget
+
+**Migration 011** (`supabase/migrations/011_chat_interno_audio_atencao.sql`)
+- Adiciona colunas `tipo TEXT DEFAULT 'texto'` e `metadata JSONB DEFAULT '{}'` à tabela `chat_interno`
+- Tipos de mensagem: `texto`, `audio`, `atencao_cliente`, `atencao_emprestimo`
+- Cria bucket de Storage `chat-audio` para arquivos `audio/webm;codecs=opus`
+
+**FloatingChat.tsx** (novo componente — `src/app/components/FloatingChat.tsx`)
+- Widget flutuante `fixed bottom-6 right-6 z-50`, tamanho `w-96 h-[580px]`
+- Views: `contacts` (lista de conversas), `chat` (mensagens 1-a-1), `atencao` (admin — criar card de atenção)
+- `AudioPlayerInline`: player inline com waveform de 20 barras (`WAVE_BARS`), animação play/pause
+- `MsgBubble`: renderização de 4 tipos de mensagem com estilos distintos por tipo
+- Mensagens enviadas: gradiente indigo → violeta; recebidas: glass (bg-white/10 + backdrop-blur)
+- Cards `atencao_cliente`: âmbar (amber-100/amber-800)
+- Cards `atencao_emprestimo`: laranja-vermelho (orange-100/red-800)
+- Deep links em cards: `atencao_cliente` → `/clientes?clienteId=`, `atencao_emprestimo` → `/clientes/emprestimos?emprestimoId=`
+- View de criação de cartão de atenção (admin only) — seleção de tipo, cliente/empréstimo, envio
+- Supabase Realtime (INSERT subscription em `chat_interno`) para mensagens em tempo real
+
+**useAudioRecorder.ts** (novo hook — `src/app/hooks/`)
+- `startRecording()` / `stopRecording()` via MediaRecorder API
+- Formato de gravação: `audio/webm;codecs=opus`
+- Upload do blob para Supabase Storage bucket `chat-audio`
+
+**chatInternoService.ts** (novo service — `src/app/services/`)
+- CRUD completo + Realtime subscription para tabela `chat_interno`
+
+**useChatInterno.ts** (novo hook — `src/app/hooks/`)
+- React Query hooks: conversas, mensagens, enviar mensagem, marcar como lida
+
+**ClientesPage.tsx**
+- Leitura de `?clienteId=` via `useSearchParams` + `useEffect`
+- Auto-abre dialog do cliente ao navegar via deep link do FloatingChat
+
+**EmprestimosAtivosPage.tsx**
+- Leitura de `?emprestimoId=` via `useSearchParams` + `useEffect`
+- Auto-abre modal do empréstimo ao navegar via deep link do FloatingChat
+
+**ChatPage.tsx** (atualizado)
+- Modo equipe com `AudioPlayerInline` e `MsgBubble` idênticos ao FloatingChat
+- Gradientes enviado/recebido e cards de atenção compatíveis
+
+### Corrigido
+
+- **FloatingChat.tsx:** Overflow de mensagens corrigido com wrapper `flex flex-col flex-1 min-h-0` na área de mensagens
+
+---
+
+## [7.2.0] — 2026-03-18
+
+### Adicionado — Página de Pagamentos Woovi
+
+**PagamentosWooviPage.tsx** (nova página)
+- Rota: `/pagamentos/woovi` · Acesso: admin, gerência
+- Tab **Cobranças**: lista com filtro por status (ACTIVE/COMPLETED/EXPIRED), busca, QR Code modal, cancelar
+- Tab **Transações**: recebimentos, pagamentos, splits, saques com ícones e cores diferenciadas
+- Tab **Subcontas**: subcontas de indicadores com saldo e total recebido
+- Modal Nova Cobrança: selecionar cliente, valor, descrição
+- Modal Nova Subconta: selecionar cliente indicador, nome, CPF, chave Pix
+- Modal Visualizar QR Code: exibe `PixQRCode` da cobrança ativa
+- Hooks utilizados: `useCobrancasWoovi`, `useTransacoesWoovi`, `useSubcontasWoovi`, `useSaldoWoovi`, `useCriarCobrancaWoovi`, `useCriarSubcontaWoovi`, `useCancelarCobrancaWoovi`, `useSacarSubcontaWoovi`
+
+**routes.tsx**
+- Nova rota `/pagamentos/woovi → PagamentosWooviPage`
+
+**MainLayout.tsx / Sidebar**
+- Nova seção **PAGAMENTOS** com item "Pagamentos Pix" → `/pagamentos/woovi` (acesso: admin, gerência)
+
+---
+
+## [7.1.0] — 2026-03-17
+
+### Adicionado — Kanban Cobrança: Negociação Pix + Normalização Telefone
+
+**KanbanCobrancaPage.tsx**
+- Geração de cobrança Pix (Woovi, 24h) diretamente no modal de negociação
+- Fluxo: valor acordado → "Gerar Pix (24h)" → QR Code + link copiável + BRCode exibidos no modal
+- Substituição automática de `{link_pix}` em templates de mensagem ao gerar cobrança
+- Função `normalizePhoneBR()`: adiciona DDI `55` a números com 10–11 dígitos sem prefixo internacional
+- Normalização aplicada em: envio WhatsApp Business, abertura `wa.me`, navegação `/whatsapp?telefone=`
+- Hook adicionado: `useCriarCobrancaWoovi` de `../hooks/useWoovi`
+
+**send-whatsapp/index.ts (Edge Function)**
+- Normalização automática de DDI 55 no backend: números com 10–11 dígitos sem `55` recebem prefixo `"55"`
+- Regras: fixo (10 dígitos) e celular com 9º dígito (11 dígitos) → `55` prefixado; 12–13 dígitos mantidos intactos
+- Números `@lid` (WhatsApp internal): bypass, enviados como estão
+
+---
+
+## [7.0.0] — 2026-03-16
+
+### Adicionado — Integração Woovi (OpenPix) — Pagamentos Pix
+
+**Migration 008** (`supabase/migrations/008_woovi_integration.sql`)
+- Enums: `woovi_charge_status`, `woovi_transaction_status`, `woovi_transaction_type`
+- Tabelas: `woovi_charges`, `woovi_transactions`, `woovi_subaccounts`, `woovi_webhooks_log`
+- Colunas adicionadas em `clientes`: `pix_key`, `pix_key_type`
+- Coluna adicionada em `parcelas`: `woovi_charge_id`
+- Função RPC: `get_woovi_dashboard_stats()`
+
+**Edge Functions**
+- `woovi/index.ts`: API Gateway Woovi com 11 actions — `create_charge`, `get_charge`, `list_charges`, `delete_charge`, `create_payment`, `get_balance`, `create_subaccount`, `get_subaccount`, `withdraw_subaccount`, `get_transactions`, `get_stats`
+- `webhook-woovi/index.ts`: receptor de webhooks Woovi. Valida `x-webhook-secret`. Eventos: `CHARGE_COMPLETED` (marca parcela paga, split indicador), `CHARGE_EXPIRED`, `TRANSACTION_RECEIVED`, `TRANSACTION_REFUND_RECEIVED`
+
+**wooviService.ts** (novo service)
+- Cobranças: `criarCobranca`, `consultarCobranca`, `cancelarCobranca`, `getCobrancas`, `getCobrancaById`, `getCobrancasByParcela`, `getCobrancasByCliente`
+- Pagamentos/Saldo: `liberarEmprestimoPix`, `getSaldo`, `getWooviStats`
+- Subcontas: `criarSubconta`, `consultarSubconta`, `sacarSubconta`, `getSubcontas`
+- Transações: `getTransacoes`, `getTransacoesByEmprestimo`
+- Realtime: `subscribeToCharges`, `subscribeToTransactions`
+
+**useWoovi.ts** (novo hook — React Query)
+- 12 queries + 6 mutations
+- Polling: cobranças (30s), saldo/stats (60s), transações (30s)
+- Realtime via `subscribeToCharges` e `subscribeToTransactions`
+
+**Componentes UI**
+- `WooviSaldoCard`: card dashboard — saldo, cobranças ativas/pagas, total recebido, subcontas
+- `PixQRCode`: QR Code Pix, BRCode copiável, link de pagamento, status, expiração
+
+**Ambientes**
+- Sandbox (padrão): `https://api.woovi-sandbox.com/api/v1`
+- Produção: `https://api.openpix.com.br/api/v1` (via secret `WOOVI_API_URL`)
+- Secrets requeridos em Edge Functions: `WOOVI_APP_ID`, `WOOVI_WEBHOOK_SECRET`, `WOOVI_API_URL`
+
+---
+
 ## [6.1.0] — 2026-03-11
 
 ### Alterado — Produtividade Kanban + Auto-Ticket WhatsApp

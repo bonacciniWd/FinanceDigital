@@ -40,6 +40,9 @@ export type WooviChargeStatus = 'ACTIVE' | 'COMPLETED' | 'EXPIRED' | 'ERROR';
 export type WooviTransactionStatus = 'PENDING' | 'CONFIRMED' | 'FAILED' | 'REFUNDED';
 export type WooviTransactionType = 'CHARGE' | 'PAYMENT' | 'SPLIT' | 'WITHDRAWAL';
 
+// ── Verificação de Identidade ──────────────────────────────
+export type VerificationStatus = 'pending' | 'approved' | 'rejected' | 'retry_needed';
+
 export interface Database {
   public: {
     Tables: {
@@ -577,6 +580,8 @@ export interface Database {
           data_solicitacao: string;
           motivo: string | null;
           analista_id: string | null;
+          verification_required: boolean;
+          verification_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -593,6 +598,8 @@ export interface Database {
           data_solicitacao?: string;
           motivo?: string | null;
           analista_id?: string | null;
+          verification_required?: boolean;
+          verification_id?: string | null;
         };
         Update: {
           cliente_id?: string | null;
@@ -606,6 +613,8 @@ export interface Database {
           data_solicitacao?: string;
           motivo?: string | null;
           analista_id?: string | null;
+          verification_required?: boolean;
+          verification_id?: string | null;
           updated_at?: string;
         };
       };
@@ -970,6 +979,82 @@ export interface Database {
           error_message?: string | null;
         };
       };
+
+      identity_verifications: {
+        Row: {
+          id: string;
+          analise_id: string;
+          user_id: string | null;
+          video_url: string | null;
+          document_front_url: string | null;
+          document_back_url: string | null;
+          verification_phrase: string;
+          status: 'pending' | 'approved' | 'rejected' | 'retry_needed';
+          analyzed_by: string | null;
+          analyzed_at: string | null;
+          rejection_reason: string | null;
+          requires_retry: boolean;
+          retry_count: number;
+          retry_phrase: string | null;
+          magic_link_sent_at: string | null;
+          magic_link_expires_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          analise_id: string;
+          user_id?: string | null;
+          video_url?: string | null;
+          document_front_url?: string | null;
+          document_back_url?: string | null;
+          verification_phrase: string;
+          status?: 'pending' | 'approved' | 'rejected' | 'retry_needed';
+          analyzed_by?: string | null;
+          analyzed_at?: string | null;
+          rejection_reason?: string | null;
+          requires_retry?: boolean;
+          retry_count?: number;
+          retry_phrase?: string | null;
+          magic_link_sent_at?: string | null;
+          magic_link_expires_at?: string | null;
+        };
+        Update: {
+          video_url?: string | null;
+          document_front_url?: string | null;
+          document_back_url?: string | null;
+          status?: 'pending' | 'approved' | 'rejected' | 'retry_needed';
+          analyzed_by?: string | null;
+          analyzed_at?: string | null;
+          rejection_reason?: string | null;
+          requires_retry?: boolean;
+          retry_count?: number;
+          retry_phrase?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+
+      verification_logs: {
+        Row: {
+          id: string;
+          verification_id: string;
+          analise_id: string;
+          action: string;
+          performed_by: string | null;
+          details: Record<string, unknown>;
+          created_at: string;
+        };
+        Insert: {
+          verification_id: string;
+          analise_id: string;
+          action: string;
+          performed_by?: string | null;
+          details?: Record<string, unknown>;
+        };
+        Update: never;
+        Relationships: [];
+      };
     };
 
     Views: Record<string, never>;
@@ -1058,6 +1143,7 @@ export interface Database {
       woovi_charge_status: WooviChargeStatus;
       woovi_transaction_status: WooviTransactionStatus;
       woovi_transaction_type: WooviTransactionType;
+      verification_status: VerificationStatus;
     };
   };
 }
@@ -1211,4 +1297,108 @@ export type WooviChargeComCliente = WooviCharge & {
 /** Subconta com dados do cliente (JOIN) */
 export type WooviSubaccountComCliente = WooviSubaccount & {
   clientes: { nome: string; telefone: string; email: string } | null;
+};
+
+// ── Identity Verification (Verificação de Identidade) ─────────────
+
+export interface ReferenceContact {
+  name: string;
+  phone: string;
+  relationship: string;
+}
+
+export interface IdentityVerificationRow {
+  id: string;
+  analise_id: string;
+  user_id: string | null;
+  video_url: string | null;
+  document_front_url: string | null;
+  document_back_url: string | null;
+  proof_of_address_url: string | null;
+  residence_video_url: string | null;
+  client_address: string | null;
+  reference_contacts: ReferenceContact[];
+  verification_phrase: string;
+  status: VerificationStatus;
+  analyzed_by: string | null;
+  analyzed_at: string | null;
+  rejection_reason: string | null;
+  requires_retry: boolean;
+  retry_count: number;
+  retry_phrase: string | null;
+  magic_link_sent_at: string | null;
+  magic_link_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IdentityVerificationInsert {
+  id?: string;
+  analise_id: string;
+  user_id?: string | null;
+  video_url?: string | null;
+  document_front_url?: string | null;
+  document_back_url?: string | null;
+  proof_of_address_url?: string | null;
+  residence_video_url?: string | null;
+  client_address?: string | null;
+  reference_contacts?: ReferenceContact[];
+  verification_phrase: string;
+  status?: VerificationStatus;
+  analyzed_by?: string | null;
+  analyzed_at?: string | null;
+  rejection_reason?: string | null;
+  requires_retry?: boolean;
+  retry_count?: number;
+  retry_phrase?: string | null;
+  magic_link_sent_at?: string | null;
+  magic_link_expires_at?: string | null;
+}
+
+export interface IdentityVerificationUpdate {
+  video_url?: string | null;
+  document_front_url?: string | null;
+  document_back_url?: string | null;
+  proof_of_address_url?: string | null;
+  residence_video_url?: string | null;
+  client_address?: string | null;
+  reference_contacts?: ReferenceContact[];
+  status?: VerificationStatus;
+  analyzed_by?: string | null;
+  analyzed_at?: string | null;
+  rejection_reason?: string | null;
+  requires_retry?: boolean;
+  retry_count?: number;
+  retry_phrase?: string | null;
+  updated_at?: string;
+}
+
+export interface VerificationLogRow {
+  id: string;
+  verification_id: string;
+  analise_id: string;
+  action: string;
+  performed_by: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface VerificationLogInsert {
+  verification_id: string;
+  analise_id: string;
+  action: string;
+  performed_by?: string | null;
+  details?: Record<string, unknown>;
+}
+
+/** Verificação com dados da análise (JOIN) */
+export type IdentityVerificationComAnalise = IdentityVerificationRow & {
+  analises_credito: {
+    cliente_nome: string;
+    cpf: string;
+    valor_solicitado: number;
+    renda_mensal: number;
+    score_serasa: number;
+    status: AnaliseCreditoStatus;
+  } | null;
 };

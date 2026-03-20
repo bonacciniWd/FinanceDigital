@@ -29,6 +29,8 @@ import type {
   WooviChargeComCliente,
   WooviTransaction as DbWooviTransaction,
   WooviSubaccountComCliente,
+  IdentityVerificationComAnalise,
+  VerificationLogRow,
 } from './database.types';
 
 import type {
@@ -47,6 +49,8 @@ import type {
   WooviChargeView,
   WooviTransactionView,
   WooviSubaccountView,
+  IdentityVerification,
+  VerificationLog,
 } from './view-types';
 
 // ── Cliente ────────────────────────────────────────────────
@@ -401,5 +405,55 @@ export function dbWooviSubaccountToView(s: WooviSubaccountComCliente): WooviSuba
     totalSacado: s.total_sacado,
     ativo: s.ativo,
     createdAt: s.created_at,
+  };
+}
+
+// ── Verificação de Identidade ──────────────────────────────
+
+/** Converte verificação de identidade do banco (JOIN com análise) para formato de view */
+export function dbIdentityVerificationToView(v: IdentityVerificationComAnalise): IdentityVerification {
+  return {
+    id: v.id,
+    analiseId: v.analise_id,
+    userId: v.user_id ?? undefined,
+    videoUrl: v.video_url ?? undefined,
+    documentFrontUrl: v.document_front_url ?? undefined,
+    documentBackUrl: v.document_back_url ?? undefined,
+    proofOfAddressUrl: v.proof_of_address_url ?? undefined,
+    residenceVideoUrl: v.residence_video_url ?? undefined,
+    clientAddress: v.client_address ?? undefined,
+    referenceContacts: v.reference_contacts ?? [],
+    verificationPhrase: v.verification_phrase,
+    status: v.status,
+    analyzedBy: v.analyzed_by ?? undefined,
+    analyzedAt: v.analyzed_at ?? undefined,
+    rejectionReason: v.rejection_reason ?? undefined,
+    requiresRetry: v.requires_retry,
+    retryCount: v.retry_count,
+    retryPhrase: v.retry_phrase ?? undefined,
+    magicLinkSentAt: v.magic_link_sent_at ?? undefined,
+    magicLinkExpiresAt: v.magic_link_expires_at ?? undefined,
+    createdAt: v.created_at,
+    updatedAt: v.updated_at,
+    // JOIN fields
+    clienteNome: v.analises_credito?.cliente_nome,
+    cpf: v.analises_credito?.cpf,
+    valorSolicitado: v.analises_credito?.valor_solicitado,
+    rendaMensal: v.analises_credito?.renda_mensal,
+    scoreSerasa: v.analises_credito?.score_serasa,
+    analiseStatus: v.analises_credito?.status,
+  };
+}
+
+/** Converte log de verificação do banco para formato de view */
+export function dbVerificationLogToView(l: VerificationLogRow): VerificationLog {
+  return {
+    id: l.id,
+    verificationId: l.verification_id,
+    analiseId: l.analise_id,
+    action: l.action,
+    performedBy: l.performed_by ?? undefined,
+    details: l.details,
+    createdAt: l.created_at,
   };
 }

@@ -289,7 +289,7 @@ export default function ClienteAreaPage() {
               </p>
               <Button
                 className="bg-secondary hover:bg-secondary/90"
-                onClick={() => navigate(`/chat?phone=${encodeURIComponent(cliente.telefone)}`)}
+                onClick={() => navigate(`/whatsapp?telefone=${encodeURIComponent(cliente.telefone)}`)}
               >
                 Abrir Chat
               </Button>

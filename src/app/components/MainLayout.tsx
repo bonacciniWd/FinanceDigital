@@ -40,7 +40,6 @@ import {
   Gift,
   ShieldBan,
   UserPlus,
-  MessagesSquare,
   Bot,
   Workflow,
   FileCode,
@@ -116,7 +115,6 @@ export function MainLayout() {
     {
       title: 'COMUNICAÇÃO',
       items: [
-        { name: 'Chat Geral', href: '/chat', icon: MessagesSquare, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
         { name: 'WhatsApp', href: '/whatsapp', icon: MessageSquare, roles: ['admin', 'gerencia', 'cobranca'] },
         { name: 'Fluxos de Chat', href: '/chat/fluxos', icon: Workflow, roles: ['admin', 'gerencia'] },
         { name: 'Templates', href: '/chat/templates', icon: FileCode, roles: ['admin', 'gerencia'] },

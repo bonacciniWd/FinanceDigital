@@ -1088,7 +1088,7 @@ function EmprestimoDetailModal({
 
                 {/* Ações rápidas */}
                 <div className="flex gap-3">
-                  <Button variant="outline" className="flex-1 h-10 rounded-xl gap-2" onClick={() => { onClose(); navigate(`/chat?phone=${encodeURIComponent(cliente.telefone)}`); }}>
+                  <Button variant="outline" className="flex-1 h-10 rounded-xl gap-2" onClick={() => { onClose(); navigate(`/whatsapp?telefone=${encodeURIComponent(cliente.telefone)}`); }}>
                     <MessageSquare className="w-4 h-4" />Chat
                   </Button>
                   <Button variant="outline" className="flex-1 h-10 rounded-xl gap-2" onClick={() => window.open(`tel:${cliente.telefone}`, '_self')}>

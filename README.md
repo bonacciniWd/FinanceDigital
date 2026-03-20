@@ -1,6 +1,6 @@
 # FintechFlow — Documentação Técnica Completa
 
-> **Atualizado:** 17 de março de 2026 (v7.1 — Kanban Cobrança: Negociação Pix Woovi + Normalização Telefone)  
+> **Atualizado:** 19 de março de 2026 (v7.4.0 — Verificação de Identidade para Análise de Crédito)  
 > **Stack:** React 18 · TypeScript 5 · Vite 6 · Tailwind CSS v4 · Supabase · React Query (TanStack)
 
 ---
@@ -30,7 +30,9 @@
 21. [Produtividade da Equipe — Kanban + Auto-Ticket](#21-produtividade-da-equipe--kanban--auto-ticket-v61--11032026)
 22. [Integração Woovi (OpenPix) — Pagamentos Pix](#22-integração-woovi-openpix--pagamentos-pix)
 23. [Kanban Cobrança — Negociação Pix + Normalização Telefone](#23-kanban-cobrança--negociação-pix--normalização-telefone-v71--17032026)
-24. [Métricas do Projeto](#24-métricas-do-projeto-v71)
+24. [Métricas do Projeto](#24-métricas-do-projeto-v731)
+25. [Chat Interno — FloatingChat Widget](#25-chat-interno--floatchat-widget-v730--18032026)
+26. [Verificação de Identidade — Análise de Crédito](#26-verificação-de-identidade--análise-de-crédito-v740--19032026)
 
 ---
 
@@ -456,6 +458,8 @@ Todas deployadas em `supabase functions deploy`. Usam `SUPABASE_SERVICE_ROLE_KEY
 | `send-whatsapp` | POST | `{ instancia_id, telefone, conteudo, tipo? }` | Envia mensagem via Evolution API. Suporta: text, image, document, audio. Loga em `whatsapp_mensagens_log`. Requer auth. **URL prioridade:** secret `EVOLUTION_API_URL` > `evolution_url` do banco. **Número:** apenas dígitos (sem `@domain`). **Timeout:** AbortController 20s. **Retorno:** sempre HTTP 200; `{success:false}` em falha (evita CORS em 502). |
 | `webhook-whatsapp` | POST | (Evolution API payload) | Recebe webhooks da Evolution API (**sem JWT**). Trata: `messages.upsert`, `messages.update`, `qrcode.updated`, `connection.update`. Dispara chatbot por palavra-chave. Deploy: `--no-verify-jwt`. **@lid:** quando `key.addressingMode === 'lid'`, usa `key.remoteJidAlt` como JID real. Salva `metadata.jid` e `metadata.lid_jid`. |
 | `manage-instance` | POST | `{ action, ...params }` | Gerencia instâncias WhatsApp. 7 ações: `create`, `connect`, `disconnect`, `status`, `delete`, `restart`, `set_webhook`. Somente admin/gerência. **URL prioridade:** secret `EVOLUTION_API_URL` > `evolution_url` do banco. **HTML detection:** detecta resposta HTML (ngrok mudou) e retorna erro descritivo. |
+| `send-verification-link` | POST | `{ analise_id }` | Envia magic link de verificação de identidade por e-mail via `auth.signInWithOtp()`. Cria registro em `identity_verifications` com frase de verificação aleatória. Valida role (admin/gerência), verifica retentativas (máx 3). Link expira em 48h. Deploy: `--no-verify-jwt`. |
+| `approve-credit` | POST | `{ analise_id, pix_key, pix_key_type }` | Aprova crédito, cria empréstimo e dispara Pix via Woovi. Valida verificação aprovada, impede auto-análise. Pagamento não-bloqueante (falha permite retry). Somente admin/gerência. |
 
 **Shared:** `_shared/cors.ts` — exporta `corsHeaders` para CORS handling.
 
@@ -545,6 +549,8 @@ Conversão bidirecional **snake_case (banco)** ↔ **camelCase (frontend)**:
 ## 9. Services
 
 13 arquivos em `src/app/services/`. Todos operam exclusivamente com Supabase (zero mock).
+
+> **Nota:** Inclui também `identityVerificationService.ts` para verificação de identidade — documentado na [Seção 26](#26-verificação-de-identidade--análise-de-crédito-v740--19032026).
 
 ### `clientesService.ts`
 
@@ -732,6 +738,8 @@ Conversão bidirecional **snake_case (banco)** ↔ **camelCase (frontend)**:
 ## 10. React Query Hooks
 
 16 arquivos em `src/app/hooks/`. Todos retornam dados em **camelCase** (via adapters).
+
+> **Nota:** Inclui também `useIdentityVerification.ts` (9 hooks) — documentado na [Seção 26](#26-verificação-de-identidade--análise-de-crédito-v740--19032026).
 
 ### `useClientes.ts` — key: `'clientes'`
 
@@ -936,12 +944,13 @@ Conversão bidirecional **snake_case (banco)** ↔ **camelCase (frontend)**:
 
 ## 11. Páginas e Rotas
 
-**33 páginas** no total, **36 rotas**. Árvore de rotas (`react-router` v7):
+**36 páginas** no total, **39 rotas**. Árvore de rotas (`react-router` v7):
 
 ```
 /                              → Redirect → /login
 /login                         → LoginPage (pública)
 /cliente                       → ClienteAreaPage (standalone, sem sidebar)
+/verify-identity               → VerifyIdentityPage (pública, standalone, via magic link)
 /                              → ProtectedRoute + MainLayout
 ├── dashboard                  → DashboardPage
 ├── dashboard/financeiro       → DashboardFinanceiroPage
@@ -973,6 +982,7 @@ Conversão bidirecional **snake_case (banco)** ↔ **camelCase (frontend)**:
 ├── configuracoes/conta        → MinhaContaPage
 ├── equipe/monitoramento       → MonitoramentoAtividadePage
 ├── equipe/produtividade       → ProdutividadePage
+├── pagamentos/woovi           → PagamentosWooviPage
 └── *                          → "Página em Desenvolvimento" (fallback)
 ```
 
@@ -982,15 +992,15 @@ Todas as 33 páginas operam com dados reais do Supabase via React Query. As pág
 
 | Página | Hooks usados | Funcionalidades |
 |--------|-------------|-----------------|
-| `EmprestimosAtivosPage` | `useEmprestimos`, `useCreateEmprestimo`, `useParcelas`, `useClientes`, `useIndicados` | Modal rico 3 tabs (Parcelas/Cliente/Empréstimo), quitar, baixa parcial, juros manual, reativação |
-| `AnaliseCreditoPage` | `useAnalises`, `useCreateAnalise`, `useUpdateAnalise` | Nova análise, aprovar/recusar |
+| `EmprestimosAtivosPage` | `useEmprestimos`, `useCreateEmprestimo`, `useParcelas`, `useClientes`, `useIndicados` | Modal rico 3 tabs (Parcelas/Cliente/Empréstimo), quitar, baixa parcial, juros manual, reativação. Deep link: `?emprestimoId=` auto-abre modal do empréstimo |
+| `AnaliseCreditoPage` | `useAnalises`, `useCreateAnalise`, `useUpdateAnalise`, `useCreateVerification`, `useCreateVerificationLog` | Nova análise, aprovar/recusar, enviar magic link de verificação, modal detalhado com abas |
 | `GestaoParcelasPage` | `useParcelas`, `useRegistrarPagamento`, `useUpdateParcela` | Quitar/editar/excluir em lote |
-| `ClientesPage` | `useClientes`, `useCreateCliente`, `useUpdateCliente`, `useDeleteCliente` | CRUD completo, dialogs inline |
+| `ClientesPage` | `useClientes`, `useCreateCliente`, `useUpdateCliente`, `useDeleteCliente` | CRUD completo, dialogs inline. Deep link: `?clienteId=` auto-abre dialog do cliente |
 | `HistoricoClientesPage` | `useParcelas`, `useEmprestimos`, `useAnalises` | Timeline unificada, métricas, exportação CSV |
 | `RedeIndicacoesPage` | `useMembrosRede`, `useCreateIndicacao`, `useBloquearRede` | Mapa ReactFlow, BFS, bloqueio solidário |
 | `BonusComissoesPage` | `useMembrosRede`, `useClientes` | Comissões, bônus por indicação |
 | `KanbanCobrancaPage` | `useCardsCobranca`, `useMoverCardCobranca`, `useRegistrarContato` | 6 colunas drag-and-drop |
-| `KanbanAnalisePage` | `useTickets`, `useMoverTicket`, `useAtribuirTicket` | 4 colunas com atribuição |
+| `KanbanAnalisePage` | `useTickets`, `useMoverTicket`, `useAtribuirTicket`, `useCreateVerification`, `useCreateVerificationLog` | 4 colunas com atribuição, magic link de verificação, modal detalhado |
 | `KanbanAtendimentoPage` | `useTickets`, `useMoverTicket` | 4 colunas |
 | `KanbanGerencialPage` | `useKanbanStats`, `useTickets`, `useCardsCobranca` | KPIs cross-board |
 | `WhatsAppPage` | `useInstancias`, `useCriarInstancia`, `useConversasWhatsapp`, `useEnviarWhatsapp` | Chat real-time, QR Code, sync |
@@ -1034,6 +1044,7 @@ Sidebar com filtragem por `user.role` via `canAccess(roles)`.
 | **RELATÓRIOS** | Gerenciais | `/relatorios/gerenciais` | admin, gerência |
 | | Operacionais | `/relatorios/operacionais` | admin, gerência |
 | | Exportar Dados | `/relatorios/exportar` | admin, gerência |
+| **PAGAMENTOS** | Pagamentos Pix | `/pagamentos/woovi` | admin, gerência |
 | **CONFIGURAÇÕES** | Perfis de Acesso | `/configuracoes/perfis` | admin |
 | | Gerenciar Usuários | `/configuracoes/usuarios` | admin |
 | | Integrações | `/configuracoes/integracoes` | admin |
@@ -3015,19 +3026,437 @@ Hook utilizado: `useCriarCobrancaWoovi()` — mutation que chama `wooviService.c
 
 ---
 
-## 24. Métricas do Projeto (v7.1)
+## 24. Métricas do Projeto (v7.4.0)
 
 | Métrica | Valor |
 |---------|-------|
-| Páginas funcionais | 34 |
-| Rotas configuradas | 37 |
-| React Query Hooks | 17 arquivos (~140+ hooks) |
-| Services Supabase | 14 |
-| Edge Functions | 8 |
+| Páginas funcionais | 36 |
+| Rotas configuradas | 39 |
+| React Query Hooks | 20 arquivos (~170+ hooks) |
+| Services Supabase | 17 |
+| Edge Functions | 12 |
 | Componentes UI (shadcn) | 48 |
-| Módulos compilados | ~2.700 |
+| Módulos compilados | ~2.900 |
 | Erros de build | 0 |
 | Dados mock | 0 (zero) |
-| Tabelas PostgreSQL | 20+ |
+| Tabelas PostgreSQL | 24+ |
 | Políticas RLS | todas as tabelas |
 | Integrações externas | WhatsApp (Evolution API), Pix (Woovi/OpenPix) |
+
+---
+
+## 25. Chat Interno — FloatingChat Widget (v7.3 — 18/03/2026)
+
+### 25.1 Visão Geral
+
+O Chat Interno é um sistema de comunicação em tempo real entre funcionários, implementado como um **widget flutuante** (`FloatingChat.tsx`) disponível em todas as páginas da aplicação.
+
+**Arquivos principais:**
+
+| Arquivo | Papel |
+|---------|-------|
+| `src/app/components/FloatingChat.tsx` | Widget flutuante principal |
+| `src/app/services/chatInternoService.ts` | CRUD + Realtime subscription |
+| `src/app/hooks/useChatInterno.ts` | React Query hooks |
+| `src/app/hooks/useAudioRecorder.ts` | MediaRecorder (audio/webm) |
+| `supabase/migrations/011_chat_interno_audio_atencao.sql` | Schema e bucket de Storage |
+
+---
+
+### 25.2 Banco de Dados — `chat_interno`
+
+| Coluna | Tipo | Restrições |
+|--------|------|-----------|
+| `id` | UUID | PK, DEFAULT gen_random_uuid() |
+| `remetente_id` | UUID | NOT NULL, FK → auth.users(id) CASCADE |
+| `destinatario_id` | UUID | NOT NULL, FK → auth.users(id) CASCADE |
+| `conteudo` | TEXT | NOT NULL |
+| `tipo` | TEXT | NOT NULL, DEFAULT `'texto'` — valores: `texto`, `audio`, `atencao_cliente`, `atencao_emprestimo` |
+| `metadata` | JSONB | DEFAULT `{}` — dados contextuais por tipo |
+| `lida` | BOOLEAN | NOT NULL, DEFAULT false |
+| `created_at` | TIMESTAMPTZ | DEFAULT now() |
+
+**Migration 011** (`supabase/migrations/011_chat_interno_audio_atencao.sql`):
+- Adiciona as colunas `tipo` e `metadata` à tabela `chat_interno`
+- Cria bucket de Storage `chat-audio` para arquivos `audio/webm;codecs=opus`
+
+---
+
+### 25.3 Tipos de Mensagem
+
+| `tipo` | `metadata` | Renderização |
+|--------|-----------|-------------|
+| `texto` | `{}` | Bubble de texto simples |
+| `audio` | `{ url: string, duration?: number }` | `AudioPlayerInline` com waveform de 20 barras |
+| `atencao_cliente` | `{ clienteId: string, clienteNome: string }` | Card âmbar com deep link → `/clientes?clienteId=` |
+| `atencao_emprestimo` | `{ emprestimoId: string, clienteNome: string, valor: string }` | Card laranja-vermelho com deep link → `/clientes/emprestimos?emprestimoId=` |
+
+---
+
+### 25.4 FloatingChat.tsx — Arquitetura
+
+**Posição:** `fixed bottom-6 right-6 z-50` · **Tamanho:** `w-96 h-[580px]`
+
+**Views (estados internos):**
+
+| View | Acesso | Descrição |
+|------|--------|-----------|
+| `contacts` | todos | Lista de contatos/conversas com preview da última mensagem |
+| `chat` | todos | Conversa 1-a-1 com rolagem automática para baixo |
+| `atencao` | admin only | Criação de card de atenção — tipo, cliente ou empréstimo |
+
+**Componentes internos:**
+
+| Componente | Descrição |
+|------------|-----------|
+| `AudioPlayerInline` | Player de áudio com waveform de 20 barras (`WAVE_BARS`). Botão play/pause alterna animação das barras durante reprodução. |
+| `MsgBubble` | Renderiza bubble por tipo: texto / áudio / atencao_cliente (âmbar) / atencao_emprestimo (laranja-vermelho). |
+| `SearchableCombobox` | Seletor com busca por nome + CPF. Usa `cmdk` (`Command`, `CommandInput`) dentro de Radix UI `Popover`. `PopoverContent` abre para cima (`side="top"`). |
+
+**Estilo visual:**
+
+| Tipo | Cor enviada | Cor recebida |
+|------|------------|-------------|
+| Texto | Gradiente indigo → violeta | Glass: bg-white/10 + backdrop-blur |
+| Áudio | Gradiente indigo → violeta | Glass: bg-white/10 + backdrop-blur |
+| Card cliente | amber-100 / amber-800 | — |
+| Card empréstimo | orange-100 / red-800 | — |
+
+**Fix de overflow:** A área de mensagens usa `flex flex-col flex-1 min-h-0` para garantir scroll correto dentro do contêiner de altura fixa.
+
+---
+
+### 25.5 Deep Links
+
+O FloatingChat navega para páginas específicas ao clicar em um card de atenção:
+
+| Card | Destino | Parâmetro |
+|------|---------|-----------|
+| `atencao_cliente` | `/clientes` | `?clienteId=<uuid>` |
+| `atencao_emprestimo` | `/clientes/emprestimos` | `?emprestimoId=<uuid>` |
+
+**Leitura dos parâmetros (padrão em ambas as páginas):**
+
+```typescript
+const [searchParams] = useSearchParams();
+const paramId = searchParams.get('clienteId'); // ou 'emprestimoId'
+
+useEffect(() => {
+  if (paramId && data) {
+    const item = data.find(i => i.id === paramId);
+    if (item) { setSelected(item); setDialogOpen(true); }
+  }
+}, [paramId, data]);
+```
+
+---
+
+### 25.6 Gravação de Áudio — `useAudioRecorder.ts`
+
+| Estado / Função | Descrição |
+|-----------------|-----------|
+| `isRecording` | Boolean — gravação ativa |
+| `startRecording()` | Solicita `getUserMedia({ audio: true })`, inicia `MediaRecorder` |
+| `stopRecording()` | Para `MediaRecorder`, retorna `Blob` (audio/webm;codecs=opus) |
+| `audioBlob` | Último blob gravado |
+
+**Fluxo de envio de áudio no FloatingChat:**
+
+1. Usuário pressiona o botão de microfone → `startRecording()`
+2. Solta → `stopRecording()` → blob disponível
+3. Upload para `chat-audio/` via `supabase.storage.from('chat-audio').upload(path, blob)`
+4. Mensagem inserida na tabela com `tipo: 'audio'`, `metadata: { url: signedUrl }`
+
+---
+
+### 25.7 `SearchableCombobox` — Combobox Pesquisável (v7.3.1)
+
+Componente inline em `FloatingChat.tsx` para seleção de clientes e empréstimos na view `atencao`.
+
+**Dependências:** `cmdk` (via shadcn/ui `command.tsx`) + Radix UI `Popover` (via `popover.tsx`)
+
+**Interface:**
+
+```typescript
+interface SearchableComboboxProps {
+  value: string;
+  onChange: (val: string) => void;
+  items: { id: string; label: string; sub?: string }[];
+  placeholder?: string;
+}
+```
+
+**Conteúdo dos itens:**
+
+| Seletor | `label` | `sub` |
+|---------|---------|-------|
+| Clientes | `nome` | `CPF · telefone` |
+| Empréstimos | `nome do cliente` | `CPF · R$ valor` |
+
+**Mecanismo de busca:** `CommandItem value={"\${item.label} \${item.sub ?? ''}"}` — cmdk filtra pela `value` inteira, permitindo match por qualquer combinação de nome, CPF, telefone ou valor.
+
+---
+
+### 25.8 Realtime
+
+Cada conversa aberta no FloatingChat e no ChatPage (modo equipe) usa Supabase Realtime para receber mensagens em tempo real:
+
+```typescript
+supabase
+  .channel(`chat-interno-${userId}`)
+  .on('postgres_changes', {
+    event: 'INSERT',
+    schema: 'public',
+    table: 'chat_interno',
+    filter: `destinatario_id=eq.${userId}`,
+  }, callback)
+  .subscribe();
+```
+
+---
+
+### 25.9 ChatPage — Modo Equipe
+
+A página `/chat` (`ChatPage.tsx`) também exibe o histórico do chat interno com o mesmo sistema de renderização do FloatingChat:
+
+- `AudioPlayerInline` para mensagens de áudio
+- `MsgBubble` com os mesmos 4 tipos de mensagem
+- Gradientes idênticos (enviado: indigo-violet; recebido: glass; cards: amber/orange-red)
+
+---
+
+## 26. Verificação de Identidade — Análise de Crédito (v7.4.0 — 19/03/2026)
+
+### 26.1 Visão Geral
+
+Sistema completo de verificação de identidade integrado ao fluxo de análise de crédito. O analista envia um magic link por e-mail ao cliente, que grava um vídeo-selfie lendo uma frase de verificação e faz upload de documentos (frente e verso do RG/CNH). O analista então revisa os materiais e aprova, rejeita ou solicita nova tentativa.
+
+**Arquivos principais:**
+
+| Arquivo | Papel |
+|---------|-------|
+| `src/app/pages/VerifyIdentityPage.tsx` | Página pública de verificação (wizard multi-etapa) |
+| `src/app/components/AnaliseDetalhadaModal.tsx` | Modal de revisão com abas (Dados/Verificação/Histórico) |
+| `src/app/services/identityVerificationService.ts` | CRUD + Storage (upload/signed URLs) |
+| `src/app/hooks/useIdentityVerification.ts` | 9 React Query hooks |
+| `src/app/lib/adapters.ts` | `dbIdentityVerificationToView()`, `dbVerificationLogToView()` |
+| `supabase/migrations/012_identity_verification.sql` | Schema, RLS, Storage bucket |
+| `supabase/functions/send-verification-link/index.ts` | Envio de magic link |
+| `supabase/functions/approve-credit/index.ts` | Aprovação + Pix via Woovi |
+
+---
+
+### 26.2 Banco de Dados
+
+#### `identity_verifications`
+
+| Coluna | Tipo | Restrições |
+|--------|------|------------|
+| `id` | UUID | PK, default `gen_random_uuid()` |
+| `analise_id` | UUID | FK → `analises_credito(id)` ON DELETE CASCADE |
+| `user_id` | UUID | FK → `auth.users(id)`, nullable |
+| `video_url` | TEXT | nullable |
+| `document_front_url` | TEXT | nullable |
+| `document_back_url` | TEXT | nullable |
+| `verification_phrase` | TEXT | NOT NULL |
+| `status` | `verification_status` | DEFAULT `'pending'` |
+| `analyzed_by` | UUID | FK → `auth.users(id)`, nullable |
+| `analyzed_at` | TIMESTAMPTZ | nullable |
+| `rejection_reason` | TEXT | nullable |
+| `requires_retry` | BOOLEAN | DEFAULT `false` |
+| `retry_count` | INTEGER | DEFAULT `0` |
+| `retry_phrase` | TEXT | nullable |
+| `magic_link_sent_at` | TIMESTAMPTZ | nullable |
+| `magic_link_expires_at` | TIMESTAMPTZ | nullable |
+| `created_at` | TIMESTAMPTZ | DEFAULT `now()` |
+| `updated_at` | TIMESTAMPTZ | DEFAULT `now()` |
+
+#### `verification_logs`
+
+| Coluna | Tipo | Restrições |
+|--------|------|------------|
+| `id` | UUID | PK, default `gen_random_uuid()` |
+| `verification_id` | UUID | FK → `identity_verifications(id)` ON DELETE CASCADE |
+| `analise_id` | UUID | FK → `analises_credito(id)` ON DELETE CASCADE |
+| `action` | TEXT | NOT NULL |
+| `performed_by` | UUID | FK → `auth.users(id)`, nullable |
+| `details` | JSONB | DEFAULT `'{}'` |
+| `created_at` | TIMESTAMPTZ | DEFAULT `now()` |
+
+#### Colunas adicionadas em `analises_credito`
+
+| Coluna | Tipo | Default |
+|--------|------|---------|
+| `verification_required` | BOOLEAN | `false` |
+| `verification_id` | UUID | nullable, FK → `identity_verifications(id)` |
+
+---
+
+### 26.3 Fluxo Completo
+
+```
+1. Analista abre AnaliseDetalhadaModal → aba "Verificação"
+2. Clica "Enviar Link de Verificação" → Edge Function send-verification-link
+3. Edge Function:
+   a. Valida role (admin/gerência)
+   b. Gera frase de verificação aleatória
+   c. Cria/atualiza registro em identity_verifications
+   d. Envia magic link via auth.signInWithOtp()
+   e. Link expira em 48h
+4. Cliente recebe e-mail → clica no link → VerifyIdentityPage
+5. VerifyIdentityPage (wizard):
+   a. Verifica expiração do link
+   b. Exibe frase de verificação
+   c. Grava vídeo-selfie (5-30s) lendo a frase
+   d. Upload de documentos (frente + verso, máx 5MB)
+   e. Revisão → envio → upload para Storage bucket
+6. Analista revisa no AnaliseDetalhadaModal:
+   a. Assiste vídeo (signed URL)
+   b. Compara documentos
+   c. Escolhe: Aprovar / Rejeitar / Nova Tentativa
+7. Se aprovado → Edge Function approve-credit:
+   a. Cria empréstimo
+   b. Dispara Pix via Woovi/OpenPix
+   c. Registra transação
+```
+
+---
+
+### 26.4 Regras de Negócio
+
+| Regra | Implementação |
+|-------|---------------|
+| Máximo 3 tentativas de vídeo | `retry_count >= 3` → auto-rejeição em `AnaliseDetalhadaModal` |
+| Auto-rejeição após 3 falhas | `handleReject()` atualiza análise para `recusado` |
+| Analista não pode analisar próprio pedido | Validado em `AnaliseDetalhadaModal` + `approve-credit` edge function |
+| Magic link expira em 48h | Verificado em `VerifyIdentityPage` ao carregar |
+| Vídeo: mínimo 5s, máximo 30s | Constantes `MIN_RECORDING_TIME` / `MAX_RECORDING_TIME` |
+| Documentos: máximo 5MB | Validação de `file.size` antes do upload |
+| Formatos aceitos | Vídeo: MediaRecorder (webm); Documentos: JPG, PNG, WebP |
+| Auditoria completa | Toda ação registrada em `verification_logs` |
+
+---
+
+### 26.5 Service — `identityVerificationService.ts`
+
+| Função | Descrição |
+|--------|-----------|
+| `getVerificationById(id)` | Buscar verificação por ID (com JOIN analise) |
+| `getVerificationsByAnalise(analiseId)` | Verificações de uma análise |
+| `getVerificationsByStatus(status)` | Filtrar por status |
+| `getPendingVerifications()` | Verificações pendentes de revisão |
+| `createVerification(data)` | Criar registro de verificação |
+| `updateVerification(id, updates)` | Atualizar (status, URLs, etc.) |
+| `getVerificationLogs(verificationId)` | Logs de auditoria |
+| `createVerificationLog(log)` | Registrar ação de auditoria |
+| `uploadVerificationFile(path, file)` | Upload para bucket `identity-verification` |
+| `getSignedUrl(path)` | Signed URL (1h) para vídeo/documentos |
+
+---
+
+### 26.6 Hooks — `useIdentityVerification.ts`
+
+| Hook | Tipo | Query Key |
+|------|------|-----------|
+| `useVerification(id)` | Query | `['identity-verifications', id]` |
+| `useVerificationsByAnalise(analiseId)` | Query | `['identity-verifications', 'analise', analiseId]` |
+| `useVerificationsByStatus(status)` | Query | `['identity-verifications', 'status', status]` |
+| `usePendingVerifications()` | Query | `['identity-verifications', 'pending']` |
+| `useCreateVerification()` | Mutation | Invalida `'identity-verifications'` |
+| `useUpdateVerification()` | Mutation | Invalida `'identity-verifications'` |
+| `useVerificationLogs(verificationId)` | Query | `['verification-logs', verificationId]` |
+| `useCreateVerificationLog()` | Mutation | Invalida `'verification-logs'` |
+| `useUploadVerificationFile()` | Mutation | — |
+
+---
+
+### 26.7 VerifyIdentityPage — Wizard Multi-Etapa
+
+Página pública acessada via magic link (`/verify-identity?analise_id=...`). Sem sidebar, sem autenticação de sessão.
+
+**Estados do wizard:**
+
+| Etapa | Descrição |
+|-------|-----------|
+| `loading` | Carregando dados da verificação |
+| `intro` | Instruções e frase de verificação |
+| `video` | Gravação de vídeo-selfie com timer |
+| `documents` | Upload de documentos (frente + verso) |
+| `review` | Revisão final antes do envio |
+| `submitted` | Confirmação de envio |
+| `error` | Erro de carregamento ou permissão |
+| `expired` | Magic link expirado (>48h) |
+
+**MediaRecorder:**
+- Solicita `navigator.mediaDevices.getUserMedia({ video: true, audio: true })`
+- Timer visual de contagem (5s mín → 30s máx)
+- Auto-stop ao atingir 30s
+- Preview do vídeo antes de avançar
+
+---
+
+### 26.8 AnaliseDetalhadaModal — Painel do Analista
+
+Modal rico com 3 abas substituindo os modais inline anteriores em `AnaliseCreditoPage` e `KanbanAnalisePage`.
+
+**Aba "Dados da Análise":**
+- Informações do solicitante (nome, CPF, telefone, renda, score Serasa)
+- Valor solicitado, prazo, taxa de juros
+- Timeline de status
+
+**Aba "Verificação":**
+- Player de vídeo com signed URL
+- Documentos frente/verso lado a lado
+- Frase de verificação que o cliente deveria ter lido
+- Botões: ✅ Aprovar | ❌ Rejeitar | 🔄 Nova Tentativa
+- Formulário de motivo de rejeição
+- Formulário de nova frase (para retentativa)
+
+**Aba "Histórico":**
+- Timeline de auditoria (`verification_logs`)
+- Cada entrada mostra: ação, quem realizou, quando, detalhes
+
+---
+
+### 26.9 Edge Functions
+
+#### `send-verification-link`
+
+```
+POST /functions/v1/send-verification-link
+Authorization: Bearer <jwt>
+Body: { "analise_id": "uuid" }
+
+Fluxo:
+1. Valida JWT → extrai user
+2. Verifica role (admin/gerência)
+3. Busca análise + cliente
+4. Verifica retry_count < 3
+5. Gera frase de verificação aleatória
+6. Cria/atualiza identity_verifications
+7. Envia magic link via auth.signInWithOtp()
+8. Registra log de auditoria
+9. Retorna { success: true, verification_id }
+```
+
+#### `approve-credit`
+
+```
+POST /functions/v1/approve-credit
+Authorization: Bearer <jwt>
+Body: { "analise_id": "uuid", "pix_key": "chave", "pix_key_type": "cpf|email|phone|random" }
+
+Fluxo:
+1. Valida JWT → extrai user
+2. Verifica role (admin/gerência)
+3. Busca análise + verificação
+4. Valida: verificação aprovada, não é auto-análise
+5. Cria empréstimo em emprestimos
+6. Chama Woovi POST /payment (não-bloqueante)
+7. Registra transação em woovi_transactions
+8. Atualiza análise → status 'aprovado'
+9. Registra log de auditoria
+10. Retorna { success: true, emprestimo_id }
+```
+
+---
