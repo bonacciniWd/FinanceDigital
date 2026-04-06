@@ -12,7 +12,7 @@
  * const { user, login, logout, isAuthenticated, loading } = useAuth();
  * ```
  */
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Profile, UserRole } from '../lib/database.types';
 
@@ -28,6 +28,7 @@ interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
   isAuthenticated: boolean;
+  ipBlockedMsg: string;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   register: (email: string, password: string, name: string, role?: UserRole) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
@@ -39,38 +40,141 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [ipBlockedMsg, setIpBlockedMsg] = useState('');
+
+  // Flag que impede onAuthStateChange de setar o user enquanto login() está rodando
+  const loginInProgressRef = useRef(false);
 
   // ── Helpers ──────────────────────────────────────────────
+
+  /** Detecta IP público do usuário */
+  const detectPublicIp = async (): Promise<string> => {
+    try {
+      const ipRes = await fetch('https://api.ipify.org?format=json');
+      const ipData = await ipRes.json();
+      return ipData.ip?.trim() ?? '';
+    } catch {
+      try {
+        const ipRes = await fetch('https://ifconfig.me/ip');
+        return (await ipRes.text()).trim();
+      } catch {
+        return '';
+      }
+    }
+  };
+
+  /**
+   * Verifica se o IP atual é permitido pela whitelist global e pelo profile do usuário.
+   * Retorna { allowed: true } ou { allowed: false, error: '...' }.
+   */
+  const verifyIpAccess = useCallback(async (userId: string): Promise<{ allowed: boolean; error?: string }> => {
+    const isElectron = !!(window as any).electronAPI;
+    if (isElectron) return { allowed: true }; // Electron has ip-guard.cjs
+
+    const currentIp = await detectPublicIp();
+    if (!currentIp) {
+      console.warn('[Auth] Não foi possível detectar IP — permitindo acesso');
+      return { allowed: true };
+    }
+
+    console.log('[Auth] IP detectado:', currentIp);
+
+    // 1) Verifica whitelist global (tabela allowed_ips)
+    const { data: globalIps } = await supabase
+      .from('allowed_ips')
+      .select('ip_address')
+      .eq('active', true);
+
+    if (globalIps && globalIps.length > 0) {
+      const { data: allowed, error: rpcErr } = await supabase.rpc('check_ip_allowed', {
+        check_ip: currentIp,
+      });
+
+      console.log('[Auth] check_ip_allowed RPC:', { ip: currentIp, allowed, error: rpcErr?.message });
+
+      if (rpcErr || allowed === false) {
+        return {
+          allowed: false,
+          error: `Acesso bloqueado: seu IP (${currentIp}) não está autorizado. Contate o administrador.`,
+        };
+      }
+    }
+
+    // 2) Verifica allowed_ips do profile (restrição individual)
+    const { data: profileData } = await (supabase as any)
+      .from('profiles')
+      .select('allowed_ips')
+      .eq('id', userId)
+      .single();
+
+    const profileIps: string[] | null = profileData?.allowed_ips;
+
+    if (profileIps && profileIps.length > 0) {
+      const normalizeIp = (ip: string) => (ip || '').split('/')[0].trim();
+      const normalizedCurrent = normalizeIp(currentIp);
+      const profileAllowed = profileIps.some((ip: string) => normalizeIp(ip) === normalizedCurrent);
+      console.log('[Auth] Profile IP check:', { currentIp: normalizedCurrent, profileIps, profileAllowed });
+
+      if (!profileAllowed) {
+        return {
+          allowed: false,
+          error: `Acesso bloqueado: seu IP (${currentIp}) não está autorizado para sua conta. Contate o administrador.`,
+        };
+      }
+    }
+
+    return { allowed: true };
+  }, []);
 
   /**
    * Busca o profile do usuário. Se não existir (trigger falhou ou conta nova),
    * cria automaticamente usando os metadados do auth.users.
+   * Inclui timeout de 8s para evitar hang no Electron.
    */
   const fetchProfile = useCallback(async (userId: string, email?: string): Promise<Profile | null> => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
+    console.log('[Auth] fetchProfile:', userId);
 
-    if (!error && data) return data;
+    const withTimeout = <T,>(p: PromiseLike<T>, ms: number): Promise<T> =>
+      Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`timeout ${ms}ms`)), ms))]);
+
+    try {
+      const { data, error } = await withTimeout(
+        supabase.from('profiles').select('*').eq('id', userId).single(),
+        8000,
+      );
+
+      console.log('[Auth] fetchProfile result:', { found: !!data, error: error?.message });
+
+      if (!error && data) return data;
+    } catch (e) {
+      console.error('[Auth] fetchProfile falhou:', e);
+      return null;
+    }
 
     // Profile não encontrado — cria com os dados que já temos (evita round-trip getUser)
     const fallbackEmail = email ?? '';
     const fallbackName = fallbackEmail.split('@')[0] || 'Usuário';
     const fallbackRole: UserRole = 'comercial';
 
-    const { data: created, error: insertError } = await supabase
-      .from('profiles')
-      .upsert({ id: userId, name: fallbackName, email: fallbackEmail, role: fallbackRole }, { onConflict: 'id' })
-      .select()
-      .single();
+    try {
+      const { data: created, error: insertError } = await withTimeout(
+        supabase
+          .from('profiles')
+          .upsert({ id: userId, name: fallbackName, email: fallbackEmail, role: fallbackRole }, { onConflict: 'id' })
+          .select()
+          .single(),
+        8000,
+      );
 
-    if (insertError) {
-      console.error('Erro ao criar profile:', insertError);
+      if (insertError) {
+        console.error('[Auth] Erro ao criar profile:', insertError);
+        return null;
+      }
+      return created;
+    } catch (e) {
+      console.error('[Auth] upsert profile falhou:', e);
       return null;
     }
-    return created;
   }, []);
 
   function profileToAuthUser(profile: Profile): AuthUser {
@@ -97,16 +201,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async (event, session) => {
         if (ignore) return;
 
-        if (
-          (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') &&
-          session?.user
-        ) {
-          // Carrega profile completo apenas na sessão inicial e no login
+        console.log('[Auth]', event, session ? 'has session' : 'no session', 'loginInProgress:', loginInProgressRef.current);
+
+        if (event === 'SIGNED_IN' && session?.user) {
+          // Se login() está em andamento, NÃO seta o user aqui — login() fará isso
+          if (loginInProgressRef.current) {
+            console.log('[Auth] SIGNED_IN ignorado — login() controlará o user');
+            return;
+          }
+          // Aguarda 200ms para verificar se login() está prestes a rodar
+          // (SIGNED_IN pode disparar de sessão restaurada ANTES de login() setar a flag)
+          await new Promise((r) => setTimeout(r, 200));
+          if (ignore || loginInProgressRef.current) {
+            console.log('[Auth] SIGNED_IN ignorado após delay — login() assumiu');
+            return;
+          }
+          // Sessão restaurada sem login() ativo — verifica IP antes de confiar
+          const ipCheck = await verifyIpAccess(session.user.id);
+          if (!ipCheck.allowed) {
+            console.warn('[Auth] IP bloqueado na restauração de sessão:', ipCheck.error);
+            setIpBlockedMsg(ipCheck.error ?? 'IP não autorizado');
+            await supabase.auth.signOut({ scope: 'local' });
+            if (!ignore) setLoading(false);
+            return;
+          }
           const profile = await fetchProfile(session.user.id, session.user.email);
           if (!ignore && profile) setUser(profileToAuthUser(profile));
           if (!ignore) setLoading(false);
+        } else if (event === 'INITIAL_SESSION' && session?.user) {
+          // Sessão restaurada do localStorage — valida antes de confiar
+          const expiresAt = session.expires_at ?? 0;
+          const now = Math.floor(Date.now() / 1000);
+          let validSession = false;
+
+          if (expiresAt > now) {
+            validSession = true;
+          } else {
+            // JWT expirado — aguarda o auto-refresh (até 3s)
+            console.log('[Auth] JWT expirado, aguardando auto-refresh...');
+            await new Promise((r) => setTimeout(r, 3000));
+            if (ignore) return;
+            const { data: { session: refreshed } } = await supabase.auth.getSession();
+            if (refreshed?.user) {
+              validSession = true;
+            }
+          }
+
+          if (validSession) {
+            // Verifica IP antes de restaurar sessão
+            const ipCheck = await verifyIpAccess(session.user.id);
+            if (!ipCheck.allowed) {
+              console.warn('[Auth] IP bloqueado na restauração INITIAL_SESSION:', ipCheck.error);
+              setIpBlockedMsg(ipCheck.error ?? 'IP não autorizado');
+              await supabase.auth.signOut({ scope: 'local' });
+              if (!ignore) setLoading(false);
+              return;
+            }
+            const profile = await fetchProfile(session.user.id, session.user.email);
+            if (!ignore && profile) setUser(profileToAuthUser(profile));
+          }
+          if (!ignore) setLoading(false);
         } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-          // Refresh silencioso — só atualiza se ainda não temos usuário carregado
+          // Refresh silencioso bem-sucedido
           setLoading(false);
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
@@ -129,54 +285,68 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(fallbackTimer);
       subscription.unsubscribe();
     };
-  }, [fetchProfile]);
+  }, [fetchProfile, verifyIpAccess]);
+
+  // ── Periodic IP re-check (every 5 min) ──────────────────
+
+  useEffect(() => {
+    if (!user) return;
+
+    const IP_RECHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+    const interval = setInterval(async () => {
+      console.log('[Auth] Re-verificando IP...');
+      const ipCheck = await verifyIpAccess(user.id);
+      if (!ipCheck.allowed) {
+        console.warn('[Auth] IP bloqueado durante sessão ativa:', ipCheck.error);
+        setIpBlockedMsg(ipCheck.error ?? 'IP não autorizado');
+        await supabase.auth.signOut({ scope: 'local' });
+        setUser(null);
+      }
+    }, IP_RECHECK_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [user, verifyIpAccess]);
 
   // ── Login ────────────────────────────────────────────────
 
   async function login(email: string, password: string): Promise<{ success: boolean; error?: string }> {
     try {
+      // Marca que o login está em andamento — onAuthStateChange NÃO deve setar o user
+      loginInProgressRef.current = true;
+      setIpBlockedMsg('');
+
       const { data: authData, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) return { success: false, error: error.message };
+      if (error) {
+        loginInProgressRef.current = false;
+        return { success: false, error: error.message };
+      }
 
-      // ── IP restriction check ───────────────────────────
+      // ── IP restriction check ──
       if (authData.user) {
-        const { data: profile } = await (supabase as any)
-          .from('profiles')
-          .select('allowed_ips')
-          .eq('id', authData.user.id)
-          .single();
-
-        const allowedIps: string[] | null = profile?.allowed_ips;
-
-        if (allowedIps && allowedIps.length > 0) {
-          // Fetch current public IP
-          let currentIp = '';
-          try {
-            const ipRes = await fetch('https://api.ipify.org?format=json');
-            const ipData = await ipRes.json();
-            currentIp = ipData.ip;
-          } catch {
-            try {
-              const ipRes = await fetch('https://ifconfig.me/ip');
-              currentIp = (await ipRes.text()).trim();
-            } catch { /* cannot detect */ }
-          }
-
-          if (!currentIp || !allowedIps.includes(currentIp)) {
-            // IP not allowed — sign out immediately
-            await supabase.auth.signOut();
-            return {
-              success: false,
-              error: `Acesso bloqueado: seu IP (${currentIp || 'desconhecido'}) não está na lista de IPs autorizados.`,
-            };
-          }
+        const ipCheck = await verifyIpAccess(authData.user.id);
+        if (!ipCheck.allowed) {
+          loginInProgressRef.current = false;
+          await supabase.auth.signOut({ scope: 'local' });
+          return { success: false, error: ipCheck.error };
         }
       }
 
-      // O profile é carregado pelo listener onAuthStateChange('SIGNED_IN')
-      // para evitar fetch duplicado.
+      // ── Seta o user manualmente ──────────
+      if (authData.user) {
+        console.log('[Auth] Carregando profile...');
+        const profile = await fetchProfile(authData.user.id, authData.user.email ?? undefined);
+        if (profile) {
+          setUser(profileToAuthUser(profile));
+        }
+      }
+
+      loginInProgressRef.current = false;
+      setLoading(false);
       return { success: true };
-    } catch {
+    } catch (e) {
+      console.error('[Auth] login error:', e);
+      loginInProgressRef.current = false;
       return { success: false, error: 'Erro de conexão. Verifique sua internet.' };
     }
   }
@@ -254,7 +424,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, isAuthenticated: !!user, login, register, logout, updateProfile }}
+      value={{ user, loading, isAuthenticated: !!user, ipBlockedMsg, login, register, logout, updateProfile }}
     >
       {children}
     </AuthContext.Provider>

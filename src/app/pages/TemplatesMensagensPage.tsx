@@ -1,3 +1,4 @@
+
 /**
  * @module TemplatesMensagensPage
  * @description Gestão de templates de mensagens com suporte a gênero.
@@ -30,9 +31,22 @@ type FormData = {
   categoria: TemplateCategoria | '';
   mensagemMasculino: string;
   mensagemFeminino: string;
+  tipoNotificacao: string;
 };
 
-const EMPTY_FORM: FormData = { nome: '', categoria: '', mensagemMasculino: '', mensagemFeminino: '' };
+const EMPTY_FORM: FormData = { nome: '', categoria: '', mensagemMasculino: '', mensagemFeminino: '', tipoNotificacao: '' };
+
+const TIPOS_NOTIFICACAO: Record<string, string> = {
+  '': 'Nenhum (manual)',
+  lembrete_3dias: 'Lembrete — 3 dias antes',
+  lembrete_vespera: 'Lembrete — véspera do vencimento',
+  vencida_ontem: 'Cobrança — vencida ontem',
+  vencida_3dias: 'Cobrança — 3 dias de atraso',
+  vencida_7dias: 'Cobrança — 7 dias de atraso',
+  vencida_15dias: 'Cobrança — 15 dias de atraso',
+  vencida_30dias: 'Cobrança — 30 dias de atraso',
+  aprovacao: 'Aprovação de crédito',
+};
 
 /** Extrai variáveis do tipo {xxx} das mensagens */
 function extractVariables(msgM: string, msgF: string): string[] {
@@ -74,6 +88,7 @@ export default function TemplatesMensagensPage() {
       categoria: t.categoria,
       mensagemMasculino: t.mensagemMasculino,
       mensagemFeminino: t.mensagemFeminino,
+      tipoNotificacao: t.tipoNotificacao ?? '',
     });
     setModalOpen(true);
   }, []);
@@ -93,6 +108,7 @@ export default function TemplatesMensagensPage() {
   const handleSave = useCallback(() => {
     if (!form.nome || !form.categoria || !form.mensagemMasculino || !form.mensagemFeminino) return;
     const variaveis = extractVariables(form.mensagemMasculino, form.mensagemFeminino);
+    const tipoNotif = form.tipoNotificacao || null;
 
     if (editingId) {
       updateTemplate.mutate(
@@ -104,6 +120,7 @@ export default function TemplatesMensagensPage() {
             mensagem_masculino: form.mensagemMasculino,
             mensagem_feminino: form.mensagemFeminino,
             variaveis,
+            tipo_notificacao: tipoNotif,
           },
         },
         { onSuccess: () => { setModalOpen(false); setEditingId(null); setForm(EMPTY_FORM); } },
@@ -116,6 +133,7 @@ export default function TemplatesMensagensPage() {
           mensagem_masculino: form.mensagemMasculino,
           mensagem_feminino: form.mensagemFeminino,
           variaveis,
+          tipo_notificacao: tipoNotif,
         },
         { onSuccess: () => { setModalOpen(false); setForm(EMPTY_FORM); } },
       );
@@ -140,7 +158,15 @@ export default function TemplatesMensagensPage() {
 
   const previewMessage = (template: TemplateWhatsApp, sexo: 'masculino' | 'feminino') => {
     let msg = sexo === 'masculino' ? template.mensagemMasculino : template.mensagemFeminino;
-    msg = msg.replace('{nome}', 'João Silva').replace('{valor}', 'R$ 500,00').replace('{data}', '15/03/2026').replace('{diasAtraso}', '45').replace('{desconto}', '20');
+    msg = msg
+      .replace(/\{nome\}/g, 'João Silva')
+      .replace(/\{valor\}/g, 'R$ 500,00')
+      .replace(/\{data\}/g, '15/03/2026')
+      .replace(/\{numeroParcela\}/g, '3')
+      .replace(/\{totalParcelas\}/g, '12')
+      .replace(/\{diasAtraso\}/g, '7')
+      .replace(/\{parcelasPagas\}/g, '4')
+      .replace(/\{desconto\}/g, '20');
     return msg;
   };
 
@@ -182,6 +208,11 @@ export default function TemplatesMensagensPage() {
                   <div className="flex items-center gap-2 mb-1">
                     <CardTitle className="text-base">{template.nome}</CardTitle>
                     {getCategoryBadge(template.categoria)}
+                    {template.tipoNotificacao && (
+                      <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                        ⚡ {TIPOS_NOTIFICACAO[template.tipoNotificacao] ?? template.tipoNotificacao}
+                      </Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 mt-2">
                     <Badge variant="outline" className="text-xs">Variáveis: {template.variaveis.join(', ')}</Badge>
@@ -283,6 +314,26 @@ export default function TemplatesMensagensPage() {
               </div>
             </div>
             <div>
+              <Label>Notificação Automática</Label>
+              <Select value={form.tipoNotificacao} onValueChange={(v) => setForm(prev => ({ ...prev, tipoNotificacao: v === '_none' ? '' : v }))}>
+                <SelectTrigger><SelectValue placeholder="Nenhum (manual)" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="_none">Nenhum (manual)</SelectItem>
+                  <SelectItem value="lembrete_3dias">⏰ Lembrete — 3 dias antes</SelectItem>
+                  <SelectItem value="lembrete_vespera">⚠️ Lembrete — véspera do vencimento</SelectItem>
+                  <SelectItem value="vencida_ontem">🔴 Cobrança — vencida ontem</SelectItem>
+                  <SelectItem value="vencida_3dias">🟠 Cobrança — 3 dias de atraso</SelectItem>
+                  <SelectItem value="vencida_7dias">🟠 Cobrança — 7 dias de atraso</SelectItem>
+                  <SelectItem value="vencida_15dias">🔴 Cobrança — 15 dias de atraso</SelectItem>
+                  <SelectItem value="vencida_30dias">⛔ Cobrança — 30 dias de atraso</SelectItem>
+                  <SelectItem value="aprovacao">✅ Aprovação de crédito</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Vincular a uma automação faz o sistema usar este template automaticamente. Apenas 1 template ativo por tipo.
+              </p>
+            </div>
+            <div>
               <Label>Mensagem Masculino (Sr.)</Label>
               <Textarea
                 placeholder="Use {nome}, {valor}, {data} como variáveis..."
@@ -300,7 +351,15 @@ export default function TemplatesMensagensPage() {
                 onChange={(e) => setForm(prev => ({ ...prev, mensagemFeminino: e.target.value }))}
               />
             </div>
-            <p className="text-xs text-muted-foreground">Variáveis disponíveis: {'{nome}'}, {'{valor}'}, {'{data}'}, {'{diasAtraso}'}, {'{desconto}'}</p>
+            <div className="p-3 bg-muted rounded-lg">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Variáveis disponíveis:</p>
+              <p className="text-xs text-muted-foreground">
+                {'{nome}'} — nome do cliente · {'{valor}'} — valor da parcela · {'{data}'} — data de vencimento · {'{numeroParcela}'} — nº da parcela
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {'{diasAtraso}'} — dias em atraso · {'{totalParcelas}'} — total de parcelas do empréstimo · {'{parcelasPagas}'} — parcelas já pagas
+              </p>
+            </div>
             <div className="flex gap-3">
               <Button
                 className="flex-1 bg-primary hover:bg-primary/90"

@@ -10,14 +10,14 @@
  * @access Público (única rota não protegida)
  */
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, Link, useLocation } from 'react-router';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { Mail, Lock, Eye, EyeOff, Sun, Moon } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, Sun, Moon, Download, BookOpen } from 'lucide-react';
 
 import logo from '../assets/logo-login.png';
 import { useTheme } from '../contexts/ThemeContext';
@@ -32,7 +32,14 @@ export default function LoginPage() {
 
   const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const { theme, toggleTheme } = useTheme();
+
+  // Mostra erro de IP bloqueado vindo do ProtectedRoute
+  useEffect(() => {
+    const ipError = (location.state as any)?.ipError;
+    if (ipError) setError(ipError);
+  }, [location.state]);
 
   // Se já está autenticado, redireciona direto
   useEffect(() => {
@@ -61,14 +68,30 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 transition-colors duration-300 relative">
       <AnimatedBackground />
-      {/* Theme toggle */}
-      <button
-        onClick={toggleTheme}
-        className="absolute top-4 right-4 z-20 p-2 rounded-full glass hover:bg-white/20 dark:hover:bg-white/10 text-foreground transition-colors"
-        title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
-      >
-        {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-      </button>
+      {/* Top-right actions */}
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5">
+        <Link
+          to="/download"
+          className="p-2 rounded-full glass hover:bg-white/20 dark:hover:bg-white/10 text-foreground transition-colors"
+          title="Download do App"
+        >
+          <Download className="w-5 h-5" />
+        </Link>
+        <Link
+          to="/docs"
+          className="p-2 rounded-full glass hover:bg-white/20 dark:hover:bg-white/10 text-foreground transition-colors"
+          title="Documentação & FAQ"
+        >
+          <BookOpen className="w-5 h-5" />
+        </Link>
+        <button
+          onClick={toggleTheme}
+          className="p-2 rounded-full glass hover:bg-white/20 dark:hover:bg-white/10 text-foreground transition-colors"
+          title={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+        >
+          {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+        </button>
+      </div>
 
       <Card className="w-full max-w-xl shadow-2xl relative z-10">
         <CardHeader className="space-y-4 text-center">

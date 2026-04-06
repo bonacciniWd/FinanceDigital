@@ -1,0 +1,29 @@
+{
+  "appId": "com.fintechdigital.app",
+  "productName": "Fintech Digital",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*"
+  ],
+  "mac": {
+    "target": ["dmg"],
+    "icon": "public/icon.icns",
+    "category": "public.app-category.finance"
+  },
+  "win": {
+    "target": ["nsis"],
+    "icon": "public/icon.ico"
+  },
+  "linux": {
+    "target": ["AppImage"],
+    "icon": "public/icon.png",
+    "category": "Finance"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}

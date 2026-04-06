@@ -323,7 +323,7 @@ export default function DashboardPage() {
                   <th className="text-left py-3 px-4 font-medium">Cliente</th>
                   <th className="text-left py-3 px-4 font-medium">Status</th>
                   <th className="text-left py-3 px-4 font-medium">Valor</th>
-                  <th className="text-left py-3 px-4 font-medium">Vencimento</th>
+                  <th className="text-left py-3 px-4 font-medium">Próx. Vencimento</th>
                   <th className="text-left py-3 px-4 font-medium">Ações</th>
                 </tr>
               </thead>

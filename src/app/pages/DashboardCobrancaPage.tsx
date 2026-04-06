@@ -157,11 +157,11 @@ export default function DashboardCobrancaPage() {
 
       {/* Botões de Ação */}
       <div className="flex gap-4">
-        <Button className="bg-secondary hover:bg-secondary/90" onClick={() => navigate('/kanban/cobranca')}>
+        <Button className="bg-primary hover:bg-secondary/90" onClick={() => navigate('/kanban/cobranca')}>
           <HandshakeIcon className="w-4 h-4 mr-2" />
           Abrir Kanban de Cobrança
         </Button>
-        <Button variant="outline" onClick={() => navigate('/clientes/emprestimos-ativos')}>
+        <Button variant="default" onClick={() => navigate('/clientes/emprestimos')}>
           <Banknote className="w-4 h-4 mr-2" />
           Empréstimos Ativos
         </Button>

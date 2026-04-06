@@ -35,6 +35,10 @@ export type FluxoStatus = 'ativo' | 'pausado' | 'rascunho';
 export type FluxoEtapaTipo = 'mensagem' | 'condicao' | 'acao' | 'espera' | 'finalizar';
 export type WhatsappMsgStatus = 'pendente' | 'enviado' | 'entregue' | 'lido' | 'erro';
 
+// ── Comissões ──────────────────────────────────────────────
+export type ComissaoTipo = 'venda' | 'cobranca' | 'gerencia';
+export type ComissaoStatus = 'pendente' | 'aprovado' | 'pago';
+
 // ── Woovi (Gateway de Pagamentos) ──────────────────────────
 export type WooviChargeStatus = 'ACTIVE' | 'COMPLETED' | 'EXPIRED' | 'ERROR';
 export type WooviTransactionStatus = 'PENDING' | 'CONFIRMED' | 'FAILED' | 'REFUNDED';
@@ -105,8 +109,15 @@ export interface Database {
           telefone: string;
           cpf: string | null;
           sexo: Sexo;
+          profissao: string | null;
           data_nascimento: string | null;
           endereco: string | null;
+          rua: string | null;
+          numero: string | null;
+          bairro: string | null;
+          estado: string | null;
+          cidade: string | null;
+          cep: string | null;
           status: ClienteStatus;
           valor: number;
           vencimento: string;
@@ -118,6 +129,8 @@ export interface Database {
           bonus_acumulado: number;
           grupo: string | null;
           indicado_por: string | null;
+          pix_key: string | null;
+          pix_key_type: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -128,8 +141,15 @@ export interface Database {
           telefone: string;
           cpf?: string | null;
           sexo: Sexo;
+          profissao?: string | null;
           data_nascimento?: string | null;
           endereco?: string | null;
+          rua?: string | null;
+          numero?: string | null;
+          bairro?: string | null;
+          estado?: string | null;
+          cidade?: string | null;
+          cep?: string | null;
           status?: ClienteStatus;
           valor?: number;
           vencimento: string;
@@ -141,6 +161,8 @@ export interface Database {
           bonus_acumulado?: number;
           grupo?: string | null;
           indicado_por?: string | null;
+          pix_key?: string | null;
+          pix_key_type?: string | null;
         };
         Update: {
           nome?: string;
@@ -148,8 +170,15 @@ export interface Database {
           telefone?: string;
           cpf?: string | null;
           sexo?: Sexo;
+          profissao?: string | null;
           data_nascimento?: string | null;
           endereco?: string | null;
+          rua?: string | null;
+          numero?: string | null;
+          bairro?: string | null;
+          estado?: string | null;
+          cidade?: string | null;
+          cep?: string | null;
           status?: ClienteStatus;
           valor?: number;
           vencimento?: string;
@@ -161,6 +190,8 @@ export interface Database {
           bonus_acumulado?: number;
           grupo?: string | null;
           indicado_por?: string | null;
+          pix_key?: string | null;
+          pix_key_type?: string | null;
           updated_at?: string;
         };
       };
@@ -178,6 +209,12 @@ export interface Database {
           data_contrato: string;
           proximo_vencimento: string;
           status: EmprestimoStatus;
+          vendedor_id: string | null;
+          cobrador_id: string | null;
+          aprovado_por: string | null;
+          aprovado_em: string | null;
+          analise_id: string | null;
+          gateway: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -193,6 +230,12 @@ export interface Database {
           data_contrato: string;
           proximo_vencimento: string;
           status?: EmprestimoStatus;
+          vendedor_id?: string | null;
+          cobrador_id?: string | null;
+          aprovado_por?: string | null;
+          aprovado_em?: string | null;
+          analise_id?: string | null;
+          gateway?: string | null;
         };
         Update: {
           cliente_id?: string;
@@ -205,6 +248,12 @@ export interface Database {
           data_contrato?: string;
           proximo_vencimento?: string;
           status?: EmprestimoStatus;
+          vendedor_id?: string | null;
+          cobrador_id?: string | null;
+          aprovado_por?: string | null;
+          aprovado_em?: string | null;
+          analise_id?: string | null;
+          gateway?: string | null;
           updated_at?: string;
         };
       };
@@ -223,6 +272,13 @@ export interface Database {
           juros: number;
           multa: number;
           desconto: number;
+          observacao: string | null;
+          conta_bancaria: string | null;
+          comprovante_url: string | null;
+          pagamento_tipo: 'pix' | 'manual' | 'automatico' | null;
+          confirmado_por: string | null;
+          confirmado_em: string | null;
+          woovi_charge_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -239,6 +295,13 @@ export interface Database {
           juros?: number;
           multa?: number;
           desconto?: number;
+          observacao?: string | null;
+          conta_bancaria?: string | null;
+          comprovante_url?: string | null;
+          pagamento_tipo?: 'pix' | 'manual' | 'automatico' | null;
+          confirmado_por?: string | null;
+          confirmado_em?: string | null;
+          woovi_charge_id?: string | null;
         };
         Update: {
           emprestimo_id?: string;
@@ -252,6 +315,13 @@ export interface Database {
           juros?: number;
           multa?: number;
           desconto?: number;
+          observacao?: string | null;
+          conta_bancaria?: string | null;
+          comprovante_url?: string | null;
+          pagamento_tipo?: 'pix' | 'manual' | 'automatico' | null;
+          confirmado_por?: string | null;
+          confirmado_em?: string | null;
+          woovi_charge_id?: string | null;
           updated_at?: string;
         };
       };
@@ -295,6 +365,7 @@ export interface Database {
           mensagem_feminino: string;
           variaveis: string[];
           ativo: boolean;
+          tipo_notificacao: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -306,6 +377,7 @@ export interface Database {
           mensagem_feminino: string;
           variaveis?: string[];
           ativo?: boolean;
+          tipo_notificacao?: string | null;
         };
         Update: {
           nome?: string;
@@ -314,6 +386,7 @@ export interface Database {
           mensagem_feminino?: string;
           variaveis?: string[];
           ativo?: boolean;
+          tipo_notificacao?: string | null;
           updated_at?: string;
         };
       };
@@ -582,6 +655,13 @@ export interface Database {
           analista_id: string | null;
           verification_required: boolean;
           verification_id: string | null;
+          numero_parcelas: number | null;
+          periodicidade: string | null;
+          dia_pagamento: number | null;
+          intervalo_dias: number | null;
+          dia_util: boolean;
+          datas_personalizadas: string | null;
+          data_resultado: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -600,6 +680,13 @@ export interface Database {
           analista_id?: string | null;
           verification_required?: boolean;
           verification_id?: string | null;
+          numero_parcelas?: number | null;
+          periodicidade?: string | null;
+          dia_pagamento?: number | null;
+          intervalo_dias?: number | null;
+          dia_util?: boolean;
+          datas_personalizadas?: string | null;
+          data_resultado?: string | null;
         };
         Update: {
           cliente_id?: string | null;
@@ -615,6 +702,13 @@ export interface Database {
           analista_id?: string | null;
           verification_required?: boolean;
           verification_id?: string | null;
+          numero_parcelas?: number | null;
+          periodicidade?: string | null;
+          dia_pagamento?: number | null;
+          intervalo_dias?: number | null;
+          dia_util?: boolean;
+          datas_personalizadas?: string | null;
+          data_resultado?: string | null;
           updated_at?: string;
         };
       };
@@ -630,6 +724,7 @@ export interface Database {
           evolution_url: string | null;
           qr_code: string | null;
           webhook_url: string | null;
+          is_system: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -643,6 +738,7 @@ export interface Database {
           evolution_url?: string | null;
           qr_code?: string | null;
           webhook_url?: string | null;
+          is_system?: boolean;
         };
         Update: {
           departamento?: string;
@@ -653,6 +749,7 @@ export interface Database {
           evolution_url?: string | null;
           qr_code?: string | null;
           webhook_url?: string | null;
+          is_system?: boolean;
           updated_at?: string;
         };
         Relationships: [];
@@ -805,6 +902,8 @@ export interface Database {
           split_indicador_id: string | null;
           split_valor: number | null;
           paid_at: string | null;
+          criado_por: string | null;
+          gateway: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -824,6 +923,8 @@ export interface Database {
           split_indicador_id?: string | null;
           split_valor?: number | null;
           paid_at?: string | null;
+          criado_por?: string | null;
+          gateway?: string | null;
         };
         Update: {
           parcela_id?: string | null;
@@ -840,6 +941,8 @@ export interface Database {
           split_indicador_id?: string | null;
           split_valor?: number | null;
           paid_at?: string | null;
+          criado_por?: string | null;
+          gateway?: string | null;
           updated_at?: string;
         };
       };
@@ -860,6 +963,9 @@ export interface Database {
           end_to_end_id: string | null;
           descricao: string | null;
           metadata: Json;
+          autorizado_por: string | null;
+          autorizado_em: string | null;
+          gateway: string | null;
           confirmed_at: string | null;
           created_at: string;
           updated_at: string;
@@ -879,6 +985,9 @@ export interface Database {
           end_to_end_id?: string | null;
           descricao?: string | null;
           metadata?: Json;
+          autorizado_por?: string | null;
+          autorizado_em?: string | null;
+          gateway?: string | null;
           confirmed_at?: string | null;
         };
         Update: {
@@ -895,6 +1004,9 @@ export interface Database {
           end_to_end_id?: string | null;
           descricao?: string | null;
           metadata?: Json;
+          autorizado_por?: string | null;
+          autorizado_em?: string | null;
+          gateway?: string | null;
           confirmed_at?: string | null;
           updated_at?: string;
         };
@@ -988,6 +1100,7 @@ export interface Database {
           video_url: string | null;
           document_front_url: string | null;
           document_back_url: string | null;
+          profissao_informada: string | null;
           verification_phrase: string;
           status: 'pending' | 'approved' | 'rejected' | 'retry_needed';
           analyzed_by: string | null;
@@ -1008,6 +1121,7 @@ export interface Database {
           video_url?: string | null;
           document_front_url?: string | null;
           document_back_url?: string | null;
+          profissao_informada?: string | null;
           verification_phrase: string;
           status?: 'pending' | 'approved' | 'rejected' | 'retry_needed';
           analyzed_by?: string | null;
@@ -1023,6 +1137,7 @@ export interface Database {
           video_url?: string | null;
           document_front_url?: string | null;
           document_back_url?: string | null;
+          profissao_informada?: string | null;
           status?: 'pending' | 'approved' | 'rejected' | 'retry_needed';
           analyzed_by?: string | null;
           analyzed_at?: string | null;
@@ -1054,6 +1169,97 @@ export interface Database {
         };
         Update: never;
         Relationships: [];
+      };
+
+      // ── Comissões & Gateways ─────────────────────────────
+
+      agentes_comissoes: {
+        Row: {
+          id: string;
+          agente_id: string;
+          percentual_venda: number;
+          percentual_cobranca: number;
+          percentual_gerencia: number;
+          ativo: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          agente_id: string;
+          percentual_venda?: number;
+          percentual_cobranca?: number;
+          percentual_gerencia?: number;
+          ativo?: boolean;
+        };
+        Update: {
+          agente_id?: string;
+          percentual_venda?: number;
+          percentual_cobranca?: number;
+          percentual_gerencia?: number;
+          ativo?: boolean;
+          updated_at?: string;
+        };
+      };
+
+      comissoes_liquidacoes: {
+        Row: {
+          id: string;
+          parcela_id: string;
+          emprestimo_id: string;
+          agente_id: string;
+          tipo: ComissaoTipo;
+          valor_base: number;
+          percentual: number;
+          valor_comissao: number;
+          mes_referencia: string;
+          status: ComissaoStatus;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          parcela_id: string;
+          emprestimo_id: string;
+          agente_id: string;
+          tipo: ComissaoTipo;
+          valor_base: number;
+          percentual: number;
+          valor_comissao: number;
+          mes_referencia: string;
+          status?: ComissaoStatus;
+        };
+        Update: {
+          status?: ComissaoStatus;
+        };
+      };
+
+      gateways_pagamento: {
+        Row: {
+          id: string;
+          nome: string;
+          label: string;
+          ativo: boolean;
+          config: Json;
+          prioridade: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          nome: string;
+          label: string;
+          ativo?: boolean;
+          config?: Json;
+          prioridade?: number;
+        };
+        Update: {
+          nome?: string;
+          label?: string;
+          ativo?: boolean;
+          config?: Json;
+          prioridade?: number;
+          updated_at?: string;
+        };
       };
     };
 
@@ -1144,6 +1350,8 @@ export interface Database {
       woovi_transaction_status: WooviTransactionStatus;
       woovi_transaction_type: WooviTransactionType;
       verification_status: VerificationStatus;
+      comissao_tipo: ComissaoTipo;
+      comissao_status: ComissaoStatus;
     };
   };
 }
@@ -1242,6 +1450,11 @@ export type ClienteComIndicados = Cliente & {
   indicados: { id: string; nome: string; status: ClienteStatus }[];
 };
 
+/** Cliente com empréstimos embutidos (usado na listagem de clientes) */
+export type ClienteComEmprestimos = Cliente & {
+  emprestimos: Pick<Emprestimo, 'id' | 'valor' | 'parcelas' | 'parcelas_pagas' | 'proximo_vencimento' | 'status'>[];
+};
+
 /** Membro da rede de indicações com dados do cliente (JOIN) */
 export type RedeIndicacaoComCliente = RedeIndicacao & {
   clientes: { id: string; nome: string; email: string; telefone: string; status: ClienteStatus; valor: number; bonus_acumulado: number; score_interno: number } | null;
@@ -1299,6 +1512,28 @@ export type WooviSubaccountComCliente = WooviSubaccount & {
   clientes: { nome: string; telefone: string; email: string } | null;
 };
 
+// ── Comissões & Gateways ──────────────────────────────────────────
+
+/** Linha da tabela agentes_comissoes */
+export type AgenteComissao = Database['public']['Tables']['agentes_comissoes']['Row'];
+export type AgenteComissaoInsert = Database['public']['Tables']['agentes_comissoes']['Insert'];
+export type AgenteComissaoUpdate = Database['public']['Tables']['agentes_comissoes']['Update'];
+
+/** Linha da tabela comissoes_liquidacoes */
+export type ComissaoLiquidacao = Database['public']['Tables']['comissoes_liquidacoes']['Row'];
+export type ComissaoLiquidacaoInsert = Database['public']['Tables']['comissoes_liquidacoes']['Insert'];
+export type ComissaoLiquidacaoUpdate = Database['public']['Tables']['comissoes_liquidacoes']['Update'];
+
+/** Linha da tabela gateways_pagamento */
+export type GatewayPagamento = Database['public']['Tables']['gateways_pagamento']['Row'];
+export type GatewayPagamentoInsert = Database['public']['Tables']['gateways_pagamento']['Insert'];
+export type GatewayPagamentoUpdate = Database['public']['Tables']['gateways_pagamento']['Update'];
+
+/** Comissão com dados do agente (JOIN) */
+export type ComissaoComAgente = ComissaoLiquidacao & {
+  profiles: { name: string; email: string; role: UserRole } | null;
+};
+
 // ── Identity Verification (Verificação de Identidade) ─────────────
 
 export interface ReferenceContact {
@@ -1314,6 +1549,7 @@ export interface IdentityVerificationRow {
   video_url: string | null;
   document_front_url: string | null;
   document_back_url: string | null;
+  profissao_informada: string | null;
   proof_of_address_url: string | null;
   residence_video_url: string | null;
   client_address: string | null;
@@ -1339,6 +1575,7 @@ export interface IdentityVerificationInsert {
   video_url?: string | null;
   document_front_url?: string | null;
   document_back_url?: string | null;
+  profissao_informada?: string | null;
   proof_of_address_url?: string | null;
   residence_video_url?: string | null;
   client_address?: string | null;
@@ -1359,6 +1596,7 @@ export interface IdentityVerificationUpdate {
   video_url?: string | null;
   document_front_url?: string | null;
   document_back_url?: string | null;
+  profissao_informada?: string | null;
   proof_of_address_url?: string | null;
   residence_video_url?: string | null;
   client_address?: string | null;

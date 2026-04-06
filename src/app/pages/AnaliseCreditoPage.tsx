@@ -11,7 +11,7 @@
  * @route /clientes/analise-credito
  * @access Protegido — perfis admin, gerente, analista
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -20,8 +20,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
+import { Checkbox } from '../components/ui/checkbox';
+import { Calendar } from '../components/ui/calendar';
+import { ptBR } from 'date-fns/locale/pt-BR';
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Skeleton } from '../components/ui/skeleton';
-import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus, Shield, Send } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus, Shield, Send, CalendarDays, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useAnalises, useCreateAnalise, useUpdateAnalise } from '../hooks/useAnaliseCredito';
@@ -48,9 +52,17 @@ export default function AnaliseCreditoPage() {
     valorSolicitado: '',
     rendaMensal: '',
     scoreSerasa: '',
+    numeroParcelas: '',
+    periodicidade: 'mensal',
+    diaPagamento: '',
+    intervaloDias: '',
+    diaUtil: false,
+    datasPersonalizadas: [] as Date[],
   });
   const [buscaCliente, setBuscaCliente] = useState('');
   const [showClienteResults, setShowClienteResults] = useState(false);
+  const [pendenciaCliente, setPendenciaCliente] = useState<{ temPendencia: boolean; total: number; emprestimos: Array<{ id: string; valor: number; status: string; parcelas: number; parcelas_pagas: number }> } | null>(null);
+  const [verificandoPendencia, setVerificandoPendencia] = useState(false);
 
   // ── React Query ──────────────────────────────────────────
   const { data: analises, isLoading, isError } = useAnalises();
@@ -58,6 +70,35 @@ export default function AnaliseCreditoPage() {
   const updateMutation = useUpdateAnalise();
   const { data: clientes } = useClientes();
   const { user } = useAuth();
+
+  // ── Verificar pendências do cliente ──────────────────────
+  const verificarPendencias = useCallback(async (clienteId?: string, cpf?: string) => {
+    if (!clienteId && !cpf) { setPendenciaCliente(null); return; }
+    setVerificandoPendencia(true);
+    try {
+      let result;
+      if (clienteId) {
+        const { data, error } = await supabase.rpc('verificar_pendencias_cliente_id', { p_cliente_id: clienteId });
+        if (error) throw error;
+        result = data;
+      } else {
+        const { data, error } = await supabase.rpc('verificar_pendencias_cliente', { p_cpf: cpf });
+        if (error) throw error;
+        result = data;
+      }
+      if (result) {
+        setPendenciaCliente({
+          temPendencia: result.tem_pendencia,
+          total: result.total_emprestimos_pendentes,
+          emprestimos: result.emprestimos || [],
+        });
+      }
+    } catch {
+      setPendenciaCliente(null);
+    } finally {
+      setVerificandoPendencia(false);
+    }
+  }, []);
 
   // ── Enviar Link de Verificação via WhatsApp ──────────────
   const [sendingLink, setSendingLink] = useState(false);
@@ -131,17 +172,27 @@ export default function AnaliseCreditoPage() {
   };
 
   // ── Ações ────────────────────────────────────────────────
-  const handleAprovar = (analise: AnaliseCredito) => {
-    updateMutation.mutate(
-      { id: analise.id, updates: { status: 'aprovado' } },
-      {
-        onSuccess: () => {
-          toast.success(`Análise de ${analise.clienteNome} aprovada!`);
-          setSelectedAnalise(null);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const handleAprovar = async (analise: AnaliseCredito) => {
+    setApprovingId(analise.id);
+    try {
+      // pix_key é lido automaticamente da tabela clientes pelo backend
+      const { data, error } = await supabase.functions.invoke('approve-credit', {
+        body: {
+          analise_id: analise.id,
         },
-        onError: (err) => toast.error(`Erro ao aprovar: ${err.message}`),
-      }
-    );
+      });
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || 'Erro na aprovação');
+      toast.success(`Análise de ${analise.clienteNome} aprovada! ${data.parcelas_geradas} parcela(s) criada(s).`);
+      setSelectedAnalise(null);
+      // Invalidate relevant caches
+      updateMutation.reset();
+    } catch (err: any) {
+      toast.error(`Erro ao aprovar: ${err.message}`);
+    } finally {
+      setApprovingId(null);
+    }
   };
 
   const handleIniciarRecusa = (analise: AnaliseCredito) => {
@@ -153,7 +204,7 @@ export default function AnaliseCreditoPage() {
   const handleConfirmarRecusa = () => {
     if (!analiseParaRecusar) return;
     updateMutation.mutate(
-      { id: analiseParaRecusar.id, updates: { status: 'recusado', motivo: motivoRecusa || null } },
+      { id: analiseParaRecusar.id, updates: { status: 'recusado', motivo: motivoRecusa || null, data_resultado: new Date().toISOString() } },
       {
         onSuccess: () => {
           toast.success(`Análise de ${analiseParaRecusar.clienteNome} recusada.`);
@@ -181,6 +232,9 @@ export default function AnaliseCreditoPage() {
       toast.error('Preencha todos os campos obrigatórios.');
       return;
     }
+    if (pendenciaCliente?.temPendencia) {
+      toast.warning(`Atenção: cliente possui ${pendenciaCliente.total} empréstimo(s) ativo(s). A análise será criada mesmo assim.`);
+    }
     createMutation.mutate(
       {
         cliente_id: formNova.clienteId || null,
@@ -189,12 +243,21 @@ export default function AnaliseCreditoPage() {
         valor_solicitado: parseFloat(formNova.valorSolicitado),
         renda_mensal: parseFloat(formNova.rendaMensal),
         score_serasa: parseInt(formNova.scoreSerasa),
+        numero_parcelas: formNova.numeroParcelas ? parseInt(formNova.numeroParcelas) : null,
+        periodicidade: formNova.periodicidade || 'mensal',
+        dia_pagamento: formNova.diaPagamento ? parseInt(formNova.diaPagamento) : null,
+        intervalo_dias: formNova.intervaloDias ? parseInt(formNova.intervaloDias) : null,
+        dia_util: formNova.diaUtil,
+        datas_personalizadas: formNova.datasPersonalizadas.length > 0
+          ? JSON.stringify(formNova.datasPersonalizadas.map(d => d.toISOString().split('T')[0]).sort())
+          : null,
       },
       {
         onSuccess: () => {
           toast.success('Análise criada com sucesso!');
           setShowNovaAnalise(false);
-          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', rendaMensal: '', scoreSerasa: '' });
+          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', rendaMensal: '', scoreSerasa: '', numeroParcelas: '', periodicidade: 'mensal', diaPagamento: '', intervaloDias: '', diaUtil: false, datasPersonalizadas: [] });
+          setPendenciaCliente(null);
           setBuscaCliente('');
         },
         onError: (err) => toast.error(`Erro ao criar análise: ${err.message}`),
@@ -465,6 +528,7 @@ export default function AnaliseCreditoPage() {
                         setFormNova({ ...formNova, clienteId: c.id, clienteNome: c.nome, cpf: c.cpf ?? '' });
                         setBuscaCliente('');
                         setShowClienteResults(false);
+                        verificarPendencias(c.id);
                       }}
                     >
                       <span className="font-medium truncate">{c.nome}</span>
@@ -495,7 +559,8 @@ export default function AnaliseCreditoPage() {
                 id="cpfNovo"
                 placeholder="000.000.000-00"
                 value={formNova.cpf}
-                onChange={(e) => setFormNova({ ...formNova, cpf: e.target.value })}
+                onChange={(e) => { setFormNova({ ...formNova, cpf: e.target.value }); setPendenciaCliente(null); }}
+                onBlur={() => { if (formNova.cpf.replace(/\D/g, '').length >= 11 && !formNova.clienteId) verificarPendencias(undefined, formNova.cpf); }}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -532,14 +597,198 @@ export default function AnaliseCreditoPage() {
                 onChange={(e) => setFormNova({ ...formNova, scoreSerasa: e.target.value })}
               />
             </div>
+
+            {/* ── Alerta de pendências ──────────────── */}
+            {verificandoPendencia && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-muted text-sm text-muted-foreground">
+                <Clock className="h-4 w-4 animate-spin" /> Verificando pendências do cliente...
+              </div>
+            )}
+            {pendenciaCliente?.temPendencia && (
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
+                    Atenção — {pendenciaCliente.total} empréstimo(s) ativo(s)
+                  </p>
+                  <p className="text-xs text-amber-600/80 dark:text-amber-400/70 mt-1">
+                    Este cliente já possui empréstimos em andamento. A análise pode ser criada normalmente, mas o admin/gerência será notificado.
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {pendenciaCliente.emprestimos.map((emp) => (
+                      <div key={emp.id} className="text-xs text-amber-700/70 dark:text-amber-400/60 flex items-center gap-2">
+                        <span>•</span>
+                        <span>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(emp.valor)}</span>
+                        <Badge variant="outline" className="text-[10px] h-4 px-1">{emp.status}</Badge>
+                        <span className="text-muted-foreground">({emp.parcelas_pagas}/{emp.parcelas} pagas)</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Configuração de Parcelas ────────────── */}
+            <div className="border-t pt-4 mt-2">
+              <p className="text-sm font-medium text-muted-foreground mb-3">Configuração de Parcelas (opcional)</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="numParcelas">Nº Parcelas</Label>
+                  <Input
+                    id="numParcelas"
+                    type="number"
+                    placeholder="Ex: 4"
+                    min={1}
+                    max={60}
+                    value={formNova.numeroParcelas}
+                    onChange={(e) => setFormNova({ ...formNova, numeroParcelas: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="periodicidade">Periodicidade</Label>
+                  <Select value={formNova.periodicidade} onValueChange={(v) => setFormNova({ ...formNova, periodicidade: v, diaPagamento: '', intervaloDias: '', datasPersonalizadas: [] })}>
+                    <SelectTrigger id="periodicidade">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="diario">Diário</SelectItem>
+                      <SelectItem value="semanal">Semanal</SelectItem>
+                      <SelectItem value="quinzenal">Quinzenal</SelectItem>
+                      <SelectItem value="mensal">Mensal</SelectItem>
+                      <SelectItem value="personalizado">Personalizado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Campos dinâmicos por periodicidade */}
+              {formNova.periodicidade === 'semanal' && (
+                <div className="mt-3">
+                  <Label htmlFor="diaPagamento">Dia da Semana</Label>
+                  <Select value={formNova.diaPagamento} onValueChange={(v) => setFormNova({ ...formNova, diaPagamento: v })}>
+                    <SelectTrigger id="diaPagamento">
+                      <SelectValue placeholder="Escolha..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">Segunda-feira</SelectItem>
+                      <SelectItem value="2">Terça-feira</SelectItem>
+                      <SelectItem value="3">Quarta-feira</SelectItem>
+                      <SelectItem value="4">Quinta-feira</SelectItem>
+                      <SelectItem value="5">Sexta-feira</SelectItem>
+                      <SelectItem value="6">Sábado</SelectItem>
+                      <SelectItem value="0">Domingo</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {(formNova.periodicidade === 'quinzenal' || formNova.periodicidade === 'mensal') && (
+                <div className="mt-3">
+                  <Label htmlFor="diaPagamento">Dia do Mês</Label>
+                  <Input
+                    id="diaPagamento"
+                    type="number"
+                    placeholder={formNova.periodicidade === 'mensal' ? '1 a 31' : '1 a 15'}
+                    min={1}
+                    max={formNova.periodicidade === 'mensal' ? 31 : 15}
+                    value={formNova.diaPagamento}
+                    onChange={(e) => setFormNova({ ...formNova, diaPagamento: e.target.value })}
+                  />
+                </div>
+              )}
+
+              {formNova.periodicidade === 'personalizado' && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <Label htmlFor="intervaloDias">Intervalo entre parcelas (dias)</Label>
+                    <Input
+                      id="intervaloDias"
+                      type="number"
+                      placeholder="Ex: 23"
+                      min={1}
+                      max={365}
+                      value={formNova.intervaloDias}
+                      onChange={(e) => setFormNova({ ...formNova, intervaloDias: e.target.value })}
+                    />
+                    <p className="text-[11px] text-muted-foreground mt-1">Deixe vazio se for informar datas específicas abaixo</p>
+                  </div>
+                  <div>
+                    <Label>Datas específicas de vencimento</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className="w-full justify-start text-left font-normal mt-1">
+                          <CalendarDays className="mr-2 h-4 w-4" />
+                          {formNova.datasPersonalizadas.length > 0
+                            ? `${formNova.datasPersonalizadas.length} data(s) selecionada(s)`
+                            : 'Selecione as datas...'}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                          mode="multiple"
+                          selected={formNova.datasPersonalizadas}
+                          onSelect={(dates) => setFormNova({ ...formNova, datasPersonalizadas: dates || [] })}
+                          disabled={{ before: new Date() }}
+                          locale={ptBR}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    {formNova.datasPersonalizadas.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {formNova.datasPersonalizadas
+                          .sort((a, b) => a.getTime() - b.getTime())
+                          .map((date, i) => (
+                            <Badge key={i} variant="secondary" className="text-xs gap-1">
+                              {date.toLocaleDateString('pt-BR')}
+                              <X
+                                className="h-3 w-3 cursor-pointer hover:text-destructive"
+                                onClick={() => setFormNova({
+                                  ...formNova,
+                                  datasPersonalizadas: formNova.datasPersonalizadas.filter((_, idx) => idx !== i)
+                                })}
+                              />
+                            </Badge>
+                          ))}
+                      </div>
+                    )}
+                    <p className="text-[11px] text-muted-foreground mt-1">Se preenchido, estas datas têm prioridade sobre o intervalo</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Checkbox dia útil — visível para todos exceto diário */}
+              {formNova.periodicidade !== 'diario' && (
+                <div className="flex items-center gap-2 mt-3">
+                  <Checkbox
+                    id="diaUtil"
+                    checked={formNova.diaUtil}
+                    onCheckedChange={(v) => setFormNova({ ...formNova, diaUtil: !!v })}
+                  />
+                  <Label htmlFor="diaUtil" className="text-sm font-normal cursor-pointer">
+                    Considerar apenas dias úteis (ajusta vencimentos para o próximo dia útil)
+                  </Label>
+                </div>
+              )}
+
+              {/* Simulação */}
+              {formNova.numeroParcelas && formNova.valorSolicitado && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  Simulação: {formNova.numeroParcelas}x de ~{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(parseFloat(formNova.valorSolicitado) / parseInt(formNova.numeroParcelas))}
+                  {formNova.periodicidade === 'diario' ? ' (diárias)' : formNova.periodicidade === 'semanal' ? ' (semanais)' : formNova.periodicidade === 'quinzenal' ? ' (quinzenais)' : formNova.periodicidade === 'personalizado' ? (formNova.intervaloDias ? ` (a cada ${formNova.intervaloDias} dia${formNova.intervaloDias !== '1' ? 's' : ''})` : ' (datas personalizadas)') : ' (mensais)'}
+                  {formNova.diaUtil ? ' — dias úteis' : ''}
+                  {' '}— valor final com juros calculado na aprovação
+                </p>
+              )}
+            </div>
+
             <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => setShowNovaAnalise(false)}>
+              <Button variant="outline" className="flex-1" onClick={() => { setShowNovaAnalise(false); setPendenciaCliente(null); }}>
                 Cancelar
               </Button>
               <Button
                 className="flex-1 bg-primary"
                 onClick={handleNovaAnalise}
-                disabled={createMutation.isPending}
+                disabled={createMutation.isPending || verificandoPendencia}
               >
                 {createMutation.isPending ? 'Criando...' : 'Criar Análise'}
               </Button>

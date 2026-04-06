@@ -90,9 +90,23 @@ async function fetchWhatsappInstances() {
   return data ?? [];
 }
 
+async function fetchGatewaysStatus() {
+  const { data, error } = await supabase
+    .from('gateways_pagamento')
+    .select('nome, ativo, config')
+    .order('prioridade', { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 /* ── build integrations list ────────────────────────────── */
-function buildIntegracoes(wpInstances: any[]): IntegracaoCard[] {
+function buildIntegracoes(wpInstances: any[], gatewaysDb: any[]): IntegracaoCard[] {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL ?? '—';
+  const wooviGw = gatewaysDb.find((g: any) => g.nome === 'woovi');
+  const efiGw = gatewaysDb.find((g: any) => g.nome === 'efi');
+  const efiCfg = (efiGw?.config || {}) as Record<string, unknown>;
+  const efiConfigured = !!(efiCfg.client_id && efiCfg.client_secret && efiCfg.pix_key && efiCfg.cert_pem && efiCfg.key_pem);
 
   // WhatsApp — status real baseado em instâncias
   const wpAtivas = wpInstances.filter((i: any) => i.status === 'conectado');
@@ -133,12 +147,25 @@ function buildIntegracoes(wpInstances: any[]): IntegracaoCard[] {
       id: 'woovi',
       nome: 'Woovi (OpenPix)',
       descricao: 'Cobranças PIX, QR Codes e gestão de pagamentos',
-      status: 'ativo',
+      status: wooviGw?.ativo ? 'ativo' : 'inativo',
       icone: '💰',
       config: {
         'Ambiente': import.meta.env.VITE_WOOVI_APP_ID ? 'Configurado' : 'Não configurado',
         'API': 'OpenPix v1',
         'Recursos': 'Cobranças, QR Code, Subcontas, Webhooks',
+        'Página': '/pagamentos',
+      },
+    },
+    {
+      id: 'efi',
+      nome: 'EFI Bank (Gerencianet)',
+      descricao: 'Gateway PIX alternativo — cobranças, pagamentos e saldo',
+      status: efiGw?.ativo ? 'ativo' : 'inativo',
+      icone: '🏦',
+      config: {
+        'API': 'EFI Pay Pix v2',
+        'Status': efiGw?.ativo ? (efiConfigured ? '✅ Ativo e Configurado' : '⚠️ Ativo mas sem credenciais') : 'Desativado',
+        'Recursos': 'Cobranças Pix, Pagamentos, Saldo, Webhook',
         'Página': '/pagamentos',
       },
     },
@@ -178,6 +205,12 @@ export default function IntegracoesPage() {
     refetchOnWindowFocus: false,
   });
 
+  const { data: gatewaysDb = [], refetch: refetchGateways } = useQuery({
+    queryKey: ['integ-gateways-status'],
+    queryFn: fetchGatewaysStatus,
+    refetchOnWindowFocus: false,
+  });
+
   if (isIncognito === null) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -190,10 +223,10 @@ export default function IntegracoesPage() {
     return <IncognitoBlockScreen />;
   }
 
-  const integracoes = buildIntegracoes(wpInstances ?? []);
+  const integracoes = buildIntegracoes(wpInstances ?? [], gatewaysDb);
 
   const handleRefresh = async () => {
-    await refetch();
+    await Promise.all([refetch(), refetchGateways()]);
     toast.success('Status atualizado');
   };
 

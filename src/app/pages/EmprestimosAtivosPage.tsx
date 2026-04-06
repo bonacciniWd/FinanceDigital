@@ -23,16 +23,23 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Progress } from '../components/ui/progress';
 import { Skeleton } from '../components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Textarea } from '../components/ui/textarea';
 import {
-  Search, Eye, DollarSign, TrendingUp, AlertTriangle, CheckCircle, Plus, X,
+  Search, Eye, DollarSign, TrendingUp, AlertTriangle, CheckCircle, Plus,
   MessageSquare, Phone, User, CreditCard, Percent, Loader2, Share2,
+  QrCode, Upload, Image, X, Copy,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { useEmprestimos, useCreateEmprestimo, useUpdateEmprestimo, useQuitarEmprestimo } from '../hooks/useEmprestimos';
+import { useEmprestimos, useUpdateEmprestimo, useQuitarEmprestimo } from '../hooks/useEmprestimos';
 import { useClientes, useIndicados, useUpdateCliente } from '../hooks/useClientes';
 import { useParcelasByEmprestimo, useUpdateParcela, useRegistrarPagamento } from '../hooks/useParcelas';
-import type { Emprestimo, Parcela } from '../lib/view-types';
+import { useAdminUsers } from '../hooks/useAdminUsers';
+import { useContasBancarias } from '../hooks/useContasBancarias';
+import { useCriarCobvEfi } from '../hooks/useWoovi';
+import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
+import { supabase } from '../lib/supabase';
+import type { Emprestimo, Parcela, Cliente } from '../lib/view-types';
 
 export default function EmprestimosAtivosPage() {
   const navigate = useNavigate();
@@ -40,32 +47,7 @@ export default function EmprestimosAtivosPage() {
   const [selectedEmprestimo, setSelectedEmprestimo] = useState<Emprestimo | null>(null);
   const [filtroStatus, setFiltroStatus] = useState('todos');
   const [searchTerm, setSearchTerm] = useState('');
-  const [showNovoEmprestimo, setShowNovoEmprestimo] = useState(false);
-  const [clienteSearch, setClienteSearch] = useState('');
-  const [clienteDropdownOpen, setClienteDropdownOpen] = useState(false);
 
-  // ── Form novo empréstimo ─────────────────────────────────
-  const [formNovo, setFormNovo] = useState({
-    clienteId: '',
-    valor: '',
-    parcelas: '',
-    taxaJuros: '',
-    tipoJuros: 'mensal' as 'mensal' | 'semanal' | 'diario',
-    dataContrato: new Date().toISOString().slice(0, 10),
-  });
-
-  /** Converte a taxa informada para mensal equivalente */
-  const taxaMensalEquivalente = useMemo(() => {
-    const t = parseFloat(formNovo.taxaJuros);
-    if (!t || t <= 0) return 0;
-    const decimal = t / 100;
-    switch (formNovo.tipoJuros) {
-      case 'diario':  return (Math.pow(1 + decimal, 30) - 1);    // 30 dias
-      case 'semanal': return (Math.pow(1 + decimal, 4.2857) - 1); // ~4.29 semanas/mês
-      case 'mensal':
-      default:        return decimal;
-    }
-  }, [formNovo.taxaJuros, formNovo.tipoJuros]);
 
   /** Label do tipo de juros para exibição */
   const tipoJurosLabel: Record<string, string> = {
@@ -77,7 +59,6 @@ export default function EmprestimosAtivosPage() {
   // ── React Query ──────────────────────────────────────────
   const { data: emprestimos = [], isLoading, isError } = useEmprestimos();
   const { data: clientes = [] } = useClientes();
-  const createMutation = useCreateEmprestimo();
   const updateMutation = useUpdateEmprestimo();
   const quitarMutation = useQuitarEmprestimo();
   const updateClienteMutation = useUpdateCliente();
@@ -131,20 +112,6 @@ export default function EmprestimosAtivosPage() {
     }
   }, [emprestimos, clientes, isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Clientes filtrados para o combobox ───────────────────
-  const clientesFiltrados = useMemo(() => {
-    if (!clienteSearch.trim()) return clientes;
-    const q = clienteSearch.toLowerCase();
-    return clientes.filter(
-      (c) => c.nome.toLowerCase().includes(q) || (c.cpf && c.cpf.includes(q))
-    );
-  }, [clientes, clienteSearch]);
-
-  const clienteSelecionado = useMemo(
-    () => clientes.find((c) => c.id === formNovo.clienteId),
-    [clientes, formNovo.clienteId]
-  );
-
   // ── Filtros ──────────────────────────────────────────────
   const filtered = useMemo(() => {
     return emprestimos.filter((e) => {
@@ -177,55 +144,7 @@ export default function EmprestimosAtivosPage() {
     return <Badge className={c.className}>{c.label}</Badge>;
   };
 
-  // ── Ações ────────────────────────────────────────────────
-  const handleNovoEmprestimo = () => {
-    if (!formNovo.clienteId || !formNovo.valor || !formNovo.parcelas || !formNovo.taxaJuros) {
-      toast.error('Preencha todos os campos obrigatórios.');
-      return;
-    }
 
-    const valor = parseFloat(formNovo.valor.replace(/\./g, '').replace(',', '.'));
-    const parcelas = parseInt(formNovo.parcelas);
-
-    // Usa taxa mensal equivalente para o cálculo Price
-    const tm = taxaMensalEquivalente;
-    const valorParcela =
-      tm > 0
-        ? (valor * tm * Math.pow(1 + tm, parcelas)) /
-          (Math.pow(1 + tm, parcelas) - 1)
-        : valor / parcelas;
-
-    // Armazena taxa original + tipo (sem conversão)
-    const taxaOriginal = parseFloat(formNovo.taxaJuros);
-
-    // Primeiro vencimento: 30 dias após contrato
-    const dataContrato = new Date(formNovo.dataContrato);
-    const proxVenc = new Date(dataContrato);
-    proxVenc.setDate(proxVenc.getDate() + 30);
-
-    createMutation.mutate(
-      {
-        cliente_id: formNovo.clienteId,
-        valor,
-        parcelas,
-        valor_parcela: Math.round(valorParcela * 100) / 100,
-        taxa_juros: taxaOriginal,
-        tipo_juros: formNovo.tipoJuros,
-        data_contrato: formNovo.dataContrato,
-        proximo_vencimento: proxVenc.toISOString().slice(0, 10),
-      },
-      {
-        onSuccess: () => {
-          toast.success('Empréstimo criado com sucesso!');
-          setShowNovoEmprestimo(false);
-          setFormNovo({ clienteId: '', valor: '', parcelas: '', taxaJuros: '', tipoJuros: 'mensal', dataContrato: new Date().toISOString().slice(0, 10) });
-          setClienteSearch('');
-          setClienteDropdownOpen(false);
-        },
-        onError: (err) => toast.error(`Erro ao criar empréstimo: ${err.message}`),
-      }
-    );
-  };
 
   const handleMarcarInadimplente = (emp: Emprestimo) => {
     updateMutation.mutate(
@@ -281,9 +200,9 @@ export default function EmprestimosAtivosPage() {
             {isLoading ? '...' : `${filtered.length} empréstimo(s) encontrado(s)`}
           </p>
         </div>
-        <Button className="bg-primary hover:bg-primary/90" onClick={() => setShowNovoEmprestimo(true)}>
+        <Button className="bg-primary hover:bg-primary/90" onClick={() => navigate('/clientes/analise')}>
           <Plus className="w-4 h-4 mr-2" />
-          Novo Empréstimo
+          Nova Análise de Crédito
         </Button>
       </div>
 
@@ -374,6 +293,7 @@ export default function EmprestimosAtivosPage() {
                   <th className="text-center py-3 font-medium text-muted-foreground">Taxa</th>
                   <th className="text-center py-3 font-medium text-muted-foreground">Próx. Venc.</th>
                   <th className="text-center py-3 font-medium text-muted-foreground">Status</th>
+                  <th className="text-center py-3 font-medium text-muted-foreground">Gateway</th>
                   <th className="text-center py-3 font-medium text-muted-foreground">Ações</th>
                 </tr>
               </thead>
@@ -381,14 +301,14 @@ export default function EmprestimosAtivosPage() {
                 {isLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <tr key={i} className="border-b">
-                      {Array.from({ length: 9 }).map((_, j) => (
+                      {Array.from({ length: 10 }).map((_, j) => (
                         <td key={j} className="py-3"><Skeleton className="h-5 w-full" /></td>
                       ))}
                     </tr>
                   ))
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-12 text-center text-muted-foreground">
+                    <td colSpan={10} className="py-12 text-center text-muted-foreground">
                       Nenhum empréstimo encontrado.
                     </td>
                   </tr>
@@ -407,6 +327,11 @@ export default function EmprestimosAtivosPage() {
                         {new Date(e.proximoVencimento).toLocaleDateString('pt-BR')}
                       </td>
                       <td className="py-3 text-center">{getStatusBadge(e.status)}</td>
+                      <td className="py-3 text-center">
+                        {e.gateway ? (
+                          <Badge variant="outline" className="text-xs">{e.gateway === 'woovi' ? 'Woovi' : e.gateway === 'efi' ? 'EFI' : e.gateway}</Badge>
+                        ) : <span className="text-muted-foreground text-xs">—</span>}
+                      </td>
                       <td className="py-3 text-center">
                         <Button size="sm" variant="outline" onClick={() => setSelectedEmprestimo(e)}>
                           <Eye className="w-4 h-4" />
@@ -437,224 +362,7 @@ export default function EmprestimosAtivosPage() {
         />
       )}
 
-      {/* Modal Novo Empréstimo */}
-      <Dialog open={showNovoEmprestimo} onOpenChange={setShowNovoEmprestimo}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Novo Empréstimo</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-5">
-            {/* Seleção de Cliente com busca inline */}
-            <div className="space-y-1.5">
-              <Label>Cliente *</Label>
-              {clienteSelecionado ? (
-                <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                    {clienteSelecionado.nome.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm truncate">{clienteSelecionado.nome}</p>
-                    <p className="text-xs text-muted-foreground">{clienteSelecionado.cpf || clienteSelecionado.email}</p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => {
-                      setFormNovo({ ...formNovo, clienteId: '' });
-                      setClienteSearch('');
-                      setClienteDropdownOpen(false);
-                    }}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              ) : (
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                  <Input
-                    placeholder="Digite nome ou CPF do cliente..."
-                    className="pl-9"
-                    value={clienteSearch}
-                    onChange={(e) => {
-                      setClienteSearch(e.target.value);
-                      setClienteDropdownOpen(true);
-                    }}
-                    onFocus={() => setClienteDropdownOpen(true)}
-                    onBlur={() => setTimeout(() => setClienteDropdownOpen(false), 200)}
-                  />
-                  {clienteDropdownOpen && clienteSearch.trim() && (
-                    <div className="absolute z-50 left-0 right-0 top-full mt-1 max-h-48 overflow-y-auto rounded-lg border bg-popover shadow-lg">
-                      {clientesFiltrados.length === 0 ? (
-                        <div className="px-4 py-3 text-sm text-muted-foreground text-center">
-                          Nenhum cliente encontrado
-                        </div>
-                      ) : (
-                        clientesFiltrados.map((c) => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-accent transition-colors first:rounded-t-lg last:rounded-b-lg"
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              setFormNovo({ ...formNovo, clienteId: c.id });
-                              setClienteSearch('');
-                              setClienteDropdownOpen(false);
-                            }}
-                          >
-                            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground font-medium text-xs shrink-0">
-                              {c.nome.charAt(0).toUpperCase()}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium truncate">{c.nome}</p>
-                              <p className="text-xs text-muted-foreground">{c.cpf || c.email}</p>
-                            </div>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="valor">Valor do Empréstimo *</Label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">R$</span>
-                  <Input
-                    id="valor"
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="0,00"
-                    className="pl-10"
-                    value={formNovo.valor}
-                    onChange={(e) => {
-                      // Allow only digits, comma and dot
-                      const raw = e.target.value.replace(/[^\d.,]/g, '');
-                      setFormNovo({ ...formNovo, valor: raw });
-                    }}
-                    onBlur={() => {
-                      // Format on blur
-                      const num = parseFloat(formNovo.valor.replace(/\./g, '').replace(',', '.'));
-                      if (!isNaN(num) && num > 0) {
-                        setFormNovo({ ...formNovo, valor: num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) });
-                      }
-                    }}
-                    onFocus={() => {
-                      // Remove formatting on focus for easy editing
-                      const num = parseFloat(formNovo.valor.replace(/\./g, '').replace(',', '.'));
-                      if (!isNaN(num)) {
-                        setFormNovo({ ...formNovo, valor: String(num) });
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-              <div>
-                <Label htmlFor="parcelas">Nº de Parcelas *</Label>
-                <Input
-                  id="parcelas"
-                  type="number"
-                  placeholder="12"
-                  min={1}
-                  max={360}
-                  value={formNovo.parcelas}
-                  onChange={(e) => setFormNovo({ ...formNovo, parcelas: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <Label htmlFor="taxa">Taxa de Juros *</Label>
-                <Input
-                  id="taxa"
-                  type="number"
-                  step="0.01"
-                  placeholder="2.5"
-                  value={formNovo.taxaJuros}
-                  onChange={(e) => setFormNovo({ ...formNovo, taxaJuros: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="tipoJuros">Período</Label>
-                <Select value={formNovo.tipoJuros} onValueChange={(v: 'mensal' | 'semanal' | 'diario') => setFormNovo({ ...formNovo, tipoJuros: v })}>
-                  <SelectTrigger id="tipoJuros">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="mensal">Mensal</SelectItem>
-                    <SelectItem value="semanal">Semanal</SelectItem>
-                    <SelectItem value="diario">Diário</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label htmlFor="dataContrato">Data Contrato</Label>
-                <Input
-                  id="dataContrato"
-                  type="date"
-                  value={formNovo.dataContrato}
-                  onChange={(e) => setFormNovo({ ...formNovo, dataContrato: e.target.value })}
-                />
-              </div>
-            </div>
-
-            {/* Preview da parcela */}
-            {formNovo.valor && formNovo.parcelas && formNovo.taxaJuros && (
-              <div className="p-4 bg-muted/50 rounded-lg border space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-muted-foreground">Valor estimado da parcela:</span>
-                  <span className="font-bold text-lg text-primary">
-                    {(() => {
-                      const v = parseFloat(formNovo.valor.replace(/\./g, '').replace(',', '.'));
-                      const n = parseInt(formNovo.parcelas);
-                      const tm = taxaMensalEquivalente;
-                      if (!v || !n) return '—';
-                      const vp = tm > 0 ? (v * tm * Math.pow(1 + tm, n)) / (Math.pow(1 + tm, n) - 1) : v / n;
-                      return formatCurrency(Math.round(vp * 100) / 100);
-                    })()}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-muted-foreground">Total a pagar:</span>
-                  <span className="font-medium">
-                    {(() => {
-                      const v = parseFloat(formNovo.valor.replace(/\./g, '').replace(',', '.'));
-                      const n = parseInt(formNovo.parcelas);
-                      const tm = taxaMensalEquivalente;
-                      if (!v || !n) return '—';
-                      const vp = tm > 0 ? (v * tm * Math.pow(1 + tm, n)) / (Math.pow(1 + tm, n) - 1) : v / n;
-                      return formatCurrency(Math.round(vp * n * 100) / 100);
-                    })()}
-                  </span>
-                </div>
-                {formNovo.tipoJuros !== 'mensal' && (
-                  <p className="text-xs text-muted-foreground">
-                    Taxa equivalente mensal: {(taxaMensalEquivalente * 100).toFixed(2)}% a.m.
-                  </p>
-                )}
-              </div>
-            )}
-
-            <div className="flex gap-3 pt-2">
-              <Button variant="outline" className="flex-1" onClick={() => setShowNovoEmprestimo(false)}>
-                Cancelar
-              </Button>
-              <Button
-                className="flex-1 bg-primary"
-                onClick={handleNovoEmprestimo}
-                disabled={createMutation.isPending}
-              >
-                {createMutation.isPending ? 'Criando...' : 'Criar Empréstimo'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -665,7 +373,7 @@ export default function EmprestimosAtivosPage() {
 
 interface DetailProps {
   emprestimo: Emprestimo;
-  clientes: ReturnType<typeof useClientes>['data'] extends (infer T)[] ? T[] : never[];
+  clientes: Cliente[];
   onClose: () => void;
   navigate: ReturnType<typeof useNavigate>;
   updateEmprestimo: ReturnType<typeof useUpdateEmprestimo>;
@@ -697,6 +405,24 @@ function EmprestimoDetailModal({
   const updateParcela = useUpdateParcela();
   const registrarPagamento = useRegistrarPagamento();
   const updateCliente = useUpdateCliente();
+  const { data: allUsers = [] } = useAdminUsers();
+  const { data: contasBancarias = [] } = useContasBancarias();
+  const criarCobvEfi = useCriarCobvEfi();
+  const { data: instancias = [] } = useInstancias();
+  const enviarWhatsapp = useEnviarWhatsapp();
+
+  // Funcionários por role para exibição de nomes
+  const findUserName = useCallback((id?: string | null) => {
+    if (!id) return null;
+    const u = allUsers.find((u: any) => u.id === id);
+    return u?.name || u?.email || id.slice(0, 8);
+  }, [allUsers]);
+
+  // Cobradores disponíveis
+  const cobradores = useMemo(
+    () => allUsers.filter((u: any) => ['cobranca', 'gerencia', 'admin'].includes(u.role)),
+    [allUsers],
+  );
 
   // State for editing juros/multa inline
   const [editingParcelaId, setEditingParcelaId] = useState<string | null>(null);
@@ -707,8 +433,31 @@ function EmprestimoDetailModal({
   const [partialParcelaId, setPartialParcelaId] = useState<string | null>(null);
   const [partialValorPago, setPartialValorPago] = useState('');
 
+  // State for "Efetuar Pagamento" modal
+  const [pagamentoParcelaId, setPagamentoParcelaId] = useState<string | null>(null);
+  const [pagamentoTab, setPagamentoTab] = useState<'completo' | 'parcial'>('completo');
+  const [pagamentoObs, setPagamentoObs] = useState('');
+  const [pagamentoData, setPagamentoData] = useState(new Date().toISOString().slice(0, 10));
+  const [pagamentoDesconto, setPagamentoDesconto] = useState('0');
+  const [pagamentoValorParcial, setPagamentoValorParcial] = useState('');
+  const [pagamentoConta, setPagamentoConta] = useState('CONTA PRINCIPAL');
+
   // State for reactivation dialog (shown after last parcela is paid)
   const [showReativarDialog, setShowReativarDialog] = useState(false);
+
+  // Gerar PIX state
+  const [gerandoPixId, setGerandoPixId] = useState<string | null>(null);
+  const [pixResultDialog, setPixResultDialog] = useState<{ qrImage: string | null; brCode: string | null; parcelaNumero: number } | null>(null);
+
+  // Confirmar pagamento manual com comprovante
+  const [comprovanteParcela, setComprovanteParcela] = useState<Parcela | null>(null);
+  const [showComprovanteModal, setShowComprovanteModal] = useState(false);
+  const [comprovanteFile, setComprovanteFile] = useState<File | null>(null);
+  const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
+  const [comprovanteLoading, setComprovanteLoading] = useState(false);
+
+  // Visualizar comprovante existente
+  const [viewComprovanteUrl, setViewComprovanteUrl] = useState<string | null>(null);
 
   const formatDate = (d: string) => new Date(d).toLocaleDateString('pt-BR');
   const today = new Date().toISOString().slice(0, 10);
@@ -788,6 +537,81 @@ function EmprestimoDetailModal({
       },
     );
   }, [updateParcela, partialValorPago, formatCurrency]);
+
+  const openPagamentoModal = useCallback((parcela: Parcela) => {
+    setPagamentoParcelaId(parcela.id);
+    setPagamentoTab('completo');
+    setPagamentoObs('');
+    setPagamentoData(new Date().toISOString().slice(0, 10));
+    setPagamentoDesconto('0');
+    setPagamentoValorParcial('');
+    // Auto-seleciona conta do gateway do empréstimo, ou a padrão
+    const gw = emprestimo.gateway;
+    const contaGateway = gw ? contasBancarias.find(c => c.tipo === 'gateway' && c.nome.toLowerCase().includes(gw)) : null;
+    const contaPadrao = contasBancarias.find(c => c.padrao);
+    setPagamentoConta(contaGateway?.nome ?? contaPadrao?.nome ?? (gw === 'efi' ? 'EFI BANK' : 'CONTA PRINCIPAL'));
+  }, [emprestimo.gateway, contasBancarias]);
+
+  const closePagamentoModal = useCallback(() => {
+    setPagamentoParcelaId(null);
+  }, []);
+
+  const handleEfetuarPagamento = useCallback((parcela: Parcela) => {
+    const desconto = parseFloat(pagamentoDesconto) || 0;
+    const valorCorrigido = parcela.valorOriginal + parcela.juros + parcela.multa;
+    const totalPagar = Math.max(valorCorrigido - desconto, 0);
+
+    if (pagamentoTab === 'parcial') {
+      const valorPago = parseFloat(pagamentoValorParcial) || 0;
+      if (valorPago <= 0 || valorPago >= totalPagar) {
+        toast.error('Valor parcial deve ser maior que zero e menor que o total.');
+        return;
+      }
+      const restante = totalPagar - valorPago;
+      updateParcela.mutate(
+        {
+          id: parcela.id,
+          data: {
+            valor: Math.max(restante, 0),
+            desconto,
+            observacao: pagamentoObs || null,
+            conta_bancaria: pagamentoConta || null,
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success(`Amortização registrada · Pago: ${formatCurrency(valorPago)} · Restante: ${formatCurrency(restante)}`);
+            closePagamentoModal();
+          },
+          onError: (err) => toast.error(`Erro: ${err.message}`),
+        },
+      );
+    } else {
+      // Pagamento completo
+      registrarPagamento.mutate(
+        { id: parcela.id, dataPagamento: pagamentoData },
+        {
+          onSuccess: () => {
+            // Persist extras (desconto, obs, conta)
+            updateParcela.mutate({
+              id: parcela.id,
+              data: {
+                desconto,
+                observacao: pagamentoObs || null,
+                conta_bancaria: pagamentoConta || null,
+              },
+            });
+            toast.success(`Parcela ${parcela.numero} quitada com sucesso!`);
+            closePagamentoModal();
+            if (pendentesCount <= 1) {
+              setShowReativarDialog(true);
+            }
+          },
+          onError: (err) => toast.error(`Erro: ${err.message}`),
+        },
+      );
+    }
+  }, [pagamentoTab, pagamentoDesconto, pagamentoValorParcial, pagamentoObs, pagamentoData, pagamentoConta, updateParcela, registrarPagamento, formatCurrency, pendentesCount, closePagamentoModal]);
 
   const handleQuitarApenasJuros = useCallback((parcela: Parcela) => {
     if (parcela.juros <= 0) { toast.info('Sem juros a quitar nesta parcela'); return; }
@@ -931,41 +755,77 @@ function EmprestimoDetailModal({
                                       X
                                     </Button>
                                   </>
-                                ) : isPartial ? (
-                                  <div className="flex flex-col gap-1">
-                                    <div className="flex items-center gap-1">
-                                      <span className="text-xs text-muted-foreground whitespace-nowrap">Pago R$</span>
-                                      <Input
-                                        type="number"
-                                        step="0.01"
-                                        min="0.01"
-                                        max={p.valor - 0.01}
-                                        placeholder="0,00"
-                                        className="w-24 h-6 text-xs"
-                                        value={partialValorPago}
-                                        onChange={(e) => setPartialValorPago(e.target.value)}
-                                        autoFocus
-                                      />
-                                      <Button size="sm" className="h-6 text-xs px-2 bg-blue-600 hover:bg-blue-700" onClick={() => handleBaixaParcial(p)} disabled={isBusy}>
-                                        OK
-                                      </Button>
-                                      <Button size="sm" variant="ghost" className="h-6 text-xs px-1" onClick={() => { setPartialParcelaId(null); setPartialValorPago(''); }}>
-                                        X
-                                      </Button>
-                                    </div>
-                                    {partialValorPago && parseFloat(partialValorPago) > 0 && parseFloat(partialValorPago) < p.valor && (
-                                      <p className="text-xs text-muted-foreground pl-1">
-                                        Total: {formatCurrency(p.valor)} · Restante: {formatCurrency(p.valor - parseFloat(partialValorPago))}
-                                      </p>
-                                    )}
-                                  </div>
                                 ) : (
                                   <>
-                                    <Button size="sm" className="h-7 text-xs px-3 rounded-lg bg-green-600 hover:bg-green-700 text-white shadow-sm" title="Quitar parcela" onClick={() => handleQuitarParcela(p)} disabled={isBusy}>
-                                      <CheckCircle className="w-3 h-3 mr-1" />Quitar
+                                    <Button size="sm" className="h-7 text-xs px-3 rounded-lg bg-green-600 hover:bg-green-700 text-white shadow-sm" title="Efetuar Pagamento" onClick={() => openPagamentoModal(p)} disabled={isBusy}>
+                                      <DollarSign className="w-3 h-3 mr-1" />Pagar
                                     </Button>
-                                    <Button size="sm" variant="outline" className="h-7 text-xs px-3 rounded-lg" title="Registrar amortização parcial" onClick={() => { setPartialParcelaId(p.id); setPartialValorPago(''); }} disabled={isBusy}>
-                                      Parcial
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 text-xs px-2 rounded-lg text-blue-600 border-blue-200"
+                                      title="Gerar cobrança PIX e enviar via WhatsApp"
+                                      disabled={gerandoPixId === p.id || criarCobvEfi.isPending}
+                                      onClick={async () => {
+                                        setGerandoPixId(p.id);
+                                        try {
+                                          const { data: cli } = await supabase.from('clientes').select('cpf, nome, telefone').eq('id', p.clienteId).single() as { data: { cpf: string | null; nome: string; telefone: string } | null };
+                                          const result = await criarCobvEfi.mutateAsync({
+                                            parcela_id: p.id,
+                                            emprestimo_id: p.emprestimoId,
+                                            cliente_id: p.clienteId,
+                                            valor: p.valor,
+                                            descricao: `Parcela ${p.numero} - ${emprestimo.clienteNome}`,
+                                            cliente_nome: emprestimo.clienteNome,
+                                            cliente_cpf: cli?.cpf || undefined,
+                                            data_vencimento: p.dataVencimento,
+                                          });
+                                          const charge = (result as any)?.charge;
+                                          const brCode = charge?.br_code || '';
+                                          const qrImage = charge?.qr_code_image || '';
+                                          // Mostrar dialog com QR e copia-e-cola
+                                          if (brCode || qrImage) {
+                                            setPixResultDialog({ qrImage, brCode, parcelaNumero: p.numero });
+                                          }
+                                          const instSistema = instancias.find((i: any) => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
+                                          if (instSistema && cli?.telefone && brCode) {
+                                            const phone = cli.telefone.replace(/\D/g, '').length <= 11 ? '55' + cli.telefone.replace(/\D/g, '') : cli.telefone.replace(/\D/g, '');
+                                            // Enviar texto com copia-e-cola
+                                            const msg = `💰 *Cobrança PIX - Parcela ${p.numero}*\n\nOlá ${emprestimo.clienteNome}!\n\nValor: *${formatCurrency(p.valor)}*\nVencimento: ${formatDate(p.dataVencimento)}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_FinanceDigital_`;
+                                            await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
+                                            // Enviar QR code como imagem separada
+                                            if (qrImage) {
+                                              const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
+                                              await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: `QR Code - Parcela ${p.numero}`, tipo: 'image', media_base64: base64Data });
+                                            }
+                                            toast.success('Cobrança PIX gerada e enviada ao cliente!');
+                                          } else if (!instSistema || !cli?.telefone) {
+                                            toast.success('Cobrança PIX gerada! Sem WhatsApp conectado para envio automático.');
+                                          } else {
+                                            toast.success('Cobrança PIX gerada!');
+                                          }
+                                        } catch (err) {
+                                          toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao gerar PIX'}`);
+                                        } finally {
+                                          setGerandoPixId(null);
+                                        }
+                                      }}
+                                    >
+                                      {gerandoPixId === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <QrCode className="w-3.5 h-3.5" />}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 text-xs px-2 rounded-lg text-orange-600 border-orange-200"
+                                      title="Confirmar pagamento manual (com comprovante)"
+                                      onClick={() => {
+                                        setComprovanteParcela(p);
+                                        setComprovanteFile(null);
+                                        setComprovantePreview(null);
+                                        setShowComprovanteModal(true);
+                                      }}
+                                    >
+                                      <Upload className="w-3.5 h-3.5" />
                                     </Button>
                                     <Button size="sm" variant="outline" className="h-7 text-xs px-2 rounded-lg" title="Atribuir juros/multa manualmente" onClick={() => { setEditingParcelaId(p.id); setEditJuros(String(p.juros)); setEditMulta(String(p.multa)); }} disabled={isBusy}>
                                       <Percent className="w-3.5 h-3.5" />
@@ -979,8 +839,23 @@ function EmprestimoDetailModal({
                                 )}
                               </div>
                             )}
-                            {p.status === 'paga' && p.dataPagamento && (
-                              <span className="text-xs text-muted-foreground">Pago {formatDate(p.dataPagamento)}</span>
+                            {p.status === 'paga' && (
+                              <div className="flex items-center gap-1 justify-center">
+                                {p.dataPagamento && (
+                                  <span className="text-xs text-muted-foreground">Pago {formatDate(p.dataPagamento)}</span>
+                                )}
+                                {(p as any).comprovanteUrl && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 w-6 p-0 text-muted-foreground"
+                                    title="Ver comprovante"
+                                    onClick={() => setViewComprovanteUrl((p as any).comprovanteUrl)}
+                                  >
+                                    <Image className="w-3.5 h-3.5" />
+                                  </Button>
+                                )}
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -1149,6 +1024,65 @@ function EmprestimoDetailModal({
               </div>
             </div>
 
+            {/* Responsáveis & Gateway */}
+            <div className="rounded-xl border bg-card p-5">
+              <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-4">Responsáveis & Gateway</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-4">
+                <div>
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Vendedor</span>
+                  <p className="font-medium mt-0.5">{findUserName(emprestimo.vendedorId) || <span className="text-muted-foreground">Não atribuído</span>}</p>
+                </div>
+                <div>
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Cobrador</span>
+                  <div className="mt-0.5">
+                    <Select
+                      value={emprestimo.cobradorId || '_none'}
+                      onValueChange={(v) => {
+                        const val = v === '_none' ? null : v;
+                        updateEmprestimo.mutate(
+                          { id: emprestimo.id, data: { cobrador_id: val } },
+                          {
+                            onSuccess: () => toast.success('Cobrador atualizado'),
+                            onError: (err) => toast.error(`Erro: ${err.message}`),
+                          },
+                        );
+                      }}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Selecionar cobrador" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">Nenhum</SelectItem>
+                        {cobradores.map((u: any) => (
+                          <SelectItem key={u.id} value={u.id}>{u.name || u.email} ({u.role})</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Gateway</span>
+                  <p className="font-medium mt-0.5">
+                    {emprestimo.gateway ? (
+                      <Badge variant="outline">{emprestimo.gateway === 'woovi' ? 'Woovi (OpenPix)' : emprestimo.gateway === 'efi' ? 'EFI Bank' : emprestimo.gateway}</Badge>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </p>
+                </div>
+                {emprestimo.aprovadoPor && (
+                  <div>
+                    <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Aprovado por</span>
+                    <p className="font-medium mt-0.5">{findUserName(emprestimo.aprovadoPor)}</p>
+                  </div>
+                )}
+                {emprestimo.aprovadoEm && (
+                  <div>
+                    <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Data Aprovação</span>
+                    <p className="font-medium mt-0.5">{formatDate(emprestimo.aprovadoEm)}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Progresso */}
             <div className="rounded-xl border bg-card p-5">
               <div className="flex justify-between text-sm mb-2">
@@ -1197,6 +1131,168 @@ function EmprestimoDetailModal({
         </div>
       </DialogContent>
     </Dialog>
+
+    {/* ── Dialog: Efetuar Pagamento ────────────────────────────── */}
+    {pagamentoParcelaId && (() => {
+      const parcela = parcelasLive.find(p => p.id === pagamentoParcelaId);
+      if (!parcela) return null;
+      const valorCorrigido = parcela.valorOriginal + parcela.juros + parcela.multa;
+      const desconto = parseFloat(pagamentoDesconto) || 0;
+      const totalPagar = Math.max(valorCorrigido - desconto, 0);
+      const diasAtraso = (() => {
+        const venc = new Date(parcela.dataVencimento);
+        const pagDt = new Date(pagamentoData);
+        const diff = Math.floor((pagDt.getTime() - venc.getTime()) / 86400000);
+        return Math.max(diff, 0);
+      })();
+      const isUltima = pendentesCount <= 1;
+
+      return (
+        <Dialog open onOpenChange={closePagamentoModal}>
+          <DialogContent className="max-w-lg sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-green-500" />
+                Efetuar Pagamento — Parcela {parcela.numero}
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {isUltima && (
+                <div className="flex items-center gap-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-700 dark:text-yellow-400">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  Última parcela deste empréstimo
+                </div>
+              )}
+
+              <div>
+                <Label className="text-xs mb-1 block">Observação</Label>
+                <Textarea
+                  placeholder="Observação sobre o pagamento..."
+                  className="resize-none h-16 text-sm"
+                  value={pagamentoObs}
+                  onChange={(e) => setPagamentoObs(e.target.value)}
+                />
+              </div>
+
+              <Tabs value={pagamentoTab} onValueChange={(v) => setPagamentoTab(v as 'completo' | 'parcial')}>
+                <TabsList className="w-full grid grid-cols-2">
+                  <TabsTrigger value="completo">Pagamento Completo</TabsTrigger>
+                  <TabsTrigger value="parcial">Pagamento Parcial</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="completo" className="space-y-3 mt-3">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <Label className="text-xs">Vencimento</Label>
+                      <Input value={parcela.dataVencimento} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Pagamento</Label>
+                      <Input type="date" value={pagamentoData} onChange={e => setPagamentoData(e.target.value)} className="h-8 text-xs" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Dias</Label>
+                      <Input value={diasAtraso} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Valor Parcela</Label>
+                      <Input value={formatCurrency(parcela.valorOriginal)} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Valor Corrigido</Label>
+                      <Input value={formatCurrency(valorCorrigido)} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Desconto (R$)</Label>
+                      <Input type="number" min="0" step="0.01" value={pagamentoDesconto} onChange={e => setPagamentoDesconto(e.target.value)} className="h-8 text-xs" />
+                    </div>
+                    <div>
+                      <Label className="text-xs font-semibold">Total a pagar</Label>
+                      <Input value={formatCurrency(totalPagar)} readOnly className="h-8 text-xs bg-muted font-bold" />
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="parcial" className="space-y-3 mt-3">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <Label className="text-xs">Vencimento</Label>
+                      <Input value={parcela.dataVencimento} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Pagamento</Label>
+                      <Input type="date" value={pagamentoData} onChange={e => setPagamentoData(e.target.value)} className="h-8 text-xs" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Dias</Label>
+                      <Input value={diasAtraso} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Valor Total</Label>
+                      <Input value={formatCurrency(totalPagar)} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Valor a Pagar</Label>
+                      <Input type="number" min="0.01" step="0.01" max={totalPagar - 0.01} placeholder="0,00" value={pagamentoValorParcial} onChange={e => setPagamentoValorParcial(e.target.value)} className="h-8 text-xs" autoFocus />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs">Desconto (R$)</Label>
+                      <Input type="number" min="0" step="0.01" value={pagamentoDesconto} onChange={e => setPagamentoDesconto(e.target.value)} className="h-8 text-xs" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Restante</Label>
+                      <Input value={formatCurrency(Math.max(totalPagar - (parseFloat(pagamentoValorParcial) || 0), 0))} readOnly className="h-8 text-xs bg-muted" />
+                    </div>
+                  </div>
+                </TabsContent>
+              </Tabs>
+
+              <div>
+                <Label className="text-xs">Conta Bancária</Label>
+                <Select value={pagamentoConta} onValueChange={setPagamentoConta}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {contasBancarias.length > 0 ? (
+                      contasBancarias.map(c => (
+                        <SelectItem key={c.id} value={c.nome}>
+                          {c.nome}{c.padrao ? ' — Padrão' : ''}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <>
+                        <SelectItem value="EFI BANK">EFI Bank (Gateway PIX)</SelectItem>
+                        <SelectItem value="CONTA PRINCIPAL">CONTA PRINCIPAL</SelectItem>
+                        <SelectItem value="CONTA SECUNDÁRIA">CONTA SECUNDÁRIA</SelectItem>
+                        <SelectItem value="CAIXA">CAIXA</SelectItem>
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex gap-3 justify-end pt-2">
+                <Button variant="outline" onClick={closePagamentoModal}>Cancelar</Button>
+                <Button className="bg-green-600 hover:bg-green-700" onClick={() => handleEfetuarPagamento(parcela)} disabled={isBusy}>
+                  {isBusy ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <CheckCircle className="w-4 h-4 mr-1" />}
+                  Efetuar Pagamento
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      );
+    })()}
 
     {/* Dialog de reativação após quitar última parcela */}
     {showReativarDialog && (
@@ -1262,6 +1358,175 @@ function EmprestimoDetailModal({
             </div>
             <p className="text-xs text-muted-foreground text-center">
               Clientes inativos são considerados mal pagadores e não recebem novos empréstimos.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+    )}
+
+    {/* ── Modal: Confirmar Pagamento Manual com Comprovante ──── */}
+    {showComprovanteModal && comprovanteParcela && (
+      <Dialog open onOpenChange={() => { setShowComprovanteModal(false); setComprovanteParcela(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="w-5 h-5 text-orange-500" />
+              Confirmar Pagamento — Parcela {comprovanteParcela.numero}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <Label className="text-xs">Valor</Label>
+                <p className="font-semibold">{formatCurrency(comprovanteParcela.valor)}</p>
+              </div>
+              <div>
+                <Label className="text-xs">Vencimento</Label>
+                <p className="font-semibold">{formatDate(comprovanteParcela.dataVencimento)}</p>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-xs mb-2 block">Comprovante de pagamento (imagem)</Label>
+              {comprovantePreview ? (
+                <div className="relative rounded-lg overflow-hidden border">
+                  <img src={comprovantePreview} alt="Comprovante" className="w-full h-48 object-contain bg-muted" />
+                  <button
+                    onClick={() => { setComprovanteFile(null); setComprovantePreview(null); }}
+                    className="absolute top-2 right-2 h-6 w-6 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors">
+                  <Upload className="h-8 w-8 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Clique para selecionar o comprovante</span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setComprovanteFile(file);
+                        const reader = new FileReader();
+                        reader.onload = (ev) => setComprovantePreview(ev.target?.result as string);
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <Button variant="outline" onClick={() => { setShowComprovanteModal(false); setComprovanteParcela(null); }}>
+                Cancelar
+              </Button>
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                disabled={!comprovanteFile || comprovanteLoading}
+                onClick={async () => {
+                  if (!comprovanteFile || !comprovanteParcela) return;
+                  setComprovanteLoading(true);
+                  try {
+                    // Upload comprovante to Supabase Storage
+                    const ext = comprovanteFile.name.split('.').pop() || 'png';
+                    const path = `comprovantes/${comprovanteParcela.id}_${Date.now()}.${ext}`;
+                    const { error: upErr } = await supabase.storage.from('whatsapp-media').upload(path, comprovanteFile, { upsert: true });
+                    if (upErr) throw upErr;
+                    const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
+
+                    // Marcar parcela como paga com comprovante
+                    await registrarPagamento.mutateAsync({ id: comprovanteParcela.id, dataPagamento: new Date().toISOString().slice(0, 10) });
+                    await updateParcela.mutateAsync({
+                      id: comprovanteParcela.id,
+                      data: {
+                        comprovante_url: urlData.publicUrl,
+                        pagamento_tipo: 'manual' as const,
+                      },
+                    });
+
+                    toast.success(`Parcela ${comprovanteParcela.numero} confirmada com comprovante!`);
+                    setShowComprovanteModal(false);
+                    setComprovanteParcela(null);
+
+                    if (pendentesCount <= 1) setShowReativarDialog(true);
+                  } catch (err) {
+                    toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao confirmar pagamento'}`);
+                  } finally {
+                    setComprovanteLoading(false);
+                  }
+                }}
+              >
+                {comprovanteLoading ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <CheckCircle className="w-4 h-4 mr-1" />}
+                Confirmar Pagamento
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    )}
+
+    {/* ── Modal: Visualizar Comprovante ──── */}
+    {viewComprovanteUrl && (
+      <Dialog open onOpenChange={() => setViewComprovanteUrl(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Image className="w-5 h-5" />
+              Comprovante de Pagamento
+            </DialogTitle>
+          </DialogHeader>
+          <img src={viewComprovanteUrl} alt="Comprovante" className="w-full rounded-lg border" />
+        </DialogContent>
+      </Dialog>
+    )}
+
+    {/* ── Modal: Resultado PIX (QR Code + Copia e Cola) ──── */}
+    {pixResultDialog && (
+      <Dialog open onOpenChange={() => setPixResultDialog(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="w-5 h-5 text-blue-600" />
+              Cobrança PIX — Parcela {pixResultDialog.parcelaNumero}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {pixResultDialog.qrImage && (
+              <div className="flex justify-center">
+                <img src={pixResultDialog.qrImage} alt="QR Code PIX" className="w-48 h-48 rounded-lg border" />
+              </div>
+            )}
+            {pixResultDialog.brCode && (
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">PIX Copia e Cola</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={pixResultDialog.brCode}
+                    readOnly
+                    className="text-xs font-mono flex-1"
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0"
+                    onClick={() => {
+                      navigator.clipboard.writeText(pixResultDialog.brCode!);
+                      toast.success('Código PIX copiado!');
+                    }}
+                  >
+                    <Copy className="w-4 h-4 mr-1" />
+                    Copiar
+                  </Button>
+                </div>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground text-center">
+              O QR Code e o código foram enviados ao cliente via WhatsApp.
             </p>
           </div>
         </DialogContent>

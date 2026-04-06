@@ -699,7 +699,7 @@ export function FloatingChat() {
       {/* Botão flutuante */}
       <button
         onClick={() => setOpen(!open)}
-        className="w-24 h-24 rounded-full bg-black-800/20 text-primary-foreground shadow-purple-700 shadow-inner hover:shadow-base transition-all duration-200 flex items-center justify-center hover:scale-105 active:scale-95 relative"
+        className="w-24 h-24 rounded-full bg-black-800/20 text-primary-foreground hover:shadow-base transition-all duration-200 flex items-center justify-center hover:scale-105 active:scale-95 relative"
       >
         {open ? (
           <ChevronDown className="w-6 h-6" />

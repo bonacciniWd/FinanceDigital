@@ -1,5 +1,14 @@
 node_modules
 dist/
+.DS_Store
+
+# Certificados / chaves privadas
+*.pem
+*.p12
+*.key
+
+# Electron builds — usar GitHub Releases para distribuição
+release/
 
 # Fly.io — não versionar estado local
 fly-evolution/.fly/

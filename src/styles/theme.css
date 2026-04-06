@@ -4,6 +4,12 @@ html {
   zoom: 0.9;
 }
 
+/* No Electron, o zoom é controlado via webFrame.setZoomFactor()
+   então removemos o CSS zoom para não duplicar a escala */
+html.electron-app {
+  zoom: 1;
+}
+
 :root {
   --font-size: 14px;
   /* Liquid Glass — Light Theme */
@@ -74,7 +80,7 @@ html {
   --primary-foreground: #ffffff;
   --secondary: #22d3ee;
   --secondary-foreground: #ffffff;
-  --muted: rgba(30, 41, 59, 0.5);
+  --muted: rgba(32, 26, 75, 0.5);
   --muted-foreground: #94a3b8;
   --accent: #fbbf24;
   --accent-foreground: #0f172a;

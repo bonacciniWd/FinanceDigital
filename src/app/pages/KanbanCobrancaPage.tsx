@@ -37,6 +37,9 @@ import {
   CheckCheck,
   XCircle,
   FileText,
+  Upload,
+  QrCode,
+  Image,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -49,8 +52,11 @@ import {
 import { useEmprestimos, useUpdateEmprestimo, useQuitarEmprestimo } from '../hooks/useEmprestimos';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
-import { useCriarCobrancaWoovi } from '../hooks/useWoovi';
+import { useCriarCobrancaWoovi, useCriarCobvEfi } from '../hooks/useWoovi';
+import { useRegistrarPagamento } from '../hooks/useParcelas';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import type { ParcelaUpdate } from '../lib/database.types';
 import type { KanbanCobrancaView, Emprestimo } from '../lib/view-types';
 import type { KanbanCobrancaEtapa } from '../lib/database.types';
 
@@ -94,6 +100,17 @@ export default function KanbanCobrancaPage() {
     correlationID?: string;
   } | null>(null);
 
+  // Quitar modal state
+  const [showQuitarModal, setShowQuitarModal] = useState(false);
+  const [quitarEmpId, setQuitarEmpId] = useState<string | null>(null);
+  const [quitarTipo, setQuitarTipo] = useState<'pix' | 'manual'>('pix');
+  const [comprovanteFile, setComprovanteFile] = useState<File | null>(null);
+  const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
+  const [quitarLoading, setQuitarLoading] = useState(false);
+
+  // Gerar PIX per parcela
+  const [gerandoPixId, setGerandoPixId] = useState<string | null>(null);
+
   const { data: allCards = [], isLoading, error, refetch } = useCardsCobranca();
   const { data: emprestimos = [] } = useEmprestimos();
   const { data: instancias = [] } = useInstancias();
@@ -107,6 +124,8 @@ export default function KanbanCobrancaPage() {
   const syncCobrancas = useSyncCobrancas();
   const enviarWhatsapp = useEnviarWhatsapp();
   const criarCobrancaWoovi = useCriarCobrancaWoovi();
+  const criarCobvEfi = useCriarCobvEfi();
+  const registrarPagamento = useRegistrarPagamento();
 
   const instanciasConectadas = useMemo(
     () => instancias.filter((i) => i.status === 'conectado'),
@@ -229,12 +248,16 @@ export default function KanbanCobrancaPage() {
       {
         onSuccess: () => {
           toast.success(`Card movido para ${COLUMNS.find((c) => c.id === columnId)?.title}`);
-          // Sync: ao mover para "pago", quitar empréstimos (empréstimo + parcelas + kanban)
+          // Sync: ao mover para "pago", abrir modal de comprovante
           if (novaEtapa === 'pago') {
             const clienteEmps = emprestimosByCliente.get(card.clienteId) ?? [];
-            const ativos = clienteEmps.filter((e) => e.status === 'ativo' || e.status === 'inadimplente');
-            for (const emp of ativos) {
-              quitarEmprestimo.mutate({ id: emp.id, totalParcelas: emp.parcelas });
+            const ativoEmp = clienteEmps.find((e) => e.status === 'ativo' || e.status === 'inadimplente');
+            if (ativoEmp) {
+              setQuitarEmpId(ativoEmp.id);
+              setQuitarTipo('manual');
+              setComprovanteFile(null);
+              setComprovantePreview(null);
+              setShowQuitarModal(true);
             }
           }
           // Sync: ao mover para "vencido", marcar empréstimos ativos como inadimplente
@@ -793,12 +816,13 @@ export default function KanbanCobrancaPage() {
                                 </Button>
                               )}
                               <Button size="sm" variant="outline" className="flex-1 h-7 text-xs text-green-600 border-green-200 hover:bg-green-50" onClick={() => {
-                                quitarEmprestimo.mutate({ id: emp.id, totalParcelas: emp.parcelas }, {
-                                  onSuccess: () => toast.success('Empréstimo quitado!'),
-                                  onError: (err) => toast.error(`Erro: ${err.message}`),
-                                });
+                                setQuitarEmpId(emp.id);
+                                setQuitarTipo('manual');
+                                setComprovanteFile(null);
+                                setComprovantePreview(null);
+                                setShowQuitarModal(true);
                               }}>
-                                <CheckCircle2 className="w-3 h-3 mr-1" />Quitar
+                                <CheckCircle2 className="w-3 h-3 mr-1" />Confirmar Pag.
                               </Button>
                             </div>
                           )}
@@ -829,6 +853,119 @@ export default function KanbanCobrancaPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Modal Confirmar Pagamento (com comprovante) ─── */}
+      <Dialog open={showQuitarModal} onOpenChange={(open) => { if (!open) { setShowQuitarModal(false); setQuitarEmpId(null); setComprovanteFile(null); setComprovantePreview(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-green-600" />
+              Confirmar Pagamento Manual
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Anexe o comprovante de pagamento (imagem) para confirmar a quitação. O comprovante ficará disponível para consulta.
+            </p>
+
+            {/* Upload comprovante */}
+            {comprovantePreview ? (
+              <div className="relative rounded-lg overflow-hidden border">
+                <img src={comprovantePreview} alt="Comprovante" className="w-full h-48 object-contain bg-muted" />
+                <button
+                  onClick={() => { setComprovanteFile(null); setComprovantePreview(null); }}
+                  className="absolute top-2 right-2 h-6 w-6 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors">
+                <Upload className="h-8 w-8 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Clique para anexar comprovante</span>
+                <span className="text-xs text-muted-foreground">JPG, PNG ou WebP</span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setComprovanteFile(file);
+                      setComprovantePreview(URL.createObjectURL(file));
+                    }
+                  }}
+                />
+              </label>
+            )}
+
+            <div className="flex gap-3">
+              <Button
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                disabled={!comprovanteFile || quitarLoading}
+                onClick={async () => {
+                  if (!quitarEmpId || !comprovanteFile) return;
+                  setQuitarLoading(true);
+                  try {
+                    // Upload comprovante to Supabase storage
+                    const ext = comprovanteFile.name.split('.').pop() || 'jpg';
+                    const path = `comprovantes/${quitarEmpId}/${Date.now()}.${ext}`;
+                    const { error: upErr } = await supabase.storage
+                      .from('whatsapp-media')
+                      .upload(path, comprovanteFile, { contentType: comprovanteFile.type });
+                    if (upErr) throw new Error(`Upload falhou: ${upErr.message}`);
+
+                    const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
+                    const comprovanteUrl = urlData.publicUrl;
+
+                    // Registrar pagamento em todas as parcelas pendentes do empréstimo
+                    const hoje = new Date().toISOString().split('T')[0];
+                    const { data: parcelasPendentes } = await (supabase
+                      .from('parcelas') as any)
+                      .select('id')
+                      .eq('emprestimo_id', quitarEmpId)
+                      .in('status', ['pendente', 'vencida']);
+
+                    for (const p of parcelasPendentes ?? []) {
+                      const updateData: ParcelaUpdate = {
+                        status: 'paga',
+                        data_pagamento: hoje,
+                        pagamento_tipo: 'manual',
+                        comprovante_url: comprovanteUrl,
+                        confirmado_por: user?.id,
+                        confirmado_em: new Date().toISOString(),
+                      };
+                      await (supabase.from('parcelas') as any).update(updateData).eq('id', p.id);
+                    }
+
+                    // Quitar empréstimo
+                    const empData = emprestimos.find(e => e.id === quitarEmpId);
+                    if (empData) {
+                      quitarEmprestimo.mutate({ id: quitarEmpId, totalParcelas: empData.parcelas });
+                    }
+
+                    toast.success('Pagamento confirmado com comprovante!');
+                    setShowQuitarModal(false);
+                    setQuitarEmpId(null);
+                    setComprovanteFile(null);
+                    setComprovantePreview(null);
+                  } catch (err) {
+                    toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao confirmar pagamento'}`);
+                  } finally {
+                    setQuitarLoading(false);
+                  }
+                }}
+              >
+                {quitarLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                Confirmar Quitação
+              </Button>
+              <Button variant="outline" className="flex-1" onClick={() => setShowQuitarModal(false)}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

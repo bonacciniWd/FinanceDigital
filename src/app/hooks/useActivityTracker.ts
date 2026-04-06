@@ -50,6 +50,14 @@ export function useActivityTracker(userId: string | undefined) {
 
     (async () => {
       try {
+        // Espera 1.5s para o auto-refresh do Supabase renovar o JWT se necessário
+        await new Promise((r) => setTimeout(r, 1500));
+        if (!alive.current) return;
+
+        // Verifica se a sessão está válida
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session || !alive.current) return;
+
         const u = userRef.current;
         const func = await svc.ensureFuncionario(
           userId,
@@ -60,12 +68,12 @@ export function useActivityTracker(userId: string | undefined) {
         if (!alive.current || !func) return;
         funcIdRef.current = func.id;
 
-        await svc.updateFuncionarioStatus(func.id, 'online');
+        await svc.updateFuncionarioStatus(func.id, 'online').catch(() => {});
         if (!alive.current) return;
 
-        const sessao = await svc.iniciarSessao(func.id);
+        const sessao = await svc.iniciarSessao(func.id).catch(() => null);
         if (!alive.current) return;
-        sessaoIdRef.current = sessao.id;
+        if (sessao) sessaoIdRef.current = sessao.id;
 
         // First sync after 2 s, then every 30 s
         const beat = async () => {

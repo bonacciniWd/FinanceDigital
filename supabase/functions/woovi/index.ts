@@ -133,6 +133,18 @@ Deno.serve(async (req: Request) => {
       return errorResponse("Campo 'action' é obrigatório");
     }
 
+    // ── Per-action role check ─────────────────────────────
+    // Quem vende não faz PIX, quem cobra não faz PIX
+    // create_payment (liberação PIX) → somente admin
+    // create_charge  (cobrança)        → admin ou gerencia
+    const adminOnlyActions = ["create_payment", "withdraw_subaccount"];
+    if (adminOnlyActions.includes(action) && profile.role !== "admin") {
+      return errorResponse(
+        "Apenas admin pode executar pagamentos PIX — separação de funções",
+        403
+      );
+    }
+
     // ── Actions ───────────────────────────────────────────
 
     switch (action) {
@@ -214,6 +226,8 @@ Deno.serve(async (req: Request) => {
             expiration_date: charge?.expiresDate || null,
             split_indicador_id: split_indicador_id || null,
             split_valor: split_valor || null,
+            criado_por: user.id,
+            gateway: "woovi",
           })
           .select()
           .single();
@@ -315,6 +329,9 @@ Deno.serve(async (req: Request) => {
               payDescricao ||
               `Liberação de empréstimo - ${destinatario_nome || ""}`,
             end_to_end_id: payResponse?.transaction?.endToEndId || null,
+            autorizado_por: user.id,
+            autorizado_em: new Date().toISOString(),
+            gateway: "woovi",
           })
           .select()
           .single();

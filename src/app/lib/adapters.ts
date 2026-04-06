@@ -31,6 +31,10 @@ import type {
   WooviSubaccountComCliente,
   IdentityVerificationComAnalise,
   VerificationLogRow,
+  AgenteComissao as DbAgenteComissao,
+  ComissaoLiquidacao as DbComissaoLiquidacao,
+  ComissaoComAgente,
+  GatewayPagamento as DbGatewayPagamento,
 } from './database.types';
 
 import type {
@@ -51,12 +55,22 @@ import type {
   WooviSubaccountView,
   IdentityVerification,
   VerificationLog,
+  AgenteComissaoView,
+  ComissaoLiquidacaoView,
+  GatewayPagamentoView,
 } from './view-types';
 
 // ── Cliente ────────────────────────────────────────────────
 
-/** Converte cliente do banco (snake_case) para formato de view (camelCase) */
-export function dbClienteToView(c: DbCliente, indicou?: string[]): Cliente {
+/** Converte cliente do banco (snake_case) para formato de view (camelCase).
+ *  Se o registro vier com empréstimos embutidos, sobrescreve valor/vencimento/parcelas. */
+export function dbClienteToView(
+  c: DbCliente & { emprestimos?: { id: string; valor: number; parcelas: number; parcelas_pagas: number; proximo_vencimento: string; status: string }[] },
+  indicou?: string[],
+): Cliente {
+  // Pega o empréstimo ativo mais recente (se houver)
+  const ativo = c.emprestimos?.find(e => e.status === 'ativo') ?? c.emprestimos?.find(e => e.status === 'inadimplente');
+
   return {
     id: c.id,
     nome: c.nome,
@@ -64,11 +78,20 @@ export function dbClienteToView(c: DbCliente, indicou?: string[]): Cliente {
     telefone: c.telefone,
     cpf: c.cpf ?? undefined,
     sexo: c.sexo,
+    profissao: c.profissao ?? undefined,
     dataNascimento: c.data_nascimento ?? undefined,
     endereco: c.endereco ?? undefined,
+    rua: c.rua ?? undefined,
+    numero: c.numero ?? undefined,
+    bairro: c.bairro ?? undefined,
+    estado: c.estado ?? undefined,
+    cidade: c.cidade ?? undefined,
+    cep: c.cep ?? undefined,
     status: c.status,
-    valor: c.valor,
-    vencimento: c.vencimento,
+    valor: ativo ? ativo.valor : c.valor,
+    vencimento: ativo ? ativo.proximo_vencimento : c.vencimento,
+    parcelasPagas: ativo ? ativo.parcelas_pagas : undefined,
+    totalParcelas: ativo ? ativo.parcelas : undefined,
     diasAtraso: c.dias_atraso,
     ultimoContato: c.ultimo_contato ?? undefined,
     limiteCredito: c.limite_credito,
@@ -76,6 +99,8 @@ export function dbClienteToView(c: DbCliente, indicou?: string[]): Cliente {
     scoreInterno: c.score_interno,
     bonusAcumulado: c.bonus_acumulado,
     grupo: c.grupo ?? undefined,
+    pix_key: c.pix_key ?? undefined,
+    pix_key_type: c.pix_key_type ?? undefined,
     indicadoPor: c.indicado_por ?? undefined,
     indicou: indicou ?? [],
   };
@@ -103,6 +128,12 @@ export function dbEmprestimoToView(e: EmprestimoComCliente): Emprestimo {
     dataContrato: e.data_contrato,
     proximoVencimento: e.proximo_vencimento,
     status: e.status,
+    vendedorId: e.vendedor_id,
+    cobradorId: e.cobrador_id,
+    aprovadoPor: e.aprovado_por,
+    aprovadoEm: e.aprovado_em,
+    analiseId: e.analise_id,
+    gateway: e.gateway,
   };
 }
 
@@ -124,6 +155,13 @@ export function dbParcelaToView(p: ParcelaComCliente): Parcela {
     juros: p.juros,
     multa: p.multa,
     desconto: p.desconto,
+    observacao: p.observacao ?? undefined,
+    contaBancaria: p.conta_bancaria ?? undefined,
+    comprovanteUrl: (p as any).comprovante_url ?? undefined,
+    pagamentoTipo: (p as any).pagamento_tipo ?? undefined,
+    confirmadoPor: (p as any).confirmado_por ?? undefined,
+    confirmadoEm: (p as any).confirmado_em ?? undefined,
+    wooviChargeId: (p as any).woovi_charge_id ?? undefined,
   };
 }
 
@@ -154,6 +192,7 @@ export function dbTemplateToView(t: DbTemplate): TemplateWhatsApp {
     mensagemFeminino: t.mensagem_feminino,
     variaveis: t.variaveis,
     ativo: t.ativo,
+    tipoNotificacao: t.tipo_notificacao ?? null,
   };
 }
 
@@ -207,6 +246,12 @@ export function viewClienteToInsert(c: Partial<Cliente>) {
     sexo: c.sexo,
     data_nascimento: c.dataNascimento ?? null,
     endereco: c.endereco ?? null,
+    rua: c.rua ?? null,
+    numero: c.numero ?? null,
+    bairro: c.bairro ?? null,
+    estado: c.estado ?? null,
+    cidade: c.cidade ?? null,
+    cep: c.cep ?? null,
     status: c.status ?? ('em_dia' as const),
     valor: c.valor ?? 0,
     vencimento: c.vencimento,
@@ -216,6 +261,8 @@ export function viewClienteToInsert(c: Partial<Cliente>) {
     bonus_acumulado: c.bonusAcumulado ?? 0,
     grupo: c.grupo ?? null,
     indicado_por: c.indicadoPor ?? null,
+    pix_key: c.pix_key ?? null,
+    pix_key_type: c.pix_key_type ?? null,
   };
 }
 
@@ -236,6 +283,13 @@ export function dbAnaliseCreditoToView(a: DbAnaliseCredito): AnaliseCredito {
     dataSolicitacao: a.data_solicitacao,
     motivo: a.motivo ?? undefined,
     analistaId: a.analista_id ?? undefined,
+    numeroParcelas: a.numero_parcelas ?? null,
+    periodicidade: a.periodicidade ?? null,
+    diaPagamento: a.dia_pagamento ?? null,
+    intervaloDias: a.intervalo_dias ?? null,
+    diaUtil: a.dia_util ?? false,
+    datasPersonalizadas: a.datas_personalizadas ?? null,
+    dataResultado: a.data_resultado ?? null,
   };
 }
 
@@ -252,6 +306,12 @@ export function viewAnaliseCreditoToInsert(a: Partial<AnaliseCredito>) {
     status: a.status ?? ('pendente' as const),
     data_solicitacao: a.dataSolicitacao,
     motivo: a.motivo ?? null,
+    numero_parcelas: a.numeroParcelas ?? null,
+    periodicidade: a.periodicidade ?? 'mensal',
+    dia_pagamento: a.diaPagamento ?? null,
+    intervalo_dias: a.intervaloDias ?? null,
+    dia_util: a.diaUtil ?? false,
+    datas_personalizadas: a.datasPersonalizadas ?? null,
   };
 }
 
@@ -362,6 +422,8 @@ export function dbWooviChargeToView(c: WooviChargeComCliente): WooviChargeView {
     splitIndicadorId: c.split_indicador_id,
     splitValor: c.split_valor,
     paidAt: c.paid_at,
+    criadoPor: c.criado_por,
+    gateway: c.gateway,
     createdAt: c.created_at,
   };
 }
@@ -382,6 +444,9 @@ export function dbWooviTransactionToView(t: DbWooviTransaction): WooviTransactio
     destinatarioNome: t.destinatario_nome,
     endToEndId: t.end_to_end_id,
     descricao: t.descricao,
+    autorizadoPor: t.autorizado_por,
+    autorizadoEm: t.autorizado_em,
+    gateway: t.gateway,
     confirmedAt: t.confirmed_at,
     createdAt: t.created_at,
   };
@@ -422,6 +487,7 @@ export function dbIdentityVerificationToView(v: IdentityVerificationComAnalise):
     proofOfAddressUrl: v.proof_of_address_url ?? undefined,
     residenceVideoUrl: v.residence_video_url ?? undefined,
     clientAddress: v.client_address ?? undefined,
+    profissaoInformada: v.profissao_informada ?? undefined,
     referenceContacts: v.reference_contacts ?? [],
     verificationPhrase: v.verification_phrase,
     status: v.status,
@@ -455,5 +521,58 @@ export function dbVerificationLogToView(l: VerificationLogRow): VerificationLog 
     performedBy: l.performed_by ?? undefined,
     details: l.details,
     createdAt: l.created_at,
+  };
+}
+
+// ── Comissões & Gateways ───────────────────────────────────
+
+/** Converte configuração de comissão do agente do banco para formato de view */
+export function dbAgenteComissaoToView(
+  a: DbAgenteComissao & { profiles?: { name: string; email: string; role: string } | null }
+): AgenteComissaoView {
+  return {
+    id: a.id,
+    agenteId: a.agente_id,
+    agenteNome: a.profiles?.name,
+    agenteEmail: a.profiles?.email,
+    agenteRole: a.profiles?.role,
+    percentualVenda: Number(a.percentual_venda),
+    percentualCobranca: Number(a.percentual_cobranca),
+    percentualGerencia: Number(a.percentual_gerencia),
+    ativo: a.ativo,
+    createdAt: a.created_at,
+    updatedAt: a.updated_at,
+  };
+}
+
+/** Converte comissão de liquidação do banco para formato de view */
+export function dbComissaoLiquidacaoToView(c: ComissaoComAgente): ComissaoLiquidacaoView {
+  return {
+    id: c.id,
+    parcelaId: c.parcela_id,
+    emprestimoId: c.emprestimo_id,
+    agenteId: c.agente_id,
+    agenteNome: c.profiles?.name,
+    tipo: c.tipo,
+    valorBase: Number(c.valor_base),
+    percentual: Number(c.percentual),
+    valorComissao: Number(c.valor_comissao),
+    mesReferencia: c.mes_referencia,
+    status: c.status,
+    createdAt: c.created_at,
+  };
+}
+
+/** Converte gateway de pagamento do banco para formato de view */
+export function dbGatewayPagamentoToView(g: DbGatewayPagamento): GatewayPagamentoView {
+  return {
+    id: g.id,
+    nome: g.nome,
+    label: g.label,
+    ativo: g.ativo,
+    config: (g.config ?? {}) as Record<string, unknown>,
+    prioridade: g.prioridade,
+    createdAt: g.created_at,
+    updatedAt: g.updated_at,
   };
 }

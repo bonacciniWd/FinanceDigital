@@ -10,7 +10,7 @@
  * - Máximo 3 retries por verificação
  * - Após 3 rejeições → análise auto-recusada
  */
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -37,13 +37,17 @@ import {
   Phone,
   X,
   ZoomIn,
+  Briefcase,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useVerificationsByAnalise, useUpdateVerification, useCreateVerificationLog, useVerificationLogs } from '../hooks/useIdentityVerification';
 import { useUpdateAnalise } from '../hooks/useAnaliseCredito';
+import { useCliente } from '../hooks/useClientes';
 import { useAuth } from '../contexts/AuthContext';
 import { getSignedUrl } from '../services/identityVerificationService';
+import { supabase } from '../lib/supabase';
+import { useQueryClient } from '@tanstack/react-query';
 import type { AnaliseCredito } from '../lib/view-types';
 
 interface Props {
@@ -66,10 +70,12 @@ function formatCurrency(value: number) {
 
 export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMagicLink }: Props) {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [rejectionReason, setRejectionReason] = useState('');
   const [retryPhrase, setRetryPhrase] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [showRetryForm, setShowRetryForm] = useState(false);
+  const [approvingCredit, setApprovingCredit] = useState(false);
   const [videoSignedUrl, setVideoSignedUrl] = useState<string | null>(null);
   const [docFrontUrl, setDocFrontUrl] = useState<string | null>(null);
   const [docBackUrl, setDocBackUrl] = useState<string | null>(null);
@@ -88,6 +94,72 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
   const updateVerification = useUpdateVerification();
   const createLog = useCreateVerificationLog();
   const updateAnalise = useUpdateAnalise();
+
+  // Fetch client data to compare profissao
+  const { data: clienteData } = useCliente(analise?.clienteId ?? undefined);
+
+  // Profession mismatch detection
+  const profissaoCadastro = clienteData?.profissao?.trim().toLowerCase() || '';
+  const profissaoVerificacao = latestVerification?.profissaoInformada?.trim().toLowerCase() || '';
+  const hasProfissaoMismatch = !!(
+    profissaoCadastro &&
+    profissaoVerificacao &&
+    profissaoCadastro !== profissaoVerificacao
+  );
+
+  // Auto-reject when profession mismatch is detected
+  const autoRejectedRef = useRef(false);
+  useEffect(() => {
+    if (!hasProfissaoMismatch || autoRejectedRef.current) return;
+    if (!latestVerification || !analise || !user) return;
+    if (analise.status === 'recusado' || analise.status === 'aprovado') return;
+    if (latestVerification.status === 'rejected') return;
+
+    autoRejectedRef.current = true;
+
+    // Auto-reject verification
+    updateVerification.mutate(
+      {
+        id: latestVerification.id,
+        updates: {
+          status: 'rejected',
+          analyzed_by: user.id,
+          analyzed_at: new Date().toISOString(),
+          rejection_reason: `Profissão divergente — Cadastro: "${clienteData?.profissao}", Verificação: "${latestVerification.profissaoInformada}"`,
+        },
+      },
+      {
+        onSuccess: () => {
+          createLog.mutate({
+            verification_id: latestVerification.id,
+            analise_id: analise.id,
+            action: 'profession_mismatch_auto_rejected',
+            performed_by: user.id,
+            details: {
+              profissao_cadastro: clienteData?.profissao,
+              profissao_verificacao: latestVerification.profissaoInformada,
+            },
+          });
+          // Also reject the credit analysis
+          updateAnalise.mutate(
+            {
+              id: analise.id,
+              updates: {
+                status: 'recusado',
+                motivo: `Profissão divergente — Cadastro: "${clienteData?.profissao}", Verificação: "${latestVerification.profissaoInformada}"`,
+              },
+            },
+            {
+              onSuccess: () => {
+                queryClient.invalidateQueries({ queryKey: ['analises-credito'] });
+                toast.error('Análise RECUSADA automaticamente — profissão informada na verificação difere do cadastro.');
+              },
+            }
+          );
+        },
+      }
+    );
+  }, [hasProfissaoMismatch, latestVerification, analise, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isSelfAnalysis = user?.id === latestVerification?.userId;
   const hasMedia = !!(latestVerification?.videoUrl);
@@ -125,40 +197,61 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
     }
   };
 
-  // Approve verification
-  const handleApprove = () => {
+  // Approve verification → call approve-credit edge function to create emprestimo + parcelas
+  const handleApprove = async () => {
     if (!latestVerification || !analise || !user) return;
-    updateVerification.mutate(
-      {
-        id: latestVerification.id,
-        updates: {
-          status: 'approved',
-          analyzed_by: user.id,
-          analyzed_at: new Date().toISOString(),
+    setApprovingCredit(true);
+
+    try {
+      // 1. Aprovar verificação de identidade
+      await new Promise<void>((resolve, reject) => {
+        updateVerification.mutate(
+          {
+            id: latestVerification.id,
+            updates: {
+              status: 'approved',
+              analyzed_by: user.id,
+              analyzed_at: new Date().toISOString(),
+            },
+          },
+          { onSuccess: () => resolve(), onError: reject }
+        );
+      });
+
+      // Log
+      createLog.mutate({
+        verification_id: latestVerification.id,
+        analise_id: analise.id,
+        action: 'verification_approved',
+        performed_by: user.id,
+        details: { approved_by_name: user.email },
+      });
+
+      // 2. Chamar approve-credit para criar empréstimo + parcelas + PIX + WhatsApp
+      // pix_key é lido automaticamente da tabela clientes pelo backend
+      const { data, error } = await supabase.functions.invoke('approve-credit', {
+        body: {
+          analise_id: analise.id,
         },
-      },
-      {
-        onSuccess: () => {
-          createLog.mutate({
-            verification_id: latestVerification.id,
-            analise_id: analise.id,
-            action: 'verification_approved',
-            performed_by: user.id,
-            details: { approved_by_name: user.email },
-          });
-          updateAnalise.mutate(
-            { id: analise.id, updates: { status: 'aprovado' } },
-            {
-              onSuccess: () => {
-                toast.success('Verificação aprovada e análise concluída!');
-                onClose();
-              },
-            }
-          );
-        },
-        onError: (err) => toast.error(`Erro: ${err.message}`),
-      }
-    );
+      });
+
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || 'Erro na aprovação do crédito');
+
+      // 3. Invalidar caches relevantes
+      queryClient.invalidateQueries({ queryKey: ['analises-credito'] });
+      queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+      queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['clientes'] });
+
+      toast.success(`Crédito aprovado! Empréstimo criado com ${data.parcelas_geradas} parcela(s).`);
+      onClose();
+    } catch (err: any) {
+      toast.error(`Erro: ${err.message}`);
+    } finally {
+      setApprovingCredit(false);
+    }
   };
 
   // Reject verification
@@ -351,10 +444,10 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                 <Button
                   className="flex-1 bg-green-600 hover:bg-green-700"
                   onClick={handleApprove}
-                  disabled={updateVerification.isPending || updateAnalise.isPending || !canReview}
+                  disabled={approvingCredit || updateVerification.isPending || !canReview}
                 >
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  Aprovar
+                  {approvingCredit ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+                  {approvingCredit ? 'Aprovando...' : 'Aprovar'}
                 </Button>
                 <Button
                   className="flex-1"
@@ -550,7 +643,32 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                   </div>
                 )}
 
-               
+                {/* Profissão Informada vs Cadastro */}
+                {latestVerification.profissaoInformada && (
+                  <div className={`p-3 rounded-lg border ${hasProfissaoMismatch ? 'bg-red-50 dark:bg-red-950/20 border-red-300 dark:border-red-800' : 'bg-muted/50'}`}>
+                    <p className="text-sm font-medium flex items-center gap-2 mb-2">
+                      <Briefcase className="h-4 w-4" /> Profissão
+                    </p>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-muted-foreground">No cadastro:</span>
+                        <p className="font-medium">{clienteData?.profissao || '(não informada)'}</p>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Na verificação:</span>
+                        <p className="font-medium">{latestVerification.profissaoInformada}</p>
+                      </div>
+                    </div>
+                    {hasProfissaoMismatch && (
+                      <Alert variant="destructive" className="mt-3">
+                        <AlertTriangle className="h-4 w-4" />
+                        <AlertDescription>
+                          <strong>DIVERGÊNCIA DETECTADA:</strong> A profissão informada na verificação é diferente da cadastrada. A análise foi <strong>recusada automaticamente</strong>.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
+                )}
 
                 {/* Reference Contacts */}
                 {latestVerification.referenceContacts && latestVerification.referenceContacts.length > 0 && (
@@ -592,9 +710,9 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                 {/* Action buttons */}
                 {canReview && (
                   <div className="flex gap-2 pt-2">
-                    <Button className="flex-1 bg-green-600 hover:bg-green-700" onClick={handleApprove} disabled={updateVerification.isPending}>
-                      <CheckCircle className="h-4 w-4 mr-2" />
-                      Aprovar
+                    <Button className="flex-1 bg-green-600 hover:bg-green-700" onClick={handleApprove} disabled={approvingCredit || updateVerification.isPending}>
+                      {approvingCredit ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+                      {approvingCredit ? 'Aprovando...' : 'Aprovar'}
                     </Button>
                     <Button className="flex-1" variant="destructive" onClick={() => { setShowRejectForm(true); setShowRetryForm(false); }} disabled={updateVerification.isPending}>
                       <XCircle className="h-4 w-4 mr-2" />

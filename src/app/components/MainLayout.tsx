@@ -22,6 +22,8 @@ import {
   Settings,
   LogOut,
   Bell,
+  Volume2,
+  VolumeX,
   Search,
   ChevronDown,
   Menu,
@@ -43,6 +45,7 @@ import {
   Bot,
   Workflow,
   FileCode,
+  Shield,
   Columns3,
   Scale,
   Headset,
@@ -57,15 +60,20 @@ import {
   Monitor,
   Gauge,
   QrCode,
+  Percent,
+  Settings2,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useActivityTracker } from '../hooks/useActivityTracker';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AnimatedBackground } from './AnimatedBackground';
 import { FloatingChat } from './FloatingChat';
+import { supabase } from '../lib/supabase';
+import { toast } from 'sonner';
+import alarmeSound from '../assets/sounds/alarme.mp3';
 
 export function MainLayout() {
   const { user, logout } = useAuth();
@@ -73,9 +81,73 @@ export function MainLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [silencioso, setSilencioso] = useState(() => localStorage.getItem('fd-silencioso') === 'true');
+  const silenciosoRef = useRef(silencioso);
 
   // Rastreia atividade do usuário logado (online/offline, sessão, heartbeat)
   useActivityTracker(user?.id);
+
+  // Manter ref sincronizada com estado silencioso
+  useEffect(() => {
+    silenciosoRef.current = silencioso;
+    localStorage.setItem('fd-silencioso', String(silencioso));
+  }, [silencioso]);
+
+  // ── Realtime: alerta análise com pendências (admin/gerencia) ──
+  const alarmeRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    if (!user || (user.role !== 'admin' && user.role !== 'gerencia')) return;
+
+    const channel = supabase
+      .channel('analise-pendencia-alert')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'analises_credito' },
+        async (payload) => {
+          const analise = payload.new as { id: string; cliente_nome: string; cpf: string; valor_solicitado: number; cliente_id: string | null };
+          const valor = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(analise.valor_solicitado);
+
+          // Verificar pendências
+          let pendencias = 0;
+          try {
+            let result;
+            if (analise.cliente_id) {
+              const { data } = await supabase.rpc('verificar_pendencias_cliente_id', { p_cliente_id: analise.cliente_id });
+              result = data;
+            } else if (analise.cpf) {
+              const { data } = await supabase.rpc('verificar_pendencias_cliente', { p_cpf: analise.cpf });
+              result = data;
+            }
+            if (result?.tem_pendencia) pendencias = result.total_emprestimos_pendentes;
+          } catch { /* RPC indisponível — continua sem info de pendências */ }
+
+          // Tocar alarme (respeita modo silencioso)
+          if (!silenciosoRef.current) {
+            try {
+              if (!alarmeRef.current) alarmeRef.current = new Audio(alarmeSound);
+              alarmeRef.current.currentTime = 0;
+              alarmeRef.current.play();
+            } catch { /* autoplay blocked */ }
+          }
+
+          // Toast
+          if (pendencias > 0) {
+            toast.warning(
+              `⚠️ Nova análise: ${analise.cliente_nome} (${valor}) — cliente possui ${pendencias} empréstimo(s) ativo(s)!`,
+              { duration: 15000, id: `analise-${analise.id}` }
+            );
+          } else {
+            toast.info(
+              `Nova análise de crédito criada: ${analise.cliente_nome} (${valor})`,
+              { duration: 8000, id: `analise-${analise.id}` }
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user]);
 
   const navigation = [
     {
@@ -134,6 +206,7 @@ export function MainLayout() {
       items: [
         { name: 'Gerenciais', href: '/relatorios/gerenciais', icon: FileBarChart, roles: ['admin', 'gerencia'] },
         { name: 'Operacionais', href: '/relatorios/operacionais', icon: FileSpreadsheet, roles: ['admin', 'gerencia'] },
+        { name: 'Comissões', href: '/relatorios/comissoes', icon: Percent, roles: ['admin', 'gerencia'] },
         { name: 'Exportar Dados', href: '/relatorios/exportar', icon: Download, roles: ['admin', 'gerencia'] },
       ],
     },
@@ -143,6 +216,9 @@ export function MainLayout() {
         { name: 'Perfis de Acesso', href: '/configuracoes/perfis', icon: KeyRound, roles: ['admin'] },
         { name: 'Gerenciar Usuários', href: '/configuracoes/usuarios', icon: UserCog, roles: ['admin'] },
         { name: 'Integrações', href: '/configuracoes/integracoes', icon: Plug, roles: ['admin'] },
+        { name: 'Comissões', href: '/configuracoes/comissoes', icon: Percent, roles: ['admin'] },
+        { name: 'IP Whitelist', href: '/configuracoes/ip-whitelist', icon: Shield, roles: ['admin'] },
+        { name: 'Sistema', href: '/configuracoes/sistema', icon: Settings2, roles: ['admin', 'gerencia'] },
         { name: 'Minha Conta', href: '/configuracoes/conta', icon: UserCircle, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
       ],
     },
@@ -151,6 +227,12 @@ export function MainLayout() {
       items: [
         { name: 'Monitoramento', href: '/equipe/monitoramento', icon: Monitor, roles: ['admin', 'gerencia'] },
         { name: 'Produtividade', href: '/equipe/produtividade', icon: Gauge, roles: ['admin', 'gerencia'] },
+      ],
+    },
+    {
+      title: 'AJUDA',
+      items: [
+        { name: 'Documentação', href: '/ajuda/docs', icon: FileText, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
       ],
     },
   ];
@@ -267,6 +349,15 @@ export function MainLayout() {
             <Button variant="ghost" size="icon" className="relative">
               <Bell className="w-5 h-5" />
               <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setSilencioso(!silencioso)}
+              title={silencioso ? 'Ativar sons de notificação' : 'Modo silencioso'}
+            >
+              {silencioso ? <VolumeX className="w-5 h-5 text-muted-foreground" /> : <Volume2 className="w-5 h-5" />}
             </Button>
 
             <div className="flex items-center gap-2 cursor-pointer hover:bg-muted px-3 py-2 rounded-md transition-colors">

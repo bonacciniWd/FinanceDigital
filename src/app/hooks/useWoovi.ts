@@ -13,6 +13,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import * as wooviService from '../services/wooviService';
+import { efiConsultarSaldo, efiCriarCobranca, efiConsultarCobranca, efiListarCobrancas, efiCriarCobv, efiConsultarCobv, efiListarCobv, efiCriarPagamento, efiConsultarPixEnviado, efiListarPixEnviados, efiConsultarPix, efiListarPix, efiSolicitarDevolucao, efiConsultarDevolucao, efiConfigurarWebhook, efiListarWebhooks, efiDeletarWebhook } from '../services/efiService';
 import { dbWooviChargeToView, dbWooviTransactionToView, dbWooviSubaccountToView } from '../lib/adapters';
 
 const CHARGES_KEY = 'woovi-charges';
@@ -268,5 +269,172 @@ export function useWebhooksLogWoovi() {
   return useQuery({
     queryKey: [WEBHOOKS_KEY],
     queryFn: () => wooviService.getWebhooksLog(),
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// EFI — SALDO
+// ══════════════════════════════════════════════════════════════
+
+const EFI_BALANCE_KEY = 'efi-balance';
+const EFI_CHARGES_KEY = 'efi-charges';
+const EFI_COBV_KEY = 'efi-cobv';
+const EFI_SENT_PIX_KEY = 'efi-sent-pix';
+const EFI_PIX_KEY = 'efi-pix';
+const EFI_WEBHOOKS_KEY = 'efi-webhooks';
+
+/** Consultar saldo da conta EFI — polling a cada 60s */
+export function useSaldoEfi() {
+  return useQuery({
+    queryKey: [EFI_BALANCE_KEY],
+    queryFn: () => efiConsultarSaldo(),
+    refetchInterval: 60000,
+    staleTime: 30000,
+  });
+}
+
+// ── Cobranças imediatas EFI ───────────────────────────────
+
+/** Criar cobrança Pix imediata via EFI */
+export function useCriarCobrancaEfi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: Parameters<typeof efiCriarCobranca>[0]) =>
+      efiCriarCobranca(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [CHARGES_KEY] });
+      queryClient.invalidateQueries({ queryKey: [EFI_CHARGES_KEY] });
+      queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+    },
+  });
+}
+
+/** Consultar cobrança EFI por txid */
+export function useConsultarCobrancaEfi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (chargeId: string) => efiConsultarCobranca(chargeId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [CHARGES_KEY] });
+    },
+  });
+}
+
+/** Listar cobranças EFI por período */
+export function useListarCobrancasEfi(inicio?: string, fim?: string) {
+  return useQuery({
+    queryKey: [EFI_CHARGES_KEY, inicio, fim],
+    queryFn: () => efiListarCobrancas({ inicio: inicio!, fim: fim! }),
+    enabled: !!inicio && !!fim,
+  });
+}
+
+// ── Cobranças com vencimento EFI ──────────────────────────
+
+/** Criar cobrança com vencimento via EFI */
+export function useCriarCobvEfi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: Parameters<typeof efiCriarCobv>[0]) =>
+      efiCriarCobv(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [CHARGES_KEY] });
+      queryClient.invalidateQueries({ queryKey: [EFI_COBV_KEY] });
+      queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+    },
+  });
+}
+
+/** Listar cobranças com vencimento EFI por período */
+export function useListarCobvEfi(inicio?: string, fim?: string) {
+  return useQuery({
+    queryKey: [EFI_COBV_KEY, inicio, fim],
+    queryFn: () => efiListarCobv({ inicio: inicio!, fim: fim! }),
+    enabled: !!inicio && !!fim,
+  });
+}
+
+// ── Pagamentos EFI (envio Pix) ────────────────────────────
+
+/** Enviar Pix via EFI — admin only */
+export function useCriarPagamentoEfi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: Parameters<typeof efiCriarPagamento>[0]) =>
+      efiCriarPagamento(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [TRANSACTIONS_KEY] });
+      queryClient.invalidateQueries({ queryKey: [EFI_BALANCE_KEY] });
+      queryClient.invalidateQueries({ queryKey: [BALANCE_KEY] });
+      queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+    },
+  });
+}
+
+/** Listar Pix enviados via EFI por período */
+export function useListarPixEnviadosEfi(inicio?: string, fim?: string) {
+  return useQuery({
+    queryKey: [EFI_SENT_PIX_KEY, inicio, fim],
+    queryFn: () => efiListarPixEnviados({ inicio: inicio!, fim: fim! }),
+    enabled: !!inicio && !!fim,
+  });
+}
+
+// ── Gestão de Pix recebidos EFI ───────────────────────────
+
+/** Listar Pix recebidos via EFI por período */
+export function useListarPixRecebidosEfi(inicio?: string, fim?: string) {
+  return useQuery({
+    queryKey: [EFI_PIX_KEY, inicio, fim],
+    queryFn: () => efiListarPix({ inicio: inicio!, fim: fim! }),
+    enabled: !!inicio && !!fim,
+  });
+}
+
+// ── Devoluções EFI ────────────────────────────────────────
+
+/** Solicitar devolução de Pix EFI — admin only */
+export function useSolicitarDevolucaoEfi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (params: Parameters<typeof efiSolicitarDevolucao>[0]) =>
+      efiSolicitarDevolucao(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [EFI_BALANCE_KEY] });
+      queryClient.invalidateQueries({ queryKey: [TRANSACTIONS_KEY] });
+    },
+  });
+}
+
+// ── Webhooks EFI ──────────────────────────────────────────
+
+/** Configurar webhook URL na EFI — admin only */
+export function useConfigurarWebhookEfi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (webhookUrl: string) => efiConfigurarWebhook(webhookUrl),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [EFI_WEBHOOKS_KEY] });
+    },
+  });
+}
+
+/** Listar webhooks registrados na EFI */
+export function useListarWebhooksEfi(inicio?: string, fim?: string) {
+  return useQuery({
+    queryKey: [EFI_WEBHOOKS_KEY, inicio, fim],
+    queryFn: () => efiListarWebhooks({ inicio: inicio!, fim: fim! }),
+    enabled: !!inicio && !!fim,
+  });
+}
+
+/** Deletar webhook EFI — admin only */
+export function useDeletarWebhookEfi() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => efiDeletarWebhook(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [EFI_WEBHOOKS_KEY] });
+    },
   });
 }

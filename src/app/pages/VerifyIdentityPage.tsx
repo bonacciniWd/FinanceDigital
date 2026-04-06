@@ -25,6 +25,7 @@ import { Badge } from '../components/ui/badge';
 import { Progress } from '../components/ui/progress';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import {
   Video,
   Camera,
@@ -40,6 +41,7 @@ import {
   MapPin,
   Home,
   Users,
+  User,
   ChevronRight,
   ChevronLeft,
 } from 'lucide-react';
@@ -143,7 +145,54 @@ export default function VerifyIdentityPage() {
   const [proofOfAddressPreview, setProofOfAddressPreview] = useState<string | null>(null);
 
   // Address & reference contacts state
-  const [clientAddress, setClientAddress] = useState('');
+  const [addrRua, setAddrRua] = useState('');
+  const [addrNumero, setAddrNumero] = useState('');
+  const [addrBairro, setAddrBairro] = useState('');
+  const [addrEstado, setAddrEstado] = useState('');
+  const [addrCidade, setAddrCidade] = useState('');
+  const [addrCep, setAddrCep] = useState('');
+  const [cidadesLista, setCidadesLista] = useState<string[]>([]);
+  const [cidadesLoading, setCidadesLoading] = useState(false);
+  const [cidadeSearch, setCidadeSearch] = useState('');
+
+  const ESTADOS_BR = [
+    'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG',
+    'PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO',
+  ] as const;
+
+  useEffect(() => {
+    if (!addrEstado) { setCidadesLista([]); setAddrCidade(''); return; }
+    let cancelled = false;
+    setCidadesLoading(true);
+    setAddrCidade('');
+    setCidadeSearch('');
+    fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${addrEstado}/municipios?orderBy=nome`)
+      .then(r => r.json())
+      .then((data: Array<{ nome: string }>) => {
+        if (!cancelled) setCidadesLista(data.map(m => m.nome));
+      })
+      .catch(() => { if (!cancelled) setCidadesLista([]); })
+      .finally(() => { if (!cancelled) setCidadesLoading(false); });
+    return () => { cancelled = true; };
+  }, [addrEstado]);
+
+  const cidadesFiltradas = cidadeSearch
+    ? cidadesLista.filter(c => c.toLowerCase().includes(cidadeSearch.toLowerCase()))
+    : cidadesLista;
+
+  const formatCep = (v: string) => {
+    const digits = v.replace(/\D/g, '').slice(0, 8);
+    return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
+  };
+
+  const clientAddress = [addrRua.trim(), addrNumero.trim(), addrBairro.trim(), addrCidade.trim(), addrEstado, addrCep.trim()]
+    .filter(Boolean)
+    .join(', ');
+  const addressFilled = addrRua.trim() && addrNumero.trim() && addrBairro.trim() && addrEstado && addrCidade && addrCep.replace(/\D/g, '').length === 8;
+  const [clientProfissao, setClientProfissao] = useState('');
+  const [pixKey, setPixKey] = useState('');
+  const [pixKeyType, setPixKeyType] = useState('cpf');
+  const [pixKeyConfirmed, setPixKeyConfirmed] = useState(false);
   const [referenceContacts, setReferenceContacts] = useState<ReferenceContact[]>([
     { name: '', phone: '', relationship: '' },
     { name: '', phone: '', relationship: '' },
@@ -665,7 +714,8 @@ export default function VerifyIdentityPage() {
     if (!verification
       || !uploadedPaths.video || !uploadedPaths.docFront || !uploadedPaths.docBack
       || !uploadedPaths.proofOfAddress || !uploadedPaths.residenceVideo
-      || !clientAddress.trim() || !allContactsFilled) return;
+      || !addressFilled || !clientProfissao.trim() || !allContactsFilled
+      || !pixKey.trim() || !pixKeyConfirmed) return;
 
     setUploading(true);
     setUploadProgress(30);
@@ -682,6 +732,7 @@ export default function VerifyIdentityPage() {
           proof_of_address_url: uploadedPaths.proofOfAddress,
           residence_video_url: uploadedPaths.residenceVideo,
           client_address: clientAddress.trim(),
+          profissao_informada: clientProfissao.trim(),
           reference_contacts: referenceContacts.map((c) => ({
             name: c.name.trim(),
             phone: c.phone.trim(),
@@ -692,6 +743,20 @@ export default function VerifyIdentityPage() {
         })
         .eq('id', verification.id);
       if (updateError) throw updateError;
+      setUploadProgress(50);
+
+      // Save PIX key to clientes table via analises_credito.cliente_id
+      const { data: analise } = await supabase
+        .from('analises_credito')
+        .select('cliente_id')
+        .eq('id', verification.analise_id)
+        .single();
+      if (analise?.cliente_id) {
+        await supabase
+          .from('clientes')
+          .update({ pix_key: pixKey.trim(), pix_key_type: pixKeyType })
+          .eq('id', analise.cliente_id);
+      }
       setUploadProgress(70);
 
       // Create audit log
@@ -707,7 +772,10 @@ export default function VerifyIdentityPage() {
           proof_of_address_path: uploadedPaths.proofOfAddress,
           residence_video_path: uploadedPaths.residenceVideo,
           client_address: clientAddress.trim(),
+          profissao_informada: clientProfissao.trim(),
           reference_contacts_count: referenceContacts.length,
+          pix_key: pixKey.trim(),
+          pix_key_type: pixKeyType,
         },
       });
 
@@ -1286,18 +1354,90 @@ export default function VerifyIdentityPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Address */}
+              {/* Profissão */}
               <div className="space-y-2">
-                <Label htmlFor="address" className="flex items-center gap-2">
+                <Label htmlFor="profissao" className="flex items-center gap-2">
+                  <User className="h-4 w-4" />
+                  Profissão
+                </Label>
+                <Input
+                  id="profissao"
+                  placeholder="Informe sua profissão (ex: Engenheiro, Médico, Autônomo...)"
+                  value={clientProfissao}
+                  onChange={(e) => setClientProfissao(e.target.value)}
+                />
+              </div>
+
+              {/* Address */}
+              <div className="space-y-3">
+                <Label className="flex items-center gap-2">
                   <MapPin className="h-4 w-4" />
                   Endereço Completo
                 </Label>
-                <Input
-                  id="address"
-                  placeholder="Rua, número, bairro, cidade - UF, CEP"
-                  value={clientAddress}
-                  onChange={(e) => setClientAddress(e.target.value)}
-                />
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-2">
+                    <Label htmlFor="addr-rua" className="text-xs">Rua / Logradouro</Label>
+                    <Input id="addr-rua" placeholder="Ex: Rua das Flores" value={addrRua} onChange={(e) => setAddrRua(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label htmlFor="addr-numero" className="text-xs">Número</Label>
+                    <Input id="addr-numero" placeholder="123" value={addrNumero} onChange={(e) => setAddrNumero(e.target.value)} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label htmlFor="addr-bairro" className="text-xs">Bairro</Label>
+                    <Input id="addr-bairro" placeholder="Centro" value={addrBairro} onChange={(e) => setAddrBairro(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label htmlFor="addr-cep" className="text-xs">CEP</Label>
+                    <Input id="addr-cep" placeholder="00000-000" value={addrCep} onChange={(e) => setAddrCep(formatCep(e.target.value))} inputMode="numeric" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Estado</Label>
+                    <Select value={addrEstado} onValueChange={setAddrEstado}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="UF" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ESTADOS_BR.map(uf => (
+                          <SelectItem key={uf} value={uf}>{uf}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs">Cidade</Label>
+                  {!addrEstado ? (
+                    <Input placeholder="Selecione o estado primeiro" disabled className="h-9" />
+                  ) : cidadesLoading ? (
+                    <Input placeholder="Carregando cidades..." disabled className="h-9" />
+                  ) : (
+                    <Select value={addrCidade} onValueChange={setAddrCidade}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="Selecione a cidade" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <div className="px-2 pb-2 pt-1 sticky top-0 bg-popover">
+                          <Input
+                            placeholder="Buscar cidade..."
+                            className="h-7 text-xs"
+                            value={cidadeSearch}
+                            onChange={(e) => setCidadeSearch(e.target.value)}
+                            autoFocus
+                          />
+                        </div>
+                        {cidadesFiltradas.length === 0 && (
+                          <p className="text-xs text-muted-foreground text-center py-2">Nenhuma cidade encontrada</p>
+                        )}
+                        {cidadesFiltradas.map(cidade => (
+                          <SelectItem key={cidade} value={cidade}>{cidade}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
               </div>
 
               {/* Reference contacts */}
@@ -1331,13 +1471,54 @@ export default function VerifyIdentityPage() {
                 ))}
               </div>
 
+              {/* PIX Key */}
+              <div className="space-y-3">
+                <Label className="flex items-center gap-2">
+                  💰 Chave PIX para Recebimento
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Informe sua chave PIX. É para ela que o valor aprovado será enviado automaticamente.
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <Label className="text-xs">Tipo da Chave</Label>
+                    <Select value={pixKeyType} onValueChange={setPixKeyType}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="cpf">CPF</SelectItem>
+                        <SelectItem value="cnpj">CNPJ</SelectItem>
+                        <SelectItem value="email">E-mail</SelectItem>
+                        <SelectItem value="phone">Telefone</SelectItem>
+                        <SelectItem value="random">Aleatória</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="col-span-2">
+                    <Label className="text-xs">Chave PIX</Label>
+                    <Input
+                      placeholder={
+                        pixKeyType === 'cpf' ? '000.000.000-00' :
+                        pixKeyType === 'cnpj' ? '00.000.000/0000-00' :
+                        pixKeyType === 'email' ? 'seu@email.com' :
+                        pixKeyType === 'phone' ? '+5511999999999' :
+                        'Chave aleatória'
+                      }
+                      value={pixKey}
+                      onChange={(e) => setPixKey(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setStep('proof_address')}>
                   Voltar
                 </Button>
                 <Button
                   className="flex-1"
-                  disabled={!clientAddress.trim() || !allContactsFilled}
+                  disabled={!addressFilled || !clientProfissao.trim() || !allContactsFilled || !pixKey.trim()}
                   onClick={() => setStep('residence_video')}
                 >
                   Próximo
@@ -1553,6 +1734,32 @@ export default function VerifyIdentityPage() {
                 )}
               </div>
 
+              {/* PIX Key Confirmation */}
+              <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 dark:bg-amber-950/30 space-y-3">
+                <p className="text-sm font-medium flex items-center gap-2">💰 Chave PIX para Recebimento</p>
+                <div className="text-sm space-y-1">
+                  <p><span className="text-muted-foreground">Tipo:</span> <span className="font-medium">{
+                    pixKeyType === 'cpf' ? 'CPF' :
+                    pixKeyType === 'cnpj' ? 'CNPJ' :
+                    pixKeyType === 'email' ? 'E-mail' :
+                    pixKeyType === 'phone' ? 'Telefone' : 'Aleatória'
+                  }</span></p>
+                  <p><span className="text-muted-foreground">Chave:</span> <span className="font-medium">{pixKey}</span></p>
+                </div>
+                <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-amber-200 dark:border-amber-800">
+                  <input
+                    type="checkbox"
+                    checked={pixKeyConfirmed}
+                    onChange={(e) => setPixKeyConfirmed(e.target.checked)}
+                    className="mt-0.5 h-5 w-5 rounded border-amber-400 text-primary accent-primary"
+                  />
+                  <span className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                    Confirmo que minha chave PIX acima está correta e que o valor aprovado deverá ser enviado
+                    para esta chave. Estou ciente de que não será possível alterar após o envio.
+                  </span>
+                </label>
+              </div>
+
               {uploading && (
                 <div className="space-y-2">
                   <Progress value={uploadProgress} />
@@ -1574,7 +1781,7 @@ export default function VerifyIdentityPage() {
                 <Button
                   className="flex-1"
                   onClick={handleSubmit}
-                  disabled={uploading}
+                  disabled={uploading || !pixKeyConfirmed}
                 >
                   {uploading ? (
                     <>

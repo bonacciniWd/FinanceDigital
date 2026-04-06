@@ -1,11 +1,13 @@
-# FintechFlow — Documentação Técnica Completa
+# FinanceDigital — Documentação Técnica Completa
 
-> **Atualizado:** 19 de março de 2026 (v7.4.0 — Verificação de Identidade para Análise de Crédito)  
+> **Atualizado:** 6 de abril de 2026  
 > **Stack:** React 18 · TypeScript 5 · Vite 6 · Tailwind CSS v4 · Supabase · React Query (TanStack)
 
 ---
 
 ## Sumário
+
+### Parte I — Arquitetura & Código
 
 1. [Arquitetura Geral](#1-arquitetura-geral)
 2. [Banco de Dados — Tabelas](#2-banco-de-dados--tabelas)
@@ -33,6 +35,32 @@
 24. [Métricas do Projeto](#24-métricas-do-projeto-v731)
 25. [Chat Interno — FloatingChat Widget](#25-chat-interno--floatchat-widget-v730--18032026)
 26. [Verificação de Identidade — Análise de Crédito](#26-verificação-de-identidade--análise-de-crédito-v740--19032026)
+
+### Parte II — Deploy, Integrações & Operações
+
+27. [Pré-requisitos de Deploy](#27-pré-requisitos-de-deploy)
+28. [Deploy de Edge Functions](#28-deploy-de-edge-functions)
+29. [EFI Bank (Gerencianet) — Configuração Completa](#29-efi-bank-gerencianet--configuração-completa)
+30. [Woovi (OpenPix) — Configuração](#30-woovi-openpix--configuração)
+31. [Webhook WhatsApp (Evolution API)](#31-webhook-whatsapp-evolution-api)
+32. [Migrations (Banco de Dados)](#32-migrations-banco-de-dados)
+33. [Variáveis de Ambiente](#33-variáveis-de-ambiente)
+34. [Arquitetura de Edge Functions](#34-arquitetura-de-edge-functions)
+35. [Fluxo de Aprovação de Crédito](#35-fluxo-de-aprovação-de-crédito)
+36. [Notificações Automatizadas (Cron)](#36-notificações-automatizadas-cron)
+37. [Templates de Mensagens](#37-templates-de-mensagens)
+38. [IP Whitelist & Segurança](#38-ip-whitelist--segurança)
+39. [Pagamentos Pix (Woovi)](#39-pagamentos-pix-woovi)
+40. [Gestão de Parcelas](#40-gestão-de-parcelas)
+41. [Arquitetura Frontend](#41-arquitetura-frontend)
+42. [Aplicativo Desktop (Electron)](#42-aplicativo-desktop-electron)
+43. [Troubleshooting](#43-troubleshooting)
+44. [Profissão + Pagamento Configurável](#44-profissão--pagamento-configurável-v820--26032026)
+45. [Pendências + Notificações Realtime](#45-pendências--notificações-realtime-v830--30032026)
+46. [Mapa Interativo + Filtro por Cidade](#46-mapa-interativo--filtro-por-cidade-v840--30032026)
+47. [Cobranças Automáticas EFI cobv](#47-cobranças-automáticas-efi-cobv-v850--31032026)
+48. [Comprovantes de Pagamento](#48-comprovantes-de-pagamento-v850--31032026)
+49. [Configurações do Sistema](#49-configurações-do-sistema-v850--31032026)
 
 ---
 
@@ -3460,3 +3488,1460 @@ Fluxo:
 ```
 
 ---
+
+## Parte II — Deploy, Integrações & Operações
+
+---
+
+## 27. Pré-requisitos de Deploy
+
+- **Supabase CLI** instalado: `npm install -g supabase`
+- **Login** no Supabase: `supabase login`
+- **Projeto vinculado**: `supabase link --project-ref ctvihcpojodsntoelfck`
+- **Node.js** ≥ 18 e **npm** ≥ 9 (para o frontend)
+
+### Verificar conexão
+
+```bash
+supabase projects list
+```
+
+---
+
+## 28. Deploy de Edge Functions
+
+### Deploy de TODAS as funções de uma vez
+
+```bash
+cd /Users/macbook/Desktop/botter/FinanceDigital
+
+# Deploy individual de cada função
+supabase functions deploy efi --no-verify-jwt
+supabase functions deploy webhook-efi --no-verify-jwt
+supabase functions deploy woovi --no-verify-jwt
+supabase functions deploy webhook-woovi --no-verify-jwt
+supabase functions deploy send-whatsapp --no-verify-jwt
+supabase functions deploy webhook-whatsapp --no-verify-jwt
+supabase functions deploy approve-credit --no-verify-jwt
+supabase functions deploy invite-user --no-verify-jwt
+supabase functions deploy delete-user --no-verify-jwt
+supabase functions deploy update-user-role --no-verify-jwt
+supabase functions deploy manage-instance --no-verify-jwt
+supabase functions deploy check-ip --no-verify-jwt
+supabase functions deploy send-verification-link --no-verify-jwt
+supabase functions deploy cron-notificacoes --no-verify-jwt
+```
+
+### Script rápido — deploy de todas
+
+```bash
+for fn in efi webhook-efi woovi webhook-woovi send-whatsapp webhook-whatsapp approve-credit invite-user delete-user update-user-role manage-instance check-ip send-verification-link cron-notificacoes; do
+  echo ">>> Deploying $fn..."
+  supabase functions deploy "$fn" --no-verify-jwt
+done
+```
+
+### Verificar status das funções
+
+```bash
+supabase functions list
+```
+
+---
+
+## 29. EFI Bank (Gerencianet) — Configuração Completa
+
+### 29.1. Criar conta e aplicação na EFI
+
+1. Acesse [https://app.efipay.com.br](https://app.efipay.com.br) e crie uma conta.
+2. No painel, vá em **API → Aplicações → Criar Aplicação**.
+3. Ative os escopos: `cob.read`, `cob.write`, `pix.read`, `pix.write`, `gn.balance.read`.
+4. Anote o **Client ID** e **Client Secret**.
+
+### 29.2. Gerar o certificado .p12
+
+1. No painel EFI, vá em **API → Meus Certificados**.
+2. Selecione a aplicação criada e gere um novo certificado.
+3. Faça download do arquivo `.p12`.
+
+### 29.3. Converter o certificado para base64
+
+**macOS:**
+```bash
+base64 -i caminho/para/certificado.p12
+```
+
+**Linux:**
+```bash
+base64 -w 0 caminho/para/certificado.p12
+```
+
+**Windows (PowerShell):**
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("caminho\para\certificado.p12"))
+```
+
+> Copie a string base64 inteira (sem quebras de linha).
+
+### 29.4. Cadastrar sua Chave PIX na EFI
+
+1. No painel EFI, vá em **Pix → Minhas Chaves**.
+2. Cadastre uma chave (e-mail, CPF, CNPJ, telefone ou aleatória).
+3. Copie a chave cadastrada.
+
+### 29.5. Configurar credenciais no sistema (via UI)
+
+1. Acesse o sistema FinanceDigital como **admin**.
+2. Vá em **Configurações → Comissões**.
+3. Na seção **Gateways de Pagamento**, localize **EFI Bank**.
+4. Clique em **"Configurar Credenciais"**.
+5. Preencha os campos:
+   - **Client ID**: Cole o Client ID da aplicação EFI
+   - **Client Secret**: Cole o Client Secret
+   - **Chave PIX**: Cole a chave Pix cadastrada
+   - **Certificado .p12 (Base64)**: Cole a string base64 do certificado
+   - **Modo Sandbox**: Ative para testes, desative para produção
+6. Clique em **"Salvar Credenciais"**.
+7. Ative o gateway no switch **Ativo/Inativo**.
+
+> As credenciais são salvas na tabela `gateways_pagamento.config` (coluna JSONB).  
+> A Edge Function `efi` lê automaticamente deste campo. Env vars são usadas como fallback.
+
+### 29.6. Configurar credenciais via CLI (alternativo)
+
+Se preferir usar variáveis de ambiente (Supabase Secrets) ao invés da UI:
+
+```bash
+supabase secrets set \
+  EFI_CLIENT_ID="Client_Id_xxxxxxxxxxxxxxx" \
+  EFI_CLIENT_SECRET="Client_Secret_xxxxxxxxxxxxxxx" \
+  EFI_PIX_KEY="sua-chave-pix@email.com" \
+  EFI_CERTIFICATE="MIIE...base64...==" \
+  EFI_SANDBOX="true"
+```
+
+Verificar secrets configurados:
+
+```bash
+supabase secrets list
+```
+
+> **Prioridade**: A UI (config no banco) tem prioridade sobre as env vars.  
+> Se ambos estiverem configurados, os valores da UI são usados.
+
+### 29.7. Deploy da Edge Function EFI
+
+```bash
+supabase functions deploy efi --no-verify-jwt
+supabase functions deploy webhook-efi --no-verify-jwt
+```
+
+### 29.8. Configurar Webhook na EFI
+
+1. No painel EFI, vá em **API → Webhooks**.
+2. Crie um novo webhook com a URL:
+   ```
+   https://ctvihcpojodsntoelfck.supabase.co/functions/v1/webhook-efi
+   ```
+3. Tipo de evento: **Pix** (notificações de recebimento).
+4. O sistema processará automaticamente os pagamentos confirmados.
+
+> **Dica**: Na UI do FinanceDigital, clique em "Copiar URL Webhook" no card do gateway EFI.
+
+### 29.9. Testar a integração
+
+1. Certifique-se de que o **Modo Sandbox** está ativado.
+2. No sistema, crie uma cobrança PIX via EFI (aba de pagamentos ou gestão de parcelas).
+3. Verifique no painel EFI se a cobrança aparece na seção **Pix → Cobranças**.
+4. Os logs podem ser vistos com:
+   ```bash
+   supabase functions logs efi --tail
+   supabase functions logs webhook-efi --tail
+   ```
+
+### 29.10. Colocar em produção
+
+1. No sistema, desative o **Modo Sandbox** nas credenciais do gateway.
+2. Gere um novo certificado de **produção** na EFI (diferente do sandbox).
+3. Atualize o certificado base64 na UI.
+4. Atualize a URL do webhook na EFI para apontar para produção.
+5. Teste com uma cobrança de valor pequeno (R$ 0,01).
+
+---
+
+## 30. Woovi (OpenPix) — Configuração
+
+### 30.1. Variáveis de ambiente
+
+Adicione ao `.env` do frontend:
+
+```env
+VITE_WOOVI_APP_ID=seu_app_id_woovi
+```
+
+### 30.2. Secrets do Supabase (backend)
+
+```bash
+supabase secrets set \
+  WOOVI_API_KEY="sua_chave_api_woovi"
+```
+
+### 30.3. Deploy
+
+```bash
+supabase functions deploy woovi --no-verify-jwt
+supabase functions deploy webhook-woovi --no-verify-jwt
+```
+
+### 30.4. Webhook Woovi
+
+Configure na Woovi (OpenPix):
+```
+https://ctvihcpojodsntoelfck.supabase.co/functions/v1/webhook-woovi
+```
+Evento: **OPENPIX:CHARGE_COMPLETED**
+
+---
+
+## 31. Webhook WhatsApp (Evolution API)
+
+### 31.1. Deploy
+
+```bash
+supabase functions deploy send-whatsapp --no-verify-jwt
+supabase functions deploy webhook-whatsapp --no-verify-jwt
+```
+
+### 31.2. Configurar webhook na Evolution API
+
+URL do webhook:
+```
+https://ctvihcpojodsntoelfck.supabase.co/functions/v1/webhook-whatsapp
+```
+
+A instância Evolution API está em: `finance-digital-evolution.fly.dev`
+
+---
+
+## 32. Migrations (Banco de Dados)
+
+### Listar migrations pendentes
+
+```bash
+supabase db diff
+```
+
+### Aplicar migrations
+
+```bash
+supabase db push
+```
+
+### Migrations existentes (ordem)
+
+| #   | Arquivo                              | Descrição                             |
+| --- | ------------------------------------ | ------------------------------------- |
+| 001 | `001_base_schema.sql`                | Schema base, tabelas fundamentais     |
+| 002 | `002_fix_whatsapp_enums.sql`         | Fix enum WhatsApp                     |
+| 003 | `003_fix_instance_constraints.sql`   | Fix constraints de instância          |
+| 004 | `004_lid_phone_map.sql`              | Mapeamento lid → telefone             |
+| 005 | `005_storage_whatsapp_media.sql`     | Storage para mídia WhatsApp           |
+| 006 | `006_etiquetas_conversa_cliente.sql` | Etiquetas de conversa/cliente         |
+| 007 | `007_profiles_allowed_ips.sql`       | IPs permitidos por perfil             |
+| 008 | `008_woovi_integration.sql`          | Schema integração Woovi/OpenPix       |
+| 009 | `009_chat_interno.sql`               | Chat interno (mensagens entre equipe) |
+| 010 | `010_profiles_select_all_authenticated.sql` | RLS: profiles SELECT para autenticados |
+| 011 | `011_chat_interno_audio_atencao.sql` | Audio + atenção no chat interno       |
+| 012 | `012_identity_verification.sql`      | Verificação de identidade             |
+| 013 | `013_fix_verif_rls_auth_users.sql`   | Fix RLS verificação + auth.users      |
+| 014 | `014_anon_verification_access.sql`   | Acesso anônimo para verificação       |
+| 015 | `015_verification_new_fields.sql`    | Campos adicionais de verificação      |
+| 016 | `016_fix_anon_storage_update.sql`    | Fix storage update anônimo            |
+| 017 | `017_storage_anon_delete_policy.sql` | Policy de delete anônimo no storage   |
+| 018 | `018_fix_storage_insert_policy.sql`  | Fix policy insert no storage          |
+| 019 | `019_allowed_ips_whitelist.sql`      | Tabela allowed_ips + RPC check_ip_allowed |
+| 020 | `020_repair_019_whitelist.sql`       | Reparos na whitelist (INET, RPC)      |
+| 021 | `021_fix_policies_functions.sql`     | Fix geral de policies e funções       |
+| 022 | `022_sessoes_update_policy.sql`      | Policy update para sessões atividade  |
+| 023 | `023_pix_flow_comissoes.sql`         | Fluxo PIX + comissões + gateways      |
+| 024 | `024_gerencia_comissao.sql`          | Comissão de gerência (incremental)    |
+| 025 | `025_approval_flow_notifications.sql`| Fluxo aprovação + parcelas + notificações |
+| 026 | `026_templates_tipo_notificacao.sql` | Vincula templates a automações        |
+| 027 | `027_profissao_pagamento_parcial.sql`| Profissão (clientes/verificação) + obs/conta parcelas |
+
+> **Nota**: Se a migration 023 já foi aplicada, NÃO rode novamente.  
+> Migrations 024-027 são seguras (usam `IF NOT EXISTS` e `ADD COLUMN IF NOT EXISTS`).
+
+---
+
+## 33. Variáveis de Ambiente
+
+### Frontend (`.env`)
+
+```env
+VITE_SUPABASE_URL=https://ctvihcpojodsntoelfck.supabase.co
+VITE_SUPABASE_ANON_KEY=sua_anon_key
+VITE_WOOVI_APP_ID=seu_woovi_app_id
+```
+
+### Supabase Secrets (Edge Functions)
+
+| Secret                     | Descrição                                      | Obrigatório |
+| -------------------------- | ---------------------------------------------- | ----------- |
+| `SUPABASE_URL`             | URL do projeto (auto-configurado)              | Auto        |
+| `SUPABASE_SERVICE_ROLE_KEY`| Service role key (auto-configurado)             | Auto        |
+| `SUPABASE_ANON_KEY`        | Anon key (auto-configurado)                    | Auto        |
+| `EFI_CLIENT_ID`            | Client ID da aplicação EFI¹                    | Opcional²   |
+| `EFI_CLIENT_SECRET`        | Client Secret da aplicação EFI¹                | Opcional²   |
+| `EFI_PIX_KEY`              | Chave Pix cadastrada na EFI¹                   | Opcional²   |
+| `EFI_CERTIFICATE`          | Certificado .p12 em base64¹                    | Opcional²   |
+| `EFI_SANDBOX`              | `"true"` para sandbox¹                         | Opcional²   |
+| `WOOVI_API_KEY`            | API key da Woovi (OpenPix)                     | Sim³        |
+| `EVOLUTION_API_URL`        | URL da instância Evolution API                 | Sim⁴        |
+| `EVOLUTION_API_KEY`        | API key da Evolution API                       | Sim⁴        |
+
+> ¹ Credenciais EFI podem ser configuradas via UI (Comissões → Gateways → Configurar Credenciais).  
+> ² Opcional se configurado via UI; as credenciais salvas na UI têm prioridade.  
+> ³ Necessário se o gateway Woovi estiver ativo.  
+> ⁴ Necessário para envio de mensagens WhatsApp.
+
+### Setar secrets via CLI
+
+```bash
+supabase secrets set CHAVE="valor"
+```
+
+### Listar secrets configurados
+
+```bash
+supabase secrets list
+```
+
+---
+
+## 34. Arquitetura de Edge Functions
+
+### Funções disponíveis
+
+| Função                  | Descrição                                  | JWT  |
+| ----------------------- | ------------------------------------------ | ---- |
+| `efi`                   | API EFI Bank: cobranças, pagamentos, saldo | Sim  |
+| `webhook-efi`           | Webhook recebimento EFI Pix               | Não  |
+| `woovi`                 | API Woovi: cobranças, consultas            | Sim  |
+| `webhook-woovi`         | Webhook pagamento Woovi                    | Não  |
+| `send-whatsapp`         | Envio de mensagens via Evolution API       | Sim  |
+| `webhook-whatsapp`      | Webhook mensagens recebidas                | Não  |
+| `approve-credit`        | Aprovação de crédito + geração de parcelas | Sim  |
+| `invite-user`           | Convite de novos usuários (admin)          | Sim  |
+| `delete-user`           | Remoção de usuários (admin)                | Sim  |
+| `update-user-role`      | Atualização de role (admin)                | Sim  |
+| `manage-instance`       | Gerenciamento instância WhatsApp           | Sim  |
+| `check-ip`              | Validação de IP permitido                  | Sim  |
+| `send-verification-link`| Envio de link para verificação de identidade| Sim  |
+| `cron-notificacoes`     | Notificações automáticas diárias (parcelas)| Não  |
+
+> `--no-verify-jwt` é usado no deploy pois a autenticação é feita internamente pelas funções.
+
+### Fluxo de cobranças EFI
+
+```
+1a. Admin/Operador cria cobrança manual → POST /functions/v1/efi { action: "create_charge" }
+    └─ Edge Function (efi):
+        ├─ Valida JWT + role (admin/gerencia)
+        ├─ Lê credenciais de gateways_pagamento.config (ou env vars)
+        ├─ Chama API EFI: PUT /v2/cob/{txid}
+        ├─ Gera QR Code: GET /v2/loc/{id}/qrcode
+        └─ Salva em woovi_charges (gateway="efi")
+
+1b. Cobrança automática cobv (com vencimento) → cron-notificacoes
+    └─ Edge Function (cron-notificacoes):
+        ├─ Verifica configuracoes_sistema.mensagens_automaticas_ativas
+        ├─ Busca parcelas com vencimento em ±3 dias
+        ├─ Autentica via mTLS direto na API EFI (não usa efi function)
+        ├─ Cria cobrança cobv: PUT /v2/cobv/{txid} (multa 2%, juros 1%/mês)
+        ├─ Gera QR Code: GET /v2/loc/{id}/qrcode
+        ├─ Salva em woovi_charges (gateway="efi_cobv")
+        ├─ Envia texto WhatsApp com pix-copia-e-cola + QR como imagem
+        └─ Registra em notificacoes_log
+
+1c. Operador gera cobv via UI → POST /functions/v1/efi { action: "create_cobv" }
+    └─ Edge Function (efi):
+        ├─ Valida JWT + role
+        ├─ Chama API EFI: PUT /v2/cobv/{txid} (com multa, juros, validadeAposVencimento)
+        ├─ Gera QR Code: GET /v2/loc/{id}/qrcode
+        ├─ Salva em woovi_charges (gateway="efi_cobv")
+        └─ Retorna { success: true, charge: { br_code, qr_code_image }, efi: {...} }
+
+2. Cliente paga o Pix → EFI envia POST /functions/v1/webhook-efi
+   └─ Edge Function (webhook-efi):
+       ├─ Processa payload { pix: [...] }
+       ├─ Busca cobrança por txid em woovi_charges
+       ├─ Atualiza woovi_charges → status="COMPLETED"
+       ├─ Insere woovi_transactions
+       ├─ Atualiza parcela vinculada → status="paga"
+       └─ Processa splits (comissões venda/cobrança/gerência)
+
+3. Trigger DB: após parcela paga → calcula comissões automaticamente
+   └─ Insere em comissoes_liquidacoes (venda, cobrança, gerência)
+```
+
+### Fluxo de desembolso PIX (approve-credit)
+
+```
+1. Analista aprova crédito → approve-credit edge function
+   └─ Desembolso PIX:
+       ├─ Autentica via mTLS direto na API EFI
+       ├─ Envia PIX: PUT /v2/gn/pix/{idEnvio}
+       │   ├─ Chave PIX do cliente (cpf/cnpj/email/telefone)
+       │   ├─ Valor aprovado
+       │   └─ Retorna e2eId (não endToEndId)
+       ├─ Espera 5s → verifica status: GET /v2/gn/pix/enviados/id-envio/{idEnvio}
+       └─ Envia WhatsApp com comprovante (e2eId, valor, data)
+```
+
+---
+
+## 35. Fluxo de Aprovação de Crédito
+
+### 35.1. Visão geral
+
+O fluxo completo de aprovação gera empréstimo, parcelas, desembolsa via PIX e notifica o cliente:
+
+```
+1. Operador cria análise de crédito (AnaliseCreditoPage)
+   └─ Define: valor, nº parcelas, periodicidade, dia de pagamento
+
+2. Analista aprova (AnaliseDetalhadaModal → "Aprovar")
+   └─ Chama edge function: approve-credit
+       ├─ Cria empréstimo na tabela emprestimos
+       ├─ Gera N parcelas com datas corretas (semanal/quinzenal/mensal)
+       ├─ Calcula valor da parcela (Tabela Price com juros compostos)
+       ├─ Gateway EFI: desembolsa PIX via PUT /v2/gn/pix/{idEnvio} (mTLS)
+       │   ├─ Usa chave PIX do CNPJ cadastrada na tabela clientes
+       │   ├─ Verifica status após 5s via GET /v2/gn/pix/enviados/id-envio/{idEnvio}
+       │   └─ Mapeia campo e2eId (não endToEndId) da resposta EFI
+       ├─ Gateway Woovi: cria cobrança PIX (se configurado)
+       ├─ Busca template "aprovacao" do banco (com gênero Sr./Sra.)
+       ├─ Envia WhatsApp de aprovação ao cliente
+       │   ├─ Template usa {valorNum} (sem prefixo "R$") para evitar duplicação
+       │   └─ Comprovante PIX (e2eId, idEnvio, valor, data) SEMPRE anexado
+       └─ Atualiza análise para status "aprovado" com data_resultado
+
+3. Parcelas aparecem automaticamente em:
+   ├─ EmprestimosAtivosPage (lista + modal de gestão + geração PIX cobv)
+   ├─ GestaoParcelasPage (operações em lote + PIX cobv + comprovantes)
+   ├─ KanbanCobrancaPage (parcelas vencidas + comprovante obrigatório)
+   └─ DashboardFinanceiroPage (métricas)
+```
+
+### 35.2. Variáveis de template (approve-credit)
+
+| Variável         | Descrição                                    | Exemplo              |
+| ---------------- | -------------------------------------------- | -------------------- |
+| `{nome}`         | Nome do cliente                              | João Silva           |
+| `{valor}`        | Valor com "R$" (formatado)                   | R$ 1.500,00          |
+| `{valorNum}`     | Valor numérico sem "R$"                      | 1.500,00             |
+| `{valorFmt}`     | Alias de `{valor}`                           | R$ 1.500,00          |
+| `{parcelas}`     | Resumo de parcelas                           | 12x de R$ 150,00     |
+| `{parcelaNum}`   | Número de parcelas (inteiro)                 | 12                   |
+| `{parcelaFmt}`   | Parcela formatada com "R$"                   | R$ 150,00            |
+
+### 35.3. Campos de análise adicionais (migration 025)
+
+| Campo              | Tipo     | Descrição                                    |
+| ------------------ | -------- | -------------------------------------------- |
+| `numero_parcelas`  | INTEGER  | Quantidade de parcelas definida pelo analista |
+| `periodicidade`    | TEXT     | `semanal`, `quinzenal` ou `mensal`           |
+| `dia_pagamento`    | INTEGER  | Dia da semana (0-6) ou dia do mês (1-28)    |
+| `data_resultado`   | DATE     | Data de aprovação ou recusa                  |
+
+### 35.3. Geração de parcelas
+
+- **Mensal**: Parcela no dia `dia_pagamento` de cada mês
+- **Semanal**: Parcela no dia da semana `dia_pagamento` (0=domingo)
+- **Quinzenal**: Parcela a cada 14 dias a partir da data base
+- Valor calculado via **Tabela Price**: `PMT = PV × [i(1+i)^n] / [(1+i)^n - 1]`
+
+### 35.4. Sincronização automática
+
+Ao registrar pagamento de uma parcela individual:
+- `parcelas.status` → `'paga'`
+- `emprestimos.parcelas_pagas` → recontado automaticamente via `syncEmprestimoStatus()`
+- `emprestimos.proximo_vencimento` → atualizado para próxima pendente
+- Recalcula status 3-way: todas pagas → `'quitado'`, alguma vencida → `'inadimplente'`, caso contrário → `'ativo'`
+
+---
+
+## 36. Notificações Automatizadas (Cron)
+
+### 36.1. Configuração do pg_cron
+
+O cron roda diariamente às 12:00 UTC via `pg_cron` + `pg_net`:
+
+```sql
+-- Ativar extensões (via Dashboard → Database → Extensions)
+-- pg_cron (schema: pg_catalog)
+-- pg_net (schema: extensions)
+
+-- Agendar execução diária
+SELECT cron.schedule(
+  'notificacoes-diarias',
+  '0 12 * * *',
+  $$
+  SELECT net.http_post(
+    url := 'https://ctvihcpojodsntoelfck.supabase.co/functions/v1/cron-notificacoes',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key'),
+      'Content-Type', 'application/json'
+    ),
+    body := '{}'::jsonb
+  );
+  $$
+);
+```
+
+### 36.2. Verificação de configuração
+
+Antes de processar qualquer notificação, o cron consulta a tabela `configuracoes_sistema`:
+
+```sql
+SELECT valor FROM configuracoes_sistema WHERE chave = 'mensagens_automaticas_ativas';
+```
+
+Se `valor = false`, retorna imediatamente sem processar. Isso permite desabilitar todas as mensagens via a página **Configurações → Sistema**.
+
+### 36.3. Tipos de notificação
+
+| Tipo               | Quando                       | Descrição                          | Cria cobv EFI? |
+| ------------------ | ---------------------------- | ---------------------------------- | -------------- |
+| `lembrete_3dias`   | 3 dias antes do vencimento   | Lembrete amigável + PIX            | ✅ Sim         |
+| `lembrete_vespera` | 1 dia antes do vencimento    | Alerta de véspera + PIX            | ✅ Sim         |
+| `vencida_ontem`    | 1 dia após o vencimento      | Cobrança de parcela vencida + PIX  | ✅ Sim         |
+| `vencida_3dias`    | 3 dias de atraso             | Cobrança com dados do empréstimo   | ✅ Sim         |
+| `vencida_7dias`    | 7+ dias de atraso            | Cobrança intensificada             | Reutiliza      |
+| `aprovacao`        | Ao aprovar crédito           | Mensagem de boas-vindas            | —              |
+
+> Cobranças cobv criadas automaticamente são salvas em `woovi_charges`. Notificações subsequentes (7+ dias) reutilizam a cobrança existente via `woovi_charge_id`.
+
+### 36.4. Integração EFI cobv (mTLS direto)
+
+O cron autentica diretamente na API EFI via mTLS (não usa a edge function `efi`):
+
+```
+1. Lê credenciais de gateways_pagamento (config JSONB)
+2. Decodifica certificado .p12 base64 → PEM (cert + key)
+3. Cria httpClient com mTLS: Deno.createHttpClient({ cert, key })
+4. Obtém token OAuth2: POST https://pix.api.efipay.com.br/oauth/token
+5. Para cada parcela elegível:
+   ├─ Verifica se já existe cobrança (busca em woovi_charges por parcela_id)
+   ├─ Se não existe: PUT /v2/cobv/{txid} (cria cobrança com vencimento)
+   │   ├─ multa: { modalidade: 2, valorPerc: "2.00" }
+   │   ├─ juros: { modalidade: 2, valorPerc: "1.00" }
+   │   └─ validadeAposVencimento: 30
+   ├─ Gera QR Code: GET /v2/loc/{id}/qrcode
+   │   └─ Retorna: { imagemQrcode: "data:image/png;base64,...", qrcode: "0002..." }
+   └─ Salva em woovi_charges (br_code, qr_code_image, gateway="efi_cobv")
+```
+
+### 36.5. Envio de mensagens WhatsApp
+
+As mensagens são enviadas em duas partes:
+
+1. **Texto** — Template personalizado com variáveis + pix-copia-e-cola em texto
+2. **Imagem** — QR Code via `sendMedia` (Evolution API) com `tipo: 'image'` + `media_base64`
+
+```
+Envio texto: POST {evolution_url}/message/sendText/{instance}
+Envio QR:   POST {evolution_url}/message/sendMedia/{instance}
+  body: { number, media: base64_qrcode, mediatype: "image", caption: "QR Code PIX" }
+```
+
+### 36.6. Anti-duplicação
+
+A tabela `notificacoes_log` registra cada envio. Antes de enviar, o cron verifica se já existe registro `(parcela_id, tipo)` com status `'enviado'` no dia atual.
+
+### 36.7. Instância WhatsApp do sistema
+
+A detecção de instância WhatsApp segue esta ordem:
+
+1. Busca **todas** as instâncias de `whatsapp_instancias`
+2. Prioriza instância com `is_system = true` e status conectado
+3. Fallback: qualquer instância com status conectado
+4. Comparação de status **case-insensitive**: aceita `connected`, `Connected`, `open`, `Open`, `conectado`, `conectada`
+
+```sql
+-- Marcar instância como sistema
+UPDATE whatsapp_instancias SET is_system = true WHERE instance_name = 'sua-instancia';
+```
+
+> Apenas uma instância pode ser `is_system = true` (unique partial index).
+
+### 36.8. Personalização por gênero
+
+As mensagens automáticas usam o campo `clientes.sexo` para selecionar a versão correta do template:
+- `sexo = 'masculino'` → usa `mensagem_masculino` (Sr.)
+- `sexo = 'feminino'` → usa `mensagem_feminino` (Sra.)
+
+---
+
+## 37. Templates de Mensagens
+
+### 37.1. Visão geral
+
+Templates editáveis via UI em **Chat → Templates**. Cada template possui:
+- Versão masculina e feminina (Sr. / Sra.)
+- Variáveis dinâmicas: `{nome}`, `{valor}`, `{data}`, `{numeroParcela}`, `{diasAtraso}`, `{desconto}`, `{pixCopiaCola}`
+- Categoria: `cobranca`, `boas_vindas`, `lembrete`, `negociacao`
+- Vínculo opcional com automação (`tipo_notificacao`)
+
+### 37.2. Vincular template a automação
+
+Na UI de edição do template, selecione o campo **"Notificação Automática"**:
+
+| Opção                          | Efeito                                                    |
+| ------------------------------ | --------------------------------------------------------- |
+| Nenhum (manual)                | Template só é usado manualmente                           |
+| Lembrete — 3 dias antes        | Substitui mensagem hardcoded do cron (3 dias)             |
+| Lembrete — véspera             | Substitui mensagem hardcoded do cron (amanhã)             |
+| Parcela vencida ontem          | Substitui mensagem hardcoded do cron (vencida)            |
+| Cobrança — 3 dias de atraso    | Ativa notificação automática após 3 dias de atraso        |
+| Cobrança — 7 dias de atraso    | Ativa notificação automática após 7 dias de atraso        |
+| Cobrança — 15 dias de atraso   | Ativa notificação automática após 15 dias de atraso       |
+| Cobrança — 30 dias de atraso   | Ativa notificação automática após 30 dias de atraso       |
+| Aprovação de crédito           | Substitui mensagem hardcoded do approve-credit            |
+
+> **Restrição**: Apenas 1 template ativo por tipo de automação (unique index).
+
+### 37.3. Variáveis disponíveis por contexto
+
+| Variável          | Cron (lembretes) | Cron (atraso) | Aprovação | Descrição                    |
+| ----------------- | ---------------- | ------------- | --------- | ---------------------------- |
+| `{nome}`          | ✅               | ✅            | ✅        | Nome do cliente              |
+| `{valor}`         | ✅               | ✅            | ✅        | Valor monetário (R$)         |
+| `{valorNum}`      | —                | —             | ✅        | Valor numérico sem "R$"      |
+| `{valorFmt}`      | —                | —             | ✅        | Alias de `{valor}`           |
+| `{data}`          | ✅               | ✅            | ✅        | Data de vencimento           |
+| `{numeroParcela}` | ✅               | ✅            | —         | Número da parcela            |
+| `{totalParcelas}` | —                | ✅            | ✅        | Total de parcelas            |
+| `{parcelasPagas}` | —                | ✅            | —         | Parcelas já pagas            |
+| `{parcelaNum}`    | —                | —             | ✅        | Nº de parcelas (inteiro)     |
+| `{parcelaFmt}`    | —                | —             | ✅        | Parcela formatada com "R$"   |
+| `{diasAtraso}`    | —                | ✅            | —         | Dias em atraso               |
+| `{parcelas}`      | —                | —             | ✅        | Resumo (ex: 12x de R$)      |
+| `{pixCopiaCola}`  | ✅               | ✅            | —         | Código Pix copia-e-cola      |
+| `{vencimento}`    | ✅               | ✅            | —         | Data de vencimento (DD/MM)   |
+| `{parcela}`       | ✅               | ✅            | —         | "X/Y" (ex: 3/12)            |
+| `{total}`         | ✅               | ✅            | —         | Total de parcelas (inteiro)  |
+| `{desconto}`      | —                | —             | —         | Percentual de desconto¹      |
+
+> ¹ Disponível para templates manuais (negociação/cobrança avançada).  
+> A coluna **Cron (atraso)** se aplica aos tiers `vencida_3dias`, `vencida_7dias`.  
+> **Importante**: templates de aprovação devem usar `{valorNum}` (não `{valor}`) para evitar duplicação "R$ R$ X,XX" quando o template já contém "R$".
+
+### 37.4. Tabela templates_whatsapp (migration 026)
+
+```sql
+templates_whatsapp
+├── id                  UUID PK
+├── nome                TEXT NOT NULL
+├── categoria           template_categoria (enum)
+├── mensagem_masculino  TEXT NOT NULL
+├── mensagem_feminino   TEXT NOT NULL
+├── variaveis           TEXT[] DEFAULT '{}'
+├── ativo               BOOLEAN DEFAULT true
+├── tipo_notificacao    TEXT (nullable, unique quando ativo)
+├── created_at          TIMESTAMPTZ
+└── updated_at          TIMESTAMPTZ
+```
+
+---
+
+## 38. IP Whitelist & Segurança
+
+### 38.1. Visão geral
+
+O sistema possui **dois níveis** de restrição de IP, que funcionam em camadas:
+
+| Nível | Onde | Efeito |
+|-------|------|--------|
+| **Global** | Tabela `allowed_ips` | Se houver IPs ativos, **todos os usuários** devem vir de um IP da lista |
+| **Por usuário** | Coluna `profiles.allowed_ips` | Se o array não for NULL/vazio, **aquele usuário** só acessa dos IPs listados |
+
+> Ambos os níveis são verificados em sequência. Se o nível global bloquear, o nível por usuário nem é consultado.
+
+### 38.2. Quando a verificação acontece
+
+| Momento | Descrição |
+|---------|-----------|
+| **Login** | IP verificado ao autenticar com email/senha |
+| **Restauração de sessão** | IP verificado ao reabrir o navegador / recarregar a página |
+| **A cada 5 minutos** | Re-verificação periódica durante uso ativo da aplicação |
+| **Startup do Electron** | Verificação no início da aplicação desktop |
+
+Se o IP for bloqueado em qualquer momento, o usuário é deslogado e redirecionado ao login com a mensagem de erro.
+
+### 38.3. Tabela allowed_ips (whitelist global)
+
+```sql
+allowed_ips
+├── id          UUID PK
+├── ip_address  INET NOT NULL          -- Ex: '138.118.29.138'
+├── label       TEXT                    -- Descrição (ex: "Escritório SP")
+├── added_by    UUID → profiles(id)    -- Quem adicionou
+├── active      BOOLEAN DEFAULT TRUE
+├── created_at  TIMESTAMPTZ
+└── updated_at  TIMESTAMPTZ
+```
+
+**RPC de validação** (`check_ip_allowed`):
+```sql
+SELECT check_ip_allowed('138.118.29.138'::inet);  -- true ou false
+```
+
+### 38.4. Coluna profiles.allowed_ips (per-user)
+
+```sql
+profiles.allowed_ips  TEXT[]  DEFAULT NULL
+-- NULL = sem restrição individual
+-- Ex: ARRAY['138.118.29.138', '200.100.50.25']
+```
+
+Configurável pelo admin em **Configurações → Minha Conta** ou diretamente na tabela `profiles`.
+
+### 38.5. Cenários de uso
+
+| Global table | Profile column | Resultado |
+|---|---|---|
+| Vazia | NULL | Qualquer IP acessa |
+| Vazia | `{1.2.3.4}` | Aquele usuário só do IP 1.2.3.4 |
+| Has `5.6.7.8` | NULL | Todos devem usar 5.6.7.8 |
+| Has `5.6.7.8` | `{1.2.3.4}` | Bloqueado — passa global mas falha no perfil |
+
+### 38.6. UI de gerenciamento
+
+- **Configurações → IP Whitelist** (`/configuracoes/ip-whitelist`): Gerencia a tabela global `allowed_ips`
+- **Configurações → Minha Conta** (`/configuracoes/conta`): Configura `profiles.allowed_ips` individual
+- **Token de Emergência** (`/emergency`): Permite registrar IP via token (caso se bloqueie acidentalmente)
+
+### 38.7. Edge Function check-ip
+
+A função `check-ip` pode ser chamada diretamente para validação:
+
+```bash
+# Verificar se o IP do chamador é permitido
+curl -X POST "https://ctvihcpojodsntoelfck.supabase.co/functions/v1/check-ip" \
+  -H "Authorization: Bearer ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# Verificar um IP específico
+curl -X POST "https://ctvihcpojodsntoelfck.supabase.co/functions/v1/check-ip" \
+  -H "Authorization: Bearer ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"ip": "138.118.29.138"}'
+
+# Resgatar token de emergência
+curl -X POST "https://ctvihcpojodsntoelfck.supabase.co/functions/v1/check-ip/redeem" \
+  -H "Authorization: Bearer ANON_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"token": "abc123", "label": "Notebook Admin"}'
+```
+
+### 38.8. Middleware (Vercel)
+
+O middleware (`middleware.ts`) protege apenas as rotas `/download` com verificação de IP, exibindo 404 para IPs não autorizados. Rotas da aplicação são protegidas pelo AuthContext.
+
+---
+
+## 39. Pagamentos Pix (Woovi)
+
+### 39.1. Visão geral
+
+A página **Pagamentos → Pagamentos Pix** (`/pagamentos`) centraliza toda a gestão de pagamentos via Woovi (OpenPix):
+
+- **Saldo da conta** com atualização em tempo real
+- **Cobranças PIX** — criação, consulta, status (pendente/completa/expirada)
+- **Transações** — histórico completo com filtros
+- **Subcontas** — gestão de subcontas Woovi
+
+### 39.2. Fluxo de cobrança
+
+```
+1. Operador cria cobrança → POST /functions/v1/woovi { action: "create_charge" }
+2. QR Code gerado → exibido ao cliente
+3. Cliente paga → Woovi notifica webhook → POST /functions/v1/webhook-woovi
+4. Webhook processa → atualiza status da cobrança e parcela vinculada
+5. Comissões calculadas automaticamente via trigger
+```
+
+### 39.3. Tabelas envolvidas
+
+- `woovi_charges` — Cobranças (correlationID, valor, status, QR code)
+- `woovi_transactions` — Transações confirmadas
+- `woovi_subaccounts` — Subcontas
+- `gateways_pagamento` — Configurações do gateway (config JSONB)
+
+---
+
+## 40. Gestão de Parcelas
+
+### 40.1. Visão geral
+
+A página **Clientes → Gestão de Parcelas** (`/clientes/parcelas`) exibe parcelas agrupadas por **Cliente → Empréstimo → Parcelas**, com:
+
+- **Hierarquia accordion** — expande/colapsa por cliente e empréstimo
+- **Filtros duplos** — por status do empréstimo (ativo/quitado/inadimplente) e status da parcela (pendente/paga/vencida)
+- **Barra de progresso** por empréstimo — mostra parcelas pagas vs total
+- **Seleção em lote** com operações batch:
+  - Quitar parcelas selecionadas
+  - Editar série (data/valor)
+  - Excluir parcelas (apenas admin)
+
+### 40.2. Ações por parcela
+
+Cada parcela pendente/vencida possui 3 botões de ação:
+
+| Botão                | Cor    | Função                                                           |
+| -------------------- | ------ | ---------------------------------------------------------------- |
+| QrCode               | Roxo   | Gera cobrança cobv EFI + envia QR e PIX copia-e-cola via WhatsApp |
+| CheckCircle (Pagar)  | Verde  | Abre modal de confirmação de pagamento manual com upload de comprovante |
+| Pencil (Editar)      | Azul   | Edita juros/multa inline                                         |
+
+Para parcelas já pagas:
+| Botão    | Cor  | Função                               |
+| -------- | ---- | ------------------------------------ |
+| Image    | Azul | Visualiza comprovante de pagamento   |
+
+### 40.3. Geração de PIX cobv (EmprestimosAtivosPage + GestaoParcelasPage)
+
+Ao clicar no botão QR Code de uma parcela:
+
+```
+1. Chama edge function efi: { action: "create_cobv", ... }
+   ├─ txid: gerado automaticamente
+   ├─ valor: parcela.valor (corrigido com juros/multa)
+   ├─ cpf/nome: do cliente
+   ├─ dataVencimento: da parcela
+   └─ multa 2%, juros 1%/mês, validadeAposVencimento 30
+
+2. Retorna: { success: true, charge: { br_code, qr_code_image }, efi: {...} }
+
+3. Mostra dialog com:
+   ├─ QR Code como <img> (base64 de qr_code_image)
+   ├─ Campo de texto com PIX copia-e-cola (br_code) + botão "Copiar"
+   └─ Input readOnly com seleção completa ao clicar
+
+4. Envia via WhatsApp (se instância conectada):
+   ├─ Mensagem texto: "PIX gerado para parcela X/Y..."
+   └─ Mensagem imagem: QR Code via sendMedia (base64)
+```
+
+### 40.4. Comprovantes de pagamento
+
+O sistema exige upload de comprovante para confirmações manuais de pagamento:
+
+1. **Upload**: Operador seleciona imagem na modal "Confirmar Pagamento"
+2. **Storage**: Imagem salva no bucket `comprovantes` do Supabase Storage
+3. **Vinculação**: URL pública salva em `parcelas.comprovante_url`
+4. **Metadados**: `pagamento_tipo: 'manual'`, `confirmado_por` (UUID do operador), `confirmado_em` (timestamp)
+5. **Visualização**: Botão Image (azul) em parcelas pagas → modal com imagem + link "Abrir em nova aba"
+
+> Comprovantes são visíveis para roles `admin` e `gerencia`.
+
+### 40.5. Sincronização de status
+
+Ao registrar pagamento de uma parcela, o sistema automaticamente:
+
+1. Marca `parcelas.status` → `'paga'`
+2. Reconta `emprestimos.parcelas_pagas` (query real, não incremento)
+3. Atualiza `emprestimos.proximo_vencimento` → próxima parcela pendente
+4. Recalcula `emprestimos.status` com lógica 3-way:
+   - Todas pagas → `'quitado'`
+   - Alguma vencida → `'inadimplente'`
+   - Caso contrário → `'ativo'`
+
+> A função `syncEmprestimoStatus()` garante consistência mesmo após operações em lote. Operações batch são executadas **sequencialmente** (não em paralelo) para evitar race conditions no contador.
+
+### 40.6. SQL para recontabilizar dados legados
+
+Se houver empréstimos com `parcelas_pagas` incorreto:
+
+```sql
+WITH stats AS (
+  SELECT emprestimo_id,
+         COUNT(*) FILTER (WHERE status = 'paga') AS pagas,
+         COUNT(*) AS total,
+         COUNT(*) FILTER (WHERE status = 'vencida') AS vencidas,
+         MIN(data_vencimento) FILTER (WHERE status IN ('pendente','vencida')) AS prox_venc
+  FROM parcelas GROUP BY emprestimo_id
+)
+UPDATE emprestimos e SET
+  parcelas_pagas = s.pagas,
+  proximo_vencimento = COALESCE(s.prox_venc, e.proximo_vencimento),
+  status = CASE
+    WHEN s.pagas >= s.total THEN 'quitado'
+    WHEN s.vencidas > 0 THEN 'inadimplente'
+    ELSE 'ativo'
+  END
+FROM stats s WHERE e.id = s.emprestimo_id;
+```
+
+---
+
+## 41. Arquitetura Frontend
+
+### 41.1. Stack
+
+- **React 18.3** + **React Router 7.13** (SPA)
+- **Tailwind CSS 4.1** + **Radix UI** + **Material-UI 7.3** 
+- **React Query 5.90** (cache + sync)
+- **Vite 6.3** (build)
+- **Supabase JS 2.97** (auth + realtime + storage)
+
+### 41.2. Estrutura de diretórios
+
+```
+src/app/
+├── components/     → UI reutilizável (MainLayout, charts, figma, ui/)
+├── contexts/       → AuthContext, ThemeContext
+├── hooks/          → 23 custom hooks (useClientes, useEmprestimos, etc.)
+├── lib/            → supabase.ts, adapters, types
+├── pages/          → 40 páginas
+└── services/       → 19 serviços de negócio
+```
+
+### 41.3. RBAC (Role-Based Access Control)
+
+4 roles: `admin`, `gerencia`, `cobranca`, `comercial`
+
+Cada item do sidebar é filtrado pela role do usuário logado. Páginas inacessíveis não aparecem na navegação.
+
+### 41.4. Rotas principais
+
+| Seção | Rotas | Roles |
+|-------|-------|-------|
+| **Dashboard** | `/dashboard`, `/dashboard/financeiro`, `/dashboard/cobranca`, `/dashboard/comercial` | admin, gerencia |
+| **Clientes** | `/clientes`, `/clientes/analise`, `/clientes/emprestimos`, `/clientes/parcelas`, `/clientes/historico` | admin, gerencia, comercial |
+| **Pagamentos** | `/pagamentos` | admin, gerencia |
+| **Rede** | `/rede`, `/rede/bonus`, `/rede/bloqueados`, `/rede/indicar` | admin, gerencia, comercial |
+| **Comunicação** | `/whatsapp`, `/chat/fluxos`, `/chat/templates` | admin, gerencia, cobranca |
+| **Kanban** | `/kanban/cobranca`, `/kanban/analise`, `/kanban/atendimento`, `/kanban/gerencial` | admin, gerencia, cobranca |
+| **Relatórios** | `/relatorios/gerenciais`, `/relatorios/operacionais`, `/relatorios/comissoes`, `/relatorios/exportar` | admin, gerencia |
+| **Configurações** | `/configuracoes/perfis`, `/configuracoes/usuarios`, `/configuracoes/integracoes`, `/configuracoes/comissoes`, `/configuracoes/ip-whitelist`, `/configuracoes/conta`, `/configuracoes/sistema` | admin |
+| **Equipe** | `/equipe/monitoramento`, `/equipe/produtividade` | admin, gerencia |
+
+### 41.5. Deploy Frontend
+
+```bash
+# Build de produção
+npm run build
+
+# Deploy via Vercel
+vercel --prod
+```
+
+---
+
+## 42. Aplicativo Desktop (Electron)
+
+### 42.1. Visão geral
+
+O FinanceDigital possui um aplicativo desktop via **Electron 35**, com builds para:
+- **macOS** (DMG)
+- **Windows** (EXE/NSIS)
+- **Linux** (AppImage)
+
+### 42.2. Funcionalidades exclusivas desktop
+
+- **IP Guard**: Verifica IP na inicialização antes de carregar o app
+- **Machine ID**: Identifica a máquina para sessões de uso
+- **Auto-update**: Verificação automática de atualizações
+
+### 42.3. Comandos
+
+```bash
+# Desenvolvimento
+npm run electron:dev
+
+# Build de produção (todas as plataformas)
+npm run electron:build
+
+# Build específico por plataforma
+npx electron-builder --mac
+npx electron-builder --win
+npx electron-builder --linux
+```
+
+### 42.4. Download
+
+Página de download disponível em `/download` (pública, sem autenticação).
+
+---
+
+## 43. Troubleshooting
+
+### Erro: "EFI_CLIENT_ID e EFI_CLIENT_SECRET não configurados"
+
+**Causa:** As credenciais da EFI não foram inseridas.  
+**Solução:** Vá em Configurações → Comissões → Gateways → Configurar Credenciais e preencha todos os campos.
+
+### Erro: "Gateway EFI Bank não está ativo"
+
+**Causa:** O switch do gateway está desligado.  
+**Solução:** Ative o gateway na página de Comissões → Gateways.
+
+### Erro: "EFI Auth error: 401"
+
+**Causa:** Client ID ou Client Secret inválidos.  
+**Solução:** Verifique se as credenciais estão corretas. Para sandbox, use credenciais de sandbox.
+
+### Erro: "Chave PIX não configurada"
+
+**Causa:** O campo Chave PIX está vazio.  
+**Solução:** Cadastre uma Chave Pix na EFI e configure no sistema.
+
+### Ver logs das Edge Functions
+
+```bash
+# Logs em tempo real
+supabase functions logs efi --tail
+supabase functions logs webhook-efi --tail
+
+# Últimos 100 logs
+supabase functions logs efi --limit 100
+```
+
+### Redeploy após alteração
+
+```bash
+supabase functions deploy efi --no-verify-jwt
+```
+
+### Verificar se as funções estão no ar
+
+```bash
+supabase functions list
+```
+
+### Testar função localmente
+
+```bash
+supabase functions serve efi --no-verify-jwt
+```
+
+### WhatsApp de aprovação não foi enviado
+
+**Possíveis causas:**
+1. Nenhuma instância WhatsApp com `is_system = true` e status `conectado/conectada`.
+2. Cliente sem telefone cadastrado.
+3. Evolution API fora do ar (`finance-digital-evolution.fly.dev`).
+
+**Solução:**
+```sql
+-- Verificar instância sistema
+SELECT instance_name, status, is_system FROM whatsapp_instancias WHERE is_system = true;
+
+-- Verificar logs de notificação
+SELECT * FROM notificacoes_log ORDER BY created_at DESC LIMIT 10;
+```
+
+### Cron de notificações não enviou mensagens
+
+**Verificar:**
+```sql
+-- Status do job
+SELECT * FROM cron.job WHERE jobname = 'notificacoes-diarias';
+
+-- Histórico de execuções
+SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 5;
+
+-- Logs da edge function
+supabase functions logs cron-notificacoes --tail
+```
+
+### Parcelas pagas mas empréstimo mostra 0/N
+
+**Causa:** Parcelas foram marcadas como pagas antes da correção do `registrarPagamento`.  
+**Solução:** Recontabilizar manualmente (ver seção 40.3).
+
+---
+
+## Checklist de Deploy Completo
+
+- [ ] Supabase CLI instalado e logado
+- [ ] Projeto vinculado (`supabase link --project-ref ctvihcpojodsntoelfck`)
+- [ ] Todas as migrations aplicadas (`supabase db push`) — incluindo 033 (configuracoes_sistema + comprovantes)
+- [ ] Edge Functions deployadas (14 funções — script de deploy na seção 28)
+- [ ] Credenciais EFI configuradas (UI ou secrets)
+- [ ] Credenciais Woovi configuradas (secrets)
+- [ ] Webhook EFI configurado no painel EFI
+- [ ] Webhook Woovi configurado no painel Woovi
+- [ ] Evolution API configurada e instância WhatsApp conectada
+- [ ] Instância WhatsApp marcada como `is_system = true`
+- [ ] pg_cron + pg_net ativados no Supabase Dashboard
+- [ ] Job `notificacoes-diarias` agendado (`cron.schedule`)
+- [ ] Templates de mensagem configurados (Chat → Templates)
+- [ ] IP Whitelist configurada (se aplicável)
+- [ ] Configurações do sistema habilitadas (Configurações → Sistema)
+- [ ] Bucket `comprovantes` criado no Supabase Storage (público)
+- [ ] Frontend buildado e deployado (`vercel --prod`)
+- [ ] Teste de cobrança Pix em sandbox (cob + cobv)
+- [ ] Teste de webhook recebendo pagamento
+- [ ] Teste de notificação cron (verificar `notificacoes_log`)
+- [ ] Teste de comprovante upload/visualização
+- [ ] Troca para produção (desativar sandbox)
+- [ ] Limite diário EFI adequado para volume esperado
+
+---
+
+## 44. Profissão + Pagamento Configurável (v8.2.0 — 26/03/2026)
+
+### 44.1. Campo Profissão
+
+**Cadastro de clientes** (`ClientesPage.tsx`):
+- Novo campo `profissao` (texto livre) no formulário de criação e edição
+- Placeholder: "Ex: Engenheiro, Médico, Autônomo..."
+- Persistido na coluna `clientes.profissao` (TEXT, nullable)
+
+**Verificação de identidade** (`VerifyIdentityPage.tsx`):
+- Campo "Qual sua profissão?" adicionado ao passo `address_refs`
+- Valor salvo em `identity_verifications.profissao_informada`
+- Obrigatório para avançar — botão "Próximo" desabilitado se vazio
+
+### 44.2. Auto-rejeição por divergência
+
+No `AnaliseDetalhadaModal.tsx`, ao abrir uma análise:
+
+1. Busca profissão do cadastro (`clientes.profissao`) e da verificação (`identity_verifications.profissao_informada`)
+2. Compara com `.trim().toLowerCase()`
+3. Se divergir:
+   - Auto-rejeita `identity_verifications` → `status = 'rejected'`
+   - Auto-rejeita `analises_credito` → `status = 'recusado'`
+   - Cria log com `action = 'profession_mismatch_auto_rejected'`
+   - Toast de erro para o analista
+4. Visual: grid lado-a-lado mostrando "Cadastro" vs. "Verificação" com alerta vermelho
+
+> Usa `useRef(autoRejectedRef)` para prevenir execução duplicada em re-renders.
+
+### 44.3. Modal "Efetuar Pagamento"
+
+Substituiu os botões inline (Quitar/Parcial) no `EmprestimoDetailModal` por um modal dedicado:
+
+| Campo               | Completo | Parcial | Editável |
+|---------------------|----------|---------|----------|
+| Vencimento          | ✓        | ✓       | Não      |
+| Data Pagamento      | ✓        | ✓       | Sim      |
+| Dias de atraso      | ✓        | ✓       | Não (auto) |
+| Valor Parcela       | ✓        | —       | Não      |
+| Valor Corrigido     | ✓        | —       | Não      |
+| Valor Total         | —        | ✓       | Não      |
+| Valor a Pagar       | —        | ✓       | Sim      |
+| Desconto (R$)       | ✓        | ✓       | Sim      |
+| Total a pagar       | ✓        | —       | Não (auto) |
+| Restante            | —        | ✓       | Não (auto) |
+| Observação          | ✓        | ✓       | Sim      |
+| Conta Bancária      | ✓        | ✓       | Sim (dropdown) |
+
+**Lógica de pagamento completo:** chama `registrarPagamento` + persiste desconto/obs/conta via `updateParcela`.  
+**Lógica de pagamento parcial:** valida valor > 0 e < total, calcula restante, atualiza `parcelas.valor` com saldo restante.
+
+Novos campos na tabela `parcelas`: `observacao` (TEXT) e `conta_bancaria` (TEXT).
+
+### 44.4. Segurança — IP Whitelist
+
+- Removida exibição de IPs permitidos nas mensagens de login bloqueado
+- Antes: "IPs permitidos: 201.131.x, 179.129.x, ..."
+- Agora: "Contate o administrador."
+- Impede reconhecimento de IPs autorizados por usuários não-autorizados
+
+### 44.5. Migration 027
+
+```sql
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS profissao TEXT DEFAULT NULL;
+ALTER TABLE identity_verifications ADD COLUMN IF NOT EXISTS profissao_informada TEXT DEFAULT NULL;
+ALTER TABLE parcelas ADD COLUMN IF NOT EXISTS observacao TEXT DEFAULT NULL,
+                      ADD COLUMN IF NOT EXISTS conta_bancaria TEXT DEFAULT NULL;
+```
+
+### 44.6. Arquivos modificados
+
+| Arquivo | Alteração |
+|---------|----------|
+| `supabase/migrations/027_profissao_pagamento_parcial.sql` | Nova migration |
+| `src/app/lib/database.types.ts` | Tipos: profissao, profissao_informada, observacao, conta_bancaria |
+| `src/app/lib/view-types.ts` | Interfaces: Cliente, IdentityVerification, Parcela |
+| `src/app/lib/adapters.ts` | Mapeamentos DB→View para os novos campos |
+| `src/app/pages/ClientesPage.tsx` | Campo profissão no formulário |
+| `src/app/pages/VerifyIdentityPage.tsx` | Campo profissão no passo address_refs |
+| `src/app/components/AnaliseDetalhadaModal.tsx` | Auto-reject + comparativo visual |
+| `src/app/pages/EmprestimosAtivosPage.tsx` | Modal Efetuar Pagamento (Completo/Parcial) |
+| `src/app/contexts/AuthContext.tsx` | Removida exibição de IPs permitidos |
+
+---
+
+## 45. Pendências + Notificações Realtime (v8.3.0 — 30/03/2026)
+
+### 45.1. Sistema de alerta de pendências
+
+RPCs PostgreSQL para verificar pendências de clientes:
+
+```sql
+-- Verificar pendências por CPF (via verificação de identidade)
+SELECT verificar_pendencias_cliente('12345678901');
+
+-- Verificar pendências por ID de cliente
+SELECT verificar_pendencias_cliente_id('uuid-do-cliente');
+```
+
+Ambas retornam: empréstimos em atraso, parcelas vencidas e alertas visuais. São **não-bloqueantes** — apenas informativas.
+
+### 45.2. Notificações Realtime (MainLayout)
+
+Realtime habilitado para `analises_credito`:
+
+```sql
+ALTER PUBLICATION supabase_realtime ADD TABLE analises_credito;
+```
+
+No `MainLayout.tsx`, para roles admin/gerência:
+- **Canal Realtime**: escuta INSERT em `analises_credito`
+- **Som**: toca `alarme.mp3` quando nova análise chega
+- **Toast**: exibe dados da análise (cliente, valor, parcelas)
+- **Modo silencioso**: toggle persistido em `localStorage` (`fd-silencioso`), usa `useRef(silenciosoRef)` para evitar stale closure no callback Realtime
+
+### 45.3. Exclusão de parcelas por role
+
+Botão de deletar parcela em `GestaoParcelasPage` visível apenas para role `admin`.
+
+### 45.4. Endereço detalhado (migration 032)
+
+Novos campos de endereço em `clientes`:
+
+| Campo    | Tipo     | Descrição                    |
+| -------- | -------- | ---------------------------- |
+| `rua`    | TEXT     | Logradouro                   |
+| `numero` | TEXT     | Número do imóvel             |
+| `bairro` | TEXT     | Bairro                       |
+| `cidade` | TEXT     | Cidade (carregada via IBGE)  |
+| `estado` | CHAR(2)  | UF (seleção via dropdown)    |
+| `cep`    | TEXT     | CEP com auto-formatação      |
+
+Formulário usa API IBGE para cidades por UF: `GET https://servicodados.ibge.gov.br/api/v1/localidades/estados/{uf}/municipios`
+
+---
+
+## 46. Mapa Interativo + Filtro por Cidade (v8.4.0 — 30/03/2026)
+
+### 46.1. Componente BrazilMap
+
+O mapa SVG do Brasil (`BrazilMap.tsx`) foi reescrito com:
+
+- **Zoom**: in/out/reset via botões + scroll do mouse
+- **Pan**: arrastar com cursor grab
+- **Indicador**: percentual de zoom exibido
+- **Seleção de estado**: clique no estado → abre painel lateral de cidades
+- **Painel de cidades**: lista com contagem de clientes, busca por texto, opção "Todas as cidades"
+- **Barra de filtro**: exibe filtro ativo (ex: "SP → São Paulo") com botão Limpar
+
+### 46.2. Dados de empréstimo ativo
+
+`clientesService.getClientes()` faz nested select com empréstimos:
+
+```typescript
+.select('*, emprestimos(id, valor, parcelas, parcelas_pagas, proximo_vencimento, status)')
+```
+
+O adapter `dbClienteToView` enriquece `valor`, `vencimento`, `parcelasPagas`, `totalParcelas` com dados do empréstimo ativo (status `ativo` ou `inadimplente`), sobrescrevendo campos estáticos.
+
+### 46.3. Colunas da listagem de clientes
+
+| Coluna           | Dado                       | Sem empréstimo |
+| ---------------- | -------------------------- | -------------- |
+| Empréstimo       | Valor do empréstimo ativo  | —              |
+| Próx. Vencimento | Data de vencimento próxima | —              |
+| Parcelas         | Pagas/Total (ex: 2/6)     | —              |
+
+---
+
+## 47. Cobranças Automáticas EFI cobv (v8.5.0 — 31/03/2026)
+
+### 47.1. Visão geral
+
+O sistema cria cobranças PIX com vencimento (**cobv**) automaticamente via `cron-notificacoes`, enviando QR Code + link PIX copia-e-cola por WhatsApp.
+
+### 47.2. API EFI — Endpoints utilizados
+
+| Endpoint                         | Método | Função                           |
+| -------------------------------- | ------ | -------------------------------- |
+| `/oauth/token`                   | POST   | Autenticação OAuth2 (mTLS)       |
+| `/v2/cobv/{txid}`                | PUT    | Cria cobrança com vencimento     |
+| `/v2/loc/{id}/qrcode`            | GET    | Gera QR Code (base64 + brCode)   |
+| `/v2/gn/pix/{idEnvio}`           | PUT    | Envia PIX (desembolso)           |
+| `/v2/gn/pix/enviados/id-envio/{idEnvio}` | GET | Consulta status do envio  |
+| `/v2/gn/saldo`                   | GET    | Consulta saldo da conta          |
+
+### 47.3. Estrutura da cobrança cobv
+
+```json
+{
+  "calendario": {
+    "dataDeVencimento": "2026-04-15",
+    "validadeAposVencimento": 30
+  },
+  "devedor": {
+    "cpf": "12345678901",
+    "nome": "João Silva"
+  },
+  "valor": {
+    "original": "150.00",
+    "multa": { "modalidade": 2, "valorPerc": "2.00" },
+    "juros": { "modalidade": 2, "valorPerc": "1.00" }
+  },
+  "chave": "efirecebimento@outlook.com",
+  "solicitacaoPagador": "Parcela 3/12 - Empréstimo"
+}
+```
+
+### 47.4. Resposta do QR Code
+
+```json
+{
+  "qrcode": "00020126580014br.gov.bcb.pix...",
+  "imagemQrcode": "data:image/png;base64,iVBORw0KG..."
+}
+```
+
+- `qrcode` → Código PIX copia-e-cola (br_code)
+- `imagemQrcode` → Imagem Base64 para exibir no frontend e enviar via WhatsApp
+
+### 47.5. Geração manual via UI
+
+Nas páginas `EmprestimosAtivosPage` e `GestaoParcelasPage`, cada parcela pendente/vencida tem um botão de geração PIX que:
+
+1. Chama `efi` edge function com `action: "create_cobv"`
+2. Recebe `{ success: true, charge: { br_code, qr_code_image }, efi: {...} }`
+3. Mostra dialog com QR Code (imagem) + campo copiável com PIX copia-e-cola
+4. Envia por WhatsApp: texto com link + QR como imagem separada
+
+### 47.6. Limites diários EFI
+
+| Tipo de conta | Limite diário de envio PIX |
+| ------------- | -------------------------- |
+| Pro           | R$ 0,30/dia (padrão)      |
+| Empresas      | R$ 1,00/dia (padrão)      |
+
+> Solicitar aumento de limite via painel EFI ou contato com suporte. Cobranças (recebimento) não têm limite.
+
+---
+
+## 48. Comprovantes de Pagamento (v8.5.0 — 31/03/2026)
+
+### 48.1. Visão geral
+
+Pagamentos manuais agora **exigem** upload de comprovante (imagem) para confirmação.
+
+### 48.2. Fluxo de upload
+
+```
+1. Operador clica "Confirmar Pagamento" em parcela pendente/vencida
+2. Modal exibe:
+   ├─ Valor e vencimento da parcela
+   ├─ Área de drop/seleção de imagem
+   └─ Preview da imagem selecionada
+3. Ao confirmar:
+   ├─ Upload para Supabase Storage (bucket: comprovantes)
+   ├─ Gera URL pública da imagem
+   ├─ Atualiza parcela:
+   │   ├─ comprovante_url: URL da imagem
+   │   ├─ pagamento_tipo: 'manual'
+   │   ├─ confirmado_por: UUID do operador logado
+   │   └─ confirmado_em: timestamp atual
+   └─ Marca parcela como 'paga'
+```
+
+### 48.3. Visualização
+
+Parcelas pagas com `comprovante_url` exibem botão Image (azul) que abre modal com:
+- Imagem do comprovante em tamanho completo
+- Link "Abrir em nova aba"
+
+> Visível para roles `admin` e `gerencia`.
+
+### 48.4. Kanban de Cobrança
+
+No `KanbanCobrancaPage`:
+- Botão "Quitar" renomeado para **"Confirmar Pag."** — exige comprovante
+- Arrastar parcela para coluna "pago" abre modal de comprovante (não quita automaticamente)
+- Todas as parcelas do empréstimo são marcadas como pagas com `pagamento_tipo: 'manual'`
+
+### 48.5. Migration 033 — Campos adicionados
+
+```sql
+-- Novos campos em parcelas
+ALTER TABLE parcelas ADD COLUMN comprovante_url TEXT DEFAULT NULL;
+ALTER TABLE parcelas ADD COLUMN pagamento_tipo TEXT DEFAULT NULL;  -- 'pix', 'manual', 'boleto'
+ALTER TABLE parcelas ADD COLUMN confirmado_por UUID REFERENCES profiles(id) DEFAULT NULL;
+ALTER TABLE parcelas ADD COLUMN confirmado_em TIMESTAMPTZ DEFAULT NULL;
+ALTER TABLE parcelas ADD COLUMN woovi_charge_id TEXT DEFAULT NULL;
+```
+
+---
+
+## 49. Configurações do Sistema (v8.5.0 — 31/03/2026)
+
+### 49.1. Visão geral
+
+Nova página **Configurações → Sistema** (`/configuracoes/sistema`) permite controlar comportamentos automáticos do sistema.
+
+### 49.2. Tabela configuracoes_sistema
+
+```sql
+CREATE TABLE configuracoes_sistema (
+  chave TEXT PRIMARY KEY,
+  valor JSONB NOT NULL DEFAULT 'true'::jsonb,
+  tipo TEXT DEFAULT 'boolean',
+  descricao TEXT
+);
+```
+
+### 49.3. Configurações disponíveis
+
+| Chave                          | Tipo    | Default | Descrição                                    |
+| ------------------------------ | ------- | ------- | -------------------------------------------- |
+| `mensagens_automaticas_ativas` | boolean | true    | Habilita/desabilita o cron de notificações   |
+| `cobv_auto_ativa`              | boolean | true    | Habilita criação automática de cobranças cobv |
+| `multa_percentual`             | number  | 2.00    | Percentual de multa nas cobranças cobv       |
+| `juros_percentual`             | number  | 1.00    | Percentual de juros/mês nas cobranças cobv   |
+
+### 49.4. RLS (Row Level Security)
+
+```sql
+-- Todos autenticados podem ler
+CREATE POLICY "config_select" ON configuracoes_sistema FOR SELECT TO authenticated USING (true);
+
+-- Apenas admin/gerencia podem atualizar
+CREATE POLICY "config_update" ON configuracoes_sistema FOR UPDATE TO authenticated
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('admin', 'gerencia')));
+```
+
+### 49.5. React Query Hooks
+
+```typescript
+// Leitura
+const { data: config } = useConfigSistema();
+// config = { mensagens_automaticas_ativas: true, cobv_auto_ativa: true, ... }
+
+// Atualização
+const updateConfig = useUpdateConfig();
+updateConfig.mutate({ chave: 'mensagens_automaticas_ativas', valor: false });
+```
+
+### 49.6. UI (ConfigSistemaPage)
+
+A página exibe cards com toggles e inputs:
+- **Mensagens automáticas**: Switch on/off → controla se o cron envia mensagens
+- **Cobranças cobv automáticas**: Switch on/off → controla criação de cobranças EFI
+- **Multa (%)**: Input numérico → percentual aplicado em cobranças cobv
+- **Juros (%/mês)**: Input numérico → percentual de juros mensal
+
+> Acessível apenas para roles `admin` e `gerencia`. Alterações têm efeito imediato (próxima execução do cron).

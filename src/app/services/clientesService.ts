@@ -13,10 +13,13 @@ import type {
 } from '../lib/database.types';
 // ── Queries ────────────────────────────────────────────────
 
-/** Buscar todos os clientes, opcionalmente filtrados por status */
-export async function getClientes(status?: string): Promise<Cliente[]> {
+/** Buscar todos os clientes com empréstimos ativos, opcionalmente filtrados por status */
+export async function getClientes(status?: string) {
 
-  let query = supabase.from('clientes').select('*').order('nome');
+  let query = supabase
+    .from('clientes')
+    .select('*, emprestimos(id, valor, parcelas, parcelas_pagas, proximo_vencimento, status)')
+    .order('nome');
   if (status) query = query.eq('status', status);
 
   const { data, error } = await query;

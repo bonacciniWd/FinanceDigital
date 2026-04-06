@@ -6,6 +6,412 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [8.5.0] — 2026-03-31
+
+### Adicionado — PIX EFI (Cobranças + Desembolso) + Comprovantes + Configurações do Sistema
+
+**Correção do fluxo PIX de desembolso (approve-credit)**
+- Endpoint corrigido de `/v3/gn/pix/` para `/v2/gn/pix/:idEnvio`
+- Removido `pix_key` hardcoded (`analise.cpf`) do frontend — agora usa a chave PIX do CNPJ cadastrada na tabela `clientes`
+- Mapeamento de resposta EFI: campo `e2eId` (não `endToEndId`)
+- Verificação automática de status pós-envio via `GET /v2/gn/pix/enviados/id-envio/:idEnvio` com delay de 5s
+- Logging extensivo em cada etapa do fluxo PIX
+
+**Comprovante PIX no WhatsApp (approve-credit)**
+- Comprovante (e2eId, idEnvio, valor, data/hora) agora é SEMPRE anexado à mensagem — mesmo quando template do banco é usado
+- Variável `{valor}` para templates usa `valorNum` (número sem prefixo "R$") para evitar duplicação "R$ R$ X,XX"
+- Novas variáveis: `{valorNum}`, `{parcelaNum}` (sem formatação), `{valorFmt}`, `{parcelaFmt}` (com formatação)
+
+**Sistema de cobranças automáticas EFI cobv (cron-notificacoes)**
+- Reescrita completa da função `cron-notificacoes` com integração mTLS EFI
+- Cria cobranças `cobv` (com vencimento) via `PUT /v2/cobv/:txid` 3 dias antes do vencimento
+- Suporte a multa (2%) e juros (1%) configuráveis
+- Gera QR Code via `GET /v2/loc/:id/qrcode` (base64 + pix-copia-e-cola)
+- Envia QR Code como imagem via Evolution API `sendMedia` + texto com `{pixCopiaCola}`
+- Reutiliza cobranças existentes (busca por `woovi_charge_id`) para notificações subsequentes
+- Notificações por tier: 3 dias antes, dia do vencimento, 1 dia vencida, 3 dias vencida, 7+ dias vencida
+- Variáveis de template: `{nome}`, `{valor}`, `{vencimento}`, `{parcela}`, `{total}`, `{pixCopiaCola}`
+- Consulta `configuracoes_sistema` antes de processar — se `mensagens_automaticas_ativas` desabilitada, retorna sem processar
+
+**Página de Configurações do Sistema (ConfigSistemaPage)**
+- Nova página `/configuracoes/sistema` acessível para `admin` e `gerencia`
+- Toggle: `mensagens_automaticas_ativas` — ativa/desativa cron-notificacoes e mensagens automáticas
+- Toggle: `cobv_auto_ativa` — ativa/desativa criação automática de cobranças EFI cobv
+- Inputs numéricos: `multa_percentual` e `juros_percentual` — configuração da multa e juros das cobranças
+- Hook `useConfigSistema()` + `useUpdateConfig()` com React Query (invalidação automática)
+
+**Gestão de Parcelas — PIX e comprovantes (GestaoParcelasPage)**
+- Nova coluna "Ações" na tabela de parcelas:
+  - Botão QrCode (roxo): gera cobrança cobv + envia QR e link PIX por WhatsApp
+  - Botão CheckCircle (verde): abre modal para confirmar pagamento manual com upload de comprovante
+  - Botão Image (azul): visualiza comprovante de parcela já paga
+- Modal "Confirmar Pagamento Manual": upload de imagem (comprovante), salva no Supabase Storage bucket `comprovantes`, atualiza parcela com `comprovante_url`, `pagamento_tipo: 'manual'`, `confirmado_por`, `confirmado_em`
+- Modal "Ver Comprovante": exibe imagem do comprovante com link para abrir em nova aba
+
+**Kanban de Cobrança — Comprovantes obrigatórios (KanbanCobrancaPage)**
+- Botão "Quitar" substituído por "Confirmar Pag." — agora EXIGE upload de comprovante
+- Drag de parcela para coluna "pago" agora abre modal de comprovante em vez de quitar automaticamente
+- Modal com upload de imagem, preview, e confirmação
+- Comprovante salvo no Storage + URL vinculada à parcela
+- Todas as parcelas do empréstimo são marcadas como pagas com `pagamento_tipo: 'manual'`
+
+**Migration 033: configuracoes_sistema + comprovantes**
+- Tabela `configuracoes_sistema` com campos `chave` (PK), `valor` (JSONB), `descricao`
+- Seeds: `mensagens_automaticas_ativas`, `cobv_auto_ativa`, `multa_percentual`, `juros_percentual`
+- Novos campos em `parcelas`: `comprovante_url`, `pagamento_tipo` (enum: pix/manual/boleto), `confirmado_por` (FK profiles), `confirmado_em`, `woovi_charge_id`
+- RLS: autenticados podem ler configs; admin/gerencia podem atualizar
+
+### Corrigido
+
+- **Supabase types `never`**: queries e updates em `parcelas` com novas colunas usam cast `as any` para contornar tipagem `never` gerada pelo Supabase CLI (colunas adicionadas via migration ainda não refletidas nos types gerados)
+- **Limite diário EFI**: identificado que contas Efí Pro têm limite de R$0.30/dia para envio PIX — solicitado aumento à EFI
+
+### Pendente / Atenção
+
+- ⚠️ **Retest approve-credit**: após EFI aumentar limite diário, retestar envio PIX de desembolso
+- ⚠️ **Regenerar types Supabase**: executar `npx supabase gen types` para remover casts `as any` após atualizar types
+
+### Arquivos criados/modificados
+
+| Arquivo | Tipo | Alteração |
+|---------|------|-----------|
+| `supabase/functions/approve-credit/index.ts` | Modificado | PIX key fix, e2eId, status check, comprovante WhatsApp, valorNum |
+| `supabase/functions/cron-notificacoes/index.ts` | Reescrito | EFI cobv, QR code, WhatsApp media, config check |
+| `supabase/functions/efi/index.ts` | Modificado | extraHeaders, x-skip-mtls-checking, /v2 endpoint |
+| `supabase/migrations/033_config_sistema_comprovantes.sql` | Novo | configuracoes_sistema + parcelas columns |
+| `src/app/pages/ConfigSistemaPage.tsx` | Novo | Toggles mensagens + cobv, inputs multa/juros |
+| `src/app/pages/GestaoParcelasPage.tsx` | Modificado | Coluna Ações com PIX/comprovante buttons + modais |
+| `src/app/pages/KanbanCobrancaPage.tsx` | Modificado | Quitar→Confirmar Pag., comprovante obrigatório |
+| `src/app/pages/AnaliseDetalhadaModal.tsx` | Modificado | Removido pix_key hardcoded |
+| `src/app/pages/AnaliseCreditoPage.tsx` | Modificado | Removido pix_key hardcoded |
+| `src/app/hooks/useConfigSistema.ts` | Novo | React Query hooks para configuracoes_sistema |
+| `src/app/routes.tsx` | Modificado | Rota /configuracoes/sistema |
+| `src/app/components/MainLayout.tsx` | Modificado | Nav entry Sistema (admin/gerencia) |
+
+---
+
+## [8.4.0] — 2026-03-30
+
+### Adicionado — Mapa Interativo + Filtro por Cidade + Dados Reais de Empréstimo
+
+**Mapa do Brasil com zoom e filtro por cidade (BrazilMap + ClientesPage)**
+- Componente `BrazilMap` reescrito com zoom in/out/reset (botões + scroll do mouse)
+- Pan (arrastar) no mapa com cursor grab, indicador de zoom em %
+- Ao selecionar um estado, painel lateral de cidades aparece ao lado do mapa
+- Lista de cidades com contagem de clientes por cidade
+- Busca/filtro de cidades por texto no painel
+- Opção "Todas as cidades" + destaque visual na cidade selecionada
+- Barra inferior mostra filtro ativo: `SP → São Paulo` com botão Limpar
+- Novo state `mapCityFilter` em ClientesPage com lógica de filtragem `matchesCity`
+- Contagens `citiesInState` e `clientCountByCity` derivadas dos clientes
+
+**Valor e vencimento derivados do empréstimo ativo**
+- `clientesService.getClientes()` agora faz nested select incluindo empréstimos:
+  `select('*, emprestimos(id, valor, parcelas, parcelas_pagas, proximo_vencimento, status)')`
+- Adapter `dbClienteToView` sobrescreve `valor`, `vencimento` com dados do empréstimo
+  ativo (status `ativo` ou `inadimplente`), em vez de usar os campos estáticos da tabela
+- Novo tipo `ClienteComEmprestimos` em `database.types.ts`
+- Novos campos opcionais `parcelasPagas` e `totalParcelas` na interface `Cliente`
+
+**Referência de parcelas na listagem de clientes**
+- Coluna "Valor" renomeada para "Empréstimo" (valor do empréstimo ativo)
+- Coluna "Vencimento" renomeada para "Próx. Vencimento" (próxima data de vencimento)
+- Nova coluna "Parcelas" mostrando `pagas/total` (ex: `2/6`)
+- Clientes sem empréstimo ativo mostram "—" nas três colunas
+- Mesma informação refletida na visualização em cards
+
+### Arquivos modificados
+
+| Arquivo | Alteração |
+|---------|-----------|
+| `src/app/components/BrazilMap.tsx` | Reescrito: zoom/pan, painel de cidades, props `selectedCity`/`onSelectCity`/`citiesInState`/`clientCountByCity` |
+| `src/app/pages/ClientesPage.tsx` | `mapCityFilter`, `citiesInState`, `clientCountByCity`, `matchesCity`, colunas Empréstimo/Próx.Vencimento/Parcelas |
+| `src/app/services/clientesService.ts` | Nested select com empréstimos em `getClientes()` |
+| `src/app/lib/adapters.ts` | `dbClienteToView` enriquece valor/vencimento/parcelas do empréstimo ativo |
+| `src/app/lib/view-types.ts` | `parcelasPagas?`, `totalParcelas?` adicionados à interface `Cliente` |
+| `src/app/lib/database.types.ts` | Novo tipo `ClienteComEmprestimos` |
+
+---
+
+## [8.3.0] — 2026-03-30
+
+### Adicionado — Pendências + Notificações Realtime + Endereço Detalhado
+
+**Sistema de alerta de pendências (migration 031)**
+- RPCs `verificar_pendencias_cliente` e `verificar_pendencias_cliente_id` para verificar
+  pendências (empréstimos em atraso, parcelas vencidas) — alerta visual, não bloqueante
+- Realtime: `ALTER PUBLICATION supabase_realtime ADD TABLE analises_credito`
+- Notificações em tempo real no `MainLayout.tsx` para admin/gerência em novas análises
+- Som `alarme.mp3` + toast com dados da análise
+- Toggle de modo silencioso (ícone Volume2/VolumeX) com persistência `localStorage`
+  (`fd-silencioso`) e `silenciosoRef` (useRef) para evitar stale closure
+
+**Exclusão de parcelas restrita a admin (GestaoParcelasPage)**
+- Botão de deletar parcela visível apenas para role `admin`
+
+**Endereço detalhado de clientes (migration 032)**
+- Novos campos: `rua`, `numero`, `bairro`, `estado` (CHAR 2), `cidade`, `cep`
+- Formulário de criação/edição com IBGE API para carga de cidades por UF
+- Estado via Select, cidade via Combobox (Command + Popover) com busca
+- CEP com auto-formatação `#####-###`
+- Flag `estadoUserChanged` para preservar cidade no modo edição
+- Campos `vencimento` e `limiteCredito` removidos do formulário (pertencem à Análise de Crédito)
+
+**Mapa do Brasil (BrazilMap + ClientesPage)**
+- Componente `BrazilMap.tsx` com SVG `br.svg` inline
+- Mapeamento `SVG_ID_TO_UF` (BRAC→AC, etc.) com click/hover handlers
+- Paleta roxa: selecionado `#6366f1`, com clientes `#818cf8`, vazio `#c4b5fd`, hover `#a855f7`
+- Tooltip com UF e contagem de clientes
+- Integrado ao ClientesPage com toggle (botão MapPin), `mapStateFilter` e `clientCountByState`
+- Filtro por estado na listagem: `matchesState`
+
+### Arquivos criados/modificados
+
+| Arquivo | Tipo |
+|---------|------|
+| `supabase/migrations/031_bloquear_cliente_pendente.sql` | Migration |
+| `supabase/migrations/032_endereco_detalhado_clientes.sql` | Migration |
+| `src/app/assets/sounds/alarme.mp3` | Asset |
+| `src/app/assets/br.svg` | Asset |
+| `src/app/components/BrazilMap.tsx` | Novo componente |
+| `src/app/components/MainLayout.tsx` | Realtime + silent mode |
+| `src/app/pages/GestaoParcelasPage.tsx` | Admin-only delete |
+| `src/app/pages/ClientesPage.tsx` | Endereço + mapa |
+| `src/app/lib/view-types.ts` | Campos de endereço |
+| `src/app/lib/database.types.ts` | Campos de endereço |
+| `src/app/lib/adapters.ts` | Mapeamento de endereço |
+
+---
+
+## [8.2.0] — 2026-03-26
+
+### Adicionado — Profissão + Pagamento Configurável
+
+**Campo Profissão no cadastro de clientes**
+- Novo campo `profissao` na tabela `clientes` (migration 027)
+- Campo adicionado ao formulário de criação/edição em ClientesPage
+- Placeholder com exemplos: "Engenheiro, Médico, Autônomo..."
+
+**Verificação de profissão no link de identidade**
+- VerifyIdentityPage agora coleta profissão no passo `address_refs`
+- Novo campo `profissao_informada` na tabela `identity_verifications`
+- Valor salvo no audit log junto com os demais dados
+
+**Auto-rejeição por divergência de profissão**
+- AnaliseDetalhadaModal compara profissão do cadastro vs. verificação (case-insensitive)
+- Se divergir: auto-rejeita a verificação E a análise de crédito automaticamente
+- Visual: grid comparativo com alerta vermelho na aba Verificação
+- Log com action `profession_mismatch_auto_rejected`
+- Ref `autoRejectedRef` previne execução duplicada
+
+**Modal "Efetuar Pagamento" (EmprestimosAtivosPage)**
+- Substituídos botões inline (Quitar/Parcial) por botão único "Pagar" que abre dialog
+- Abas: **Pagamento Completo** e **Pagamento Parcial**
+- Campos: Vencimento (readonly), Data de pagamento, Dias de atraso (auto-calculado)
+- Valores: Valor Parcela, Valor Corrigido (original + juros + multa), Desconto, Total a pagar
+- Aba parcial: campo "Valor a Pagar" + "Restante" calculado
+- Observação (textarea) e Conta Bancária (dropdown)
+- Aviso "Última parcela deste empréstimo" quando `pendentesCount <= 1`
+- Novos campos `observacao`, `conta_bancaria` na tabela `parcelas` (migration 027)
+
+### Corrigido — Segurança IP
+
+- Removida exibição de IPs permitidos nas mensagens de bloqueio (AuthContext)
+- Mensagem agora mostra apenas "Contate o administrador" em vez de listar os IPs autorizados
+- Impede que usuários não-autorizados descubram quais IPs têm acesso
+
+---
+
+## [8.1.0] — 2026-03-23
+
+### Corrigido — Estabilidade de Autenticação + Electron
+
+**Login com verificação de IP (AuthContext)**
+- **Race condition SIGNED_IN vs IP check**: `signInWithPassword()` disparava `onAuthStateChange(SIGNED_IN)` que setava o user e carregava o dashboard ANTES da verificação de IP terminar. Se o IP falhava, o `signOut()` derrubava tudo — o usuário via o dashboard flash e depois era expulso
+- **Fix**: `loginInProgressRef` bloqueia o handler `onAuthStateChange(SIGNED_IN)` enquanto `login()` está em andamento. O handler aguarda 200ms antes de agir para evitar race com `login()` prestes a iniciar. O user agora é setado manualmente por `login()` após validação de IP
+- **Comparação INET corrigida**: coluna `ip_address` é tipo `INET` (PostgreSQL) que pode retornar `"138.118.29.138/32"`. Agora usa RPC `check_ip_allowed()` para comparação INET nativa no banco em vez de comparação string em JS
+- **`signOut({ scope: 'local' })`**: as chamadas de signOut por IP bloqueado usavam `scope: global` (padrão) que invalidava TODAS as sessões no servidor. Agora usa `scope: 'local'` (limpa apenas o client)
+- **Detecção de IP falha não bloqueia**: se `api.ipify.org` e `ifconfig.me` estiverem offline, o login é permitido com aviso no console
+- **Mensagem de erro detalhada**: mostra o IP detectado E os IPs permitidos na mensagem de bloqueio
+- **Dupla camada de IP**: sistema global (`allowed_ips` table) + restrição por usuário (`profiles.allowed_ips` column)
+
+**Sessão restaurada com JWT expirado (AuthContext)**
+- `INITIAL_SESSION` com JWT expirado causava: user setado → ActivityTracker disparava → 401 → SIGNED_OUT → logout
+- Fix: valida `session.expires_at` antes de confiar na sessão restaurada. Se expirado, aguarda 3s para auto-refresh e re-verifica
+
+**fetchProfile com timeout (AuthContext)**
+- No Electron, `fetchProfile` podia travar indefinidamente por conflito de sessão
+- Fix: timeout de 8s com `Promise.race` + logs detalhados em cada etapa
+
+**ActivityTracker resiliente (useActivityTracker)**
+- Aguarda 1.5s antes de iniciar (permite auto-refresh do JWT completar)
+- Verifica sessão válida via `getSession()` antes de chamar DB
+- Todas as chamadas (`iniciarSessao`, `updateFuncionarioStatus`, `heartbeatFull`, `atualizarSessao`) envolvidas em `.catch()` — nunca crasham
+
+**Electron — IP check no login pulado**
+- No Electron, o IP já é validado pelo `ip-guard.cjs` no startup do app (antes da janela abrir)
+- A verificação de IP no `login()` é desabilitada quando `window.electronAPI` existe, evitando travamento por conflito de requisições no custom protocol `app://`
+
+**Electron — Zoom CSS corrigido**
+- `html { zoom: 0.9 }` causava espaço vazio na parte inferior da janela Electron (conteúdo renderizava a 90% mas o viewport era 100%)
+- Fix: classe `html.electron-app { zoom: 1 }` desativa zoom CSS. Em vez disso, `webFrame.setZoomFactor(0.9)` no preload aplica zoom correto a nível do Chromium (sem espaço vazio)
+- No browser/Vercel, `zoom: 0.9` via CSS continua funcionando normalmente
+
+**Migration 022 — UPDATE policy para sessoes_atividade**
+- `iniciarSessao()` precisa fechar sessões órfãs (UPDATE `fim` e `duracao`)
+- `atualizarSessao()` precisa atualizar `acoes` e `paginas_visitadas`
+- Policy `sessoes_update` permite UPDATE apenas em registros do próprio funcionário
+
+---
+
+## [8.0.0] — 2025-07-09
+
+### Removido — Chat Geral
+
+- Removida aba "Chat Geral" do menu lateral (`MainLayout.tsx`)
+- Removida rota `/chat` e importação de `ChatPage` (`routes.tsx`)
+- Deletado arquivo `ChatPage.tsx`
+- Links `/chat?phone=` redirecionados para `/whatsapp?telefone=` em `EmprestimosAtivosPage`, `ClienteAreaPage`, `RedeIndicacoesPage`
+- Shortcut do PWA alterado de "Chat" para "WhatsApp" (`manifest.json`)
+- `FloatingChat` (chat interno da equipe) mantido — é componente separado
+
+---
+
+### Adicionado — Sistema de IP Whitelist + App Desktop (Electron)
+
+Controle de acesso baseado em IP para restringir uso do sistema a redes autorizadas, com aplicativo desktop empacotado via Electron.
+
+#### Arquitetura Geral
+
+```
+Funcionário → verificador-digital.vercel.app/download
+  → Vercel Edge Middleware extrai IP do request
+  → Chama Supabase Edge Function check-ip
+  → check_ip_allowed(INET) verifica tabela allowed_ips
+  → IP autorizado? → Serve página de download
+  → IP bloqueado? → Retorna 404 (página não existe)
+
+Funcionário baixa .exe/.dmg → Abre app Electron
+  → Main process verifica IP via check-ip (startup)
+  → IP autorizado → Abre janela principal + inicia sessão de uso
+  → IP bloqueado → dialog.showErrorBox() + app.quit()
+  → Sessão ativa → ping a cada 60s para rastrear tempo de uso
+```
+
+#### Supabase — Migrations 019-021
+
+**Tabelas criadas:**
+
+| Tabela | Campos principais | Descrição |
+|--------|------------------|-----------|
+| `allowed_ips` | `ip_address` (INET), `label`, `added_by`, `active` | IPs autorizados |
+| `emergency_tokens` | `token` (text), `created_by`, `used_by_ip`, `expires_at` | Tokens de emergência (15 min) |
+| `app_usage_sessions` | `user_id`, `ip_address`, `machine_id`, `started_at`, `ended_at`, `last_ping_at`, `duration_sec` (GENERATED) | Sessões de uso do desktop |
+
+**Funções SQL:**
+
+- `check_ip_allowed(INET)` → retorna `boolean` — verifica se IP está ativo na whitelist
+- `redeem_emergency_token(token, ip, label)` → marca token como usado, insere IP na whitelist automaticamente
+
+**RLS:** Admins podem gerenciar tudo; usuários autenticados podem ler IPs ativos; `service_role` bypassa RLS
+
+**Notas de deploy:**
+- Migration 019 falhou parcialmente (tabela `allowed_ips` criada, resto falhou por `gen_random_bytes` sem schema)
+- Corrigido com `extensions.gen_random_bytes(32)` (pgcrypto no schema `extensions` no Supabase hosted)
+- Migrations 020 e 021 são reparos idempotentes (`CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS`)
+
+#### Supabase Edge Function — `check-ip`
+
+Arquivo: `supabase/functions/check-ip/index.ts`
+Deploy: `supabase functions deploy check-ip --no-verify-jwt`
+
+| Endpoint | Método | Descrição |
+|----------|--------|-----------|
+| `/check-ip` | GET/POST | Valida IP (extrai de headers ou body) |
+| `/check-ip/redeem` | POST | Resgata token de emergência + adiciona IP |
+
+Headers de IP suportados: `x-real-ip`, `cf-connecting-ip`, `x-forwarded-for`
+
+#### Vercel Edge Middleware
+
+Arquivo: `middleware.ts` (raiz do projeto)
+
+- Intercepta rotas `/download` e `/download/*`
+- Extrai IP real do request (x-real-ip → cf-connecting-ip → x-forwarded-for)
+- Chama `check_ip_allowed()` via Supabase RPC com `SUPABASE_SERVICE_ROLE_KEY`
+- IP permitido → passa request (return undefined)
+- IP bloqueado → retorna `Response(null, { status: 404 })`
+- Sem dependência de `@vercel/edge` (usa Web APIs puras — compatível com Vite)
+
+**Variáveis de ambiente necessárias no Vercel:**
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+#### Páginas do Frontend
+
+| Página | Rota | Acesso | Descrição |
+|--------|------|--------|-----------|
+| `IpWhitelistPage` | `/configuracoes/ip-whitelist` | Admin | 3 abas: IPs (CRUD), Tokens (gerar/copiar), Sessões (tabela) |
+| `DownloadPage` | `/download` | Público (filtrado por middleware) | Botões de download para Windows, macOS, Linux |
+| `EmergencyTokenPage` | `/emergency?token=...` | Público | Resgate de token de emergência, auto-submit se token na URL |
+
+#### Service + Hooks
+
+- `ipWhitelistService.ts` — CRUD completo para `allowed_ips`, `emergency_tokens`, `app_usage_sessions`
+- `useIpWhitelist.ts` — React Query hooks (`useAllowedIps`, `useAddAllowedIp`, `useToggleAllowedIp`, `useDeleteAllowedIp`, `useEmergencyTokens`, `useCreateEmergencyToken`, `useAppUsageSessions`)
+- `useTauriIpGuard.ts` → renomeado para `useDesktopIpGuard` — detecta `window.electronAPI`, fallback para fetch no browser
+
+#### Electron — App Desktop
+
+Substituiu Tauri (requeria Rust/Cargo). Electron roda em Node.js.
+
+**Estrutura:**
+```
+electron/
+  main.cjs          — Main process: janela, IPC handlers, IP check no startup
+  preload.cjs       — contextBridge: expõe electronAPI ao renderer
+  ip-guard.cjs      — get IP via ipify + check contra Supabase edge function
+  encrypted-storage.cjs — AES-256-GCM com chave derivada de fingerprint da máquina
+  usage-tracker.cjs  — Machine ID determinístico (SHA-256 de hostname+platform+arch+cpu+ram)
+```
+
+**Configuração (electron-builder.json):**
+- Windows: NSIS installer (`.exe`)
+- macOS: DMG (`.dmg`)
+- Linux: AppImage (`.AppImage`)
+- `appId`: `com.fintechdigital.app`
+
+**IP Guard (main process):**
+1. `app.whenReady()` → chama `checkIpWhitelist()` antes de criar janela
+2. IP bloqueado → `dialog.showErrorBox()` + `app.quit()`
+3. IP permitido → `createWindow()` com BrowserWindow (1400×900, sem barra de endereço)
+
+**Encrypted Storage:**
+- Algoritmo: AES-256-GCM (Node.js `crypto`)
+- Chave: SHA-256 de `hostname|platform|arch|cpuModel` + salt `fintech-digital-v1`
+- Formato do arquivo: `[12-byte nonce][16-byte auth tag][encrypted data]`
+- Diretório: `app.getPath('userData')/encrypted/`
+
+**Scripts (package.json):**
+- `npm run electron:dev` — Abre Electron apontando para `localhost:5173`
+- `npm run electron:build` — Build Vite + empacota com electron-builder
+
+**Preload (contextBridge):**
+```
+window.electronAPI.checkIpWhitelist(url, key)
+window.electronAPI.getCurrentIp()
+window.electronAPI.getMachineId()
+window.electronAPI.encryptAndSave(name, base64data)
+window.electronAPI.loadAndDecrypt(name)
+window.electronAPI.deleteEncrypted(name)
+```
+
+#### Sidebar
+
+- Adicionado item "IP Whitelist" no menu CONFIGURAÇÕES (ícone `Shield`, apenas admin)
+
+---
+
 ## [7.6.0] — 2026-03-19
 
 ### Corrigido — Safari iOS: Upload de Verificação de Identidade

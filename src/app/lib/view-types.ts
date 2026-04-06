@@ -75,11 +75,20 @@ export interface Cliente {
   telefone: string;
   cpf?: string;
   sexo: 'masculino' | 'feminino';
+  profissao?: string;
   dataNascimento?: string;
   endereco?: string;
+  rua?: string;
+  numero?: string;
+  bairro?: string;
+  estado?: string;
+  cidade?: string;
+  cep?: string;
   status: 'em_dia' | 'a_vencer' | 'vencido';
   valor: number;
   vencimento: string;
+  parcelasPagas?: number;
+  totalParcelas?: number;
   diasAtraso?: number;
   ultimoContato?: string;
   indicadoPor?: string;
@@ -89,6 +98,8 @@ export interface Cliente {
   scoreInterno: number;
   bonusAcumulado: number;
   grupo?: string;
+  pix_key?: string;
+  pix_key_type?: string;
 }
 
 /**
@@ -110,6 +121,12 @@ export interface Emprestimo {
   dataContrato: string;
   proximoVencimento: string;
   status: 'ativo' | 'quitado' | 'inadimplente';
+  vendedorId?: string | null;
+  cobradorId?: string | null;
+  aprovadoPor?: string | null;
+  aprovadoEm?: string | null;
+  analiseId?: string | null;
+  gateway?: string | null;
 }
 
 /**
@@ -135,6 +152,13 @@ export interface Parcela {
   juros: number;
   multa: number;
   desconto: number;
+  observacao?: string;
+  contaBancaria?: string;
+  comprovanteUrl?: string;
+  pagamentoTipo?: 'pix' | 'manual' | 'automatico';
+  confirmadoPor?: string;
+  confirmadoEm?: string;
+  wooviChargeId?: string;
 }
 
 /**
@@ -167,6 +191,7 @@ export interface TemplateWhatsApp {
   mensagemFeminino: string;
   variaveis: string[];
   ativo: boolean;
+  tipoNotificacao: string | null;
 }
 
 /**
@@ -186,6 +211,13 @@ export interface AnaliseCredito {
   dataSolicitacao: string;
   motivo?: string;
   analistaId?: string;
+  numeroParcelas?: number | null;
+  periodicidade?: string | null;
+  diaPagamento?: number | null;
+  intervaloDias?: number | null;
+  diaUtil?: boolean;
+  datasPersonalizadas?: string | null;
+  dataResultado?: string | null;
 }
 
 /**
@@ -210,6 +242,7 @@ export interface IdentityVerification {
   proofOfAddressUrl?: string;
   residenceVideoUrl?: string;
   clientAddress?: string;
+  profissaoInformada?: string;
   referenceContacts: ReferenceContact[];
   verificationPhrase: string;
   status: 'pending' | 'approved' | 'rejected' | 'retry_needed';
@@ -397,6 +430,8 @@ export interface WooviChargeView {
   splitIndicadorId: string | null;
   splitValor: number | null;
   paidAt: string | null;
+  criadoPor: string | null;
+  gateway: string | null;
   createdAt: string;
 }
 
@@ -419,6 +454,9 @@ export interface WooviTransactionView {
   destinatarioNome: string | null;
   endToEndId: string | null;
   descricao: string | null;
+  autorizadoPor: string | null;
+  autorizadoEm: string | null;
+  gateway: string | null;
   confirmedAt: string | null;
   createdAt: string;
 }
@@ -459,4 +497,69 @@ export interface WooviDashboardStats {
   totalWebhooks: number;
   webhooksComErro: number;
   saldoConta: number; // vem da API Woovi diretamente
+}
+
+// ── Comissões & Gateways ──────────────────────────────────────
+
+/**
+ * Configuração de comissão de um agente (view camelCase).
+ */
+export interface AgenteComissaoView {
+  id: string;
+  agenteId: string;
+  agenteNome?: string;
+  agenteEmail?: string;
+  agenteRole?: string;
+  percentualVenda: number;
+  percentualCobranca: number;
+  percentualGerencia: number;
+  ativo: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Comissão calculada por liquidação de parcela (view camelCase).
+ */
+export interface ComissaoLiquidacaoView {
+  id: string;
+  parcelaId: string;
+  emprestimoId: string;
+  agenteId: string;
+  agenteNome?: string;
+  tipo: 'venda' | 'cobranca' | 'gerencia';
+  valorBase: number;
+  percentual: number;
+  valorComissao: number;
+  mesReferencia: string;
+  status: 'pendente' | 'aprovado' | 'pago';
+  createdAt: string;
+}
+
+/**
+ * Gateway de pagamento configurado (view camelCase).
+ */
+export interface GatewayPagamentoView {
+  id: string;
+  nome: string;
+  label: string;
+  ativo: boolean;
+  config: Record<string, unknown>;
+  prioridade: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Conta bancária configurável para registro de pagamentos.
+ * Pode ser manual (CONTA PRINCIPAL, CAIXA) ou vinculada a um gateway (Woovi, EFI).
+ */
+export interface ContaBancaria {
+  id: string;
+  nome: string;
+  tipo: 'manual' | 'gateway';
+  gatewayId?: string | null;
+  ativo: boolean;
+  padrao: boolean;
+  ordem: number;
 }

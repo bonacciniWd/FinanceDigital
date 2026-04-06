@@ -86,7 +86,51 @@ export async function updateParcela(id: string, updates: ParcelaUpdate): Promise
   return data;
 }
 
-/** Registrar pagamento de uma parcela */
+/**
+ * Recalcular parcelas_pagas, proximo_vencimento e status de um empréstimo
+ * a partir do estado real das parcelas no banco.
+ *
+ * Regras de status:
+ * - Todas pagas → 'quitado'
+ * - Alguma vencida → 'inadimplente'
+ * - Caso contrário → 'ativo'
+ */
+export async function syncEmprestimoStatus(emprestimoId: string): Promise<void> {
+  const { data: todasParcelas } = await supabase
+    .from('parcelas')
+    .select('status, data_vencimento')
+    .eq('emprestimo_id', emprestimoId)
+    .order('data_vencimento');
+
+  if (!todasParcelas || todasParcelas.length === 0) return;
+
+  const pagas = todasParcelas.filter(p => p.status === 'paga').length;
+  const vencidas = todasParcelas.filter(p => p.status === 'vencida').length;
+  const total = todasParcelas.length;
+  const proximaPendente = todasParcelas.find(p => p.status === 'pendente' || p.status === 'vencida');
+
+  const empUpdate: Record<string, unknown> = { parcelas_pagas: pagas };
+
+  if (proximaPendente) {
+    empUpdate.proximo_vencimento = proximaPendente.data_vencimento;
+  }
+
+  // Determinar status correto
+  if (pagas >= total) {
+    empUpdate.status = 'quitado';
+  } else if (vencidas > 0) {
+    empUpdate.status = 'inadimplente';
+  } else {
+    empUpdate.status = 'ativo';
+  }
+
+  await supabase
+    .from('emprestimos')
+    .update(empUpdate)
+    .eq('id', emprestimoId);
+}
+
+/** Registrar pagamento de uma parcela e atualizar o empréstimo */
 export async function registrarPagamento(
   id: string,
   dataPagamento: string,
@@ -99,5 +143,11 @@ export async function registrarPagamento(
   if (desconto !== undefined) {
     updates.desconto = desconto;
   }
-  return updateParcela(id, updates);
+  const parcela = await updateParcela(id, updates);
+
+  if (parcela.emprestimo_id) {
+    await syncEmprestimoStatus(parcela.emprestimo_id);
+  }
+
+  return parcela;
 }

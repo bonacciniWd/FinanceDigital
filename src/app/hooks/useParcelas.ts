@@ -107,3 +107,17 @@ export function useRegistrarPagamento() {
     },
   });
 }
+
+/** Recalcular status de um empréstimo a partir das parcelas */
+export function useSyncEmprestimoStatus() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (emprestimoId: string) => parcelasService.syncEmprestimoStatus(emprestimoId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
+      queryClient.invalidateQueries({ queryKey: ['kanban-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+    },
+  });
+}

@@ -16,7 +16,7 @@ import { Navigate, useLocation } from 'react-router';
 import { useAuth } from '../contexts/AuthContext';
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, ipBlockedMsg } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -27,8 +27,8 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+  if (!isAuthenticated || ipBlockedMsg) {
+    return <Navigate to="/login" state={{ from: location, ipError: ipBlockedMsg || undefined }} replace />;
   }
 
   return <>{children}</>;

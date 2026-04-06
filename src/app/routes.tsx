@@ -48,6 +48,13 @@ import ProdutividadePage from './pages/ProdutividadePage';
 import ClienteAreaPage from './pages/ClienteAreaPage';
 import PagamentosWooviPage from './pages/PagamentosWooviPage';
 import VerifyIdentityPage from './pages/VerifyIdentityPage';
+import IpWhitelistPage from './pages/IpWhitelistPage';
+import DownloadPage from './pages/DownloadPage';
+import DocsPage from './pages/DocsPage';
+import EmergencyTokenPage from './pages/EmergencyTokenPage';
+import ComissoesConfigPage from './pages/ComissoesConfigPage';
+import ConfigSistemaPage from './pages/ConfigSistemaPage';
+import RelatorioComissoesPage from './pages/RelatorioComissoesPage';
 
 export const router = createBrowserRouter([
   {
@@ -79,6 +86,21 @@ export const router = createBrowserRouter([
   {
     path: '/verify-identity',
     element: <VerifyIdentityPage />,
+  },
+  // Download page — protegida por IP whitelist via Vercel middleware
+  {
+    path: '/download',
+    element: <DownloadPage />,
+  },
+  // Docs page — FAQ e tutorial extraído do README
+  {
+    path: '/docs',
+    element: <DocsPage />,
+  },
+  // Emergency token — rota secreta para registrar IP dinâmico
+  {
+    path: '/emergency',
+    element: <EmergencyTokenPage />,
   },
   {
     path: '/',
@@ -124,17 +146,24 @@ export const router = createBrowserRouter([
       // Relatórios
       { path: 'relatorios/gerenciais', element: <RelatoriosPage /> },
       { path: 'relatorios/operacionais', element: <RelatoriosOperacionaisPage /> },
+      { path: 'relatorios/comissoes', element: <RelatorioComissoesPage /> },
       { path: 'relatorios/exportar', element: <ExportarDadosPage /> },
 
       // Configurações
       { path: 'configuracoes/perfis', element: <PerfisAcessoPage /> },
       { path: 'configuracoes/usuarios', element: <GerenciarUsuariosPage /> },
+      { path: 'configuracoes/comissoes', element: <ComissoesConfigPage /> },
       { path: 'configuracoes/integracoes', element: <IntegracoesPage /> },
+      { path: 'configuracoes/ip-whitelist', element: <IpWhitelistPage /> },
+      { path: 'configuracoes/sistema', element: <ConfigSistemaPage /> },
       { path: 'configuracoes/conta', element: <MinhaContaPage /> },
 
       // Equipe
       { path: 'equipe/monitoramento', element: <MonitoramentoAtividadePage /> },
       { path: 'equipe/produtividade', element: <ProdutividadePage /> },
+
+      // Ajuda
+      { path: 'ajuda/docs', element: <DocsPage /> },
 
       // Fallback
       {

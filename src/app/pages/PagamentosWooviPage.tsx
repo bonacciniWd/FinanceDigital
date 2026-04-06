@@ -1,9 +1,9 @@
 /**
  * @module PagamentosWooviPage
- * @description Página principal de gestão de pagamentos Woovi (OpenPix).
- * Exibe saldo, cobranças, transações e subcontas com ações integradas.
+ * @description Página de gestão de pagamentos Pix (Woovi + EFI).
+ * Exibe saldo, cobranças, transações e subcontas com separação por gateway.
  */
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Wallet,
   QrCode,
@@ -15,7 +15,7 @@ import {
   RefreshCw,
   Eye,
   Trash2,
-  ExternalLink,
+  Landmark,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -51,9 +51,12 @@ import {
   useCriarCobrancaWoovi,
   useCancelarCobrancaWoovi,
   useCriarSubcontaWoovi,
+  useSaldoEfi,
 } from '../hooks/useWoovi';
 import { useClientes } from '../hooks/useClientes';
 import { toast } from 'sonner';
+
+type GatewayFilter = 'todos' | 'woovi' | 'efi';
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -71,6 +74,14 @@ function formatDate(date: string): string {
     minute: '2-digit',
   });
 }
+
+const gatewayLabel = (gw?: string | null) =>
+  gw === 'efi' ? 'EFI Bank' : gw === 'woovi' ? 'Woovi' : gw || '—';
+
+const gatewayBadge = (gw?: string | null) => {
+  if (gw === 'efi') return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
+  return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400';
+};
 
 const chargeStatusConfig: Record<string, { label: string; className: string }> = {
   ACTIVE: {
@@ -119,6 +130,7 @@ const txTypeLabels: Record<string, string> = {
 
 export default function PagamentosWooviPage() {
   const [busca, setBusca] = useState('');
+  const [gatewayFilter, setGatewayFilter] = useState<GatewayFilter>('todos');
   const [chargeStatusFilter, setChargeStatusFilter] = useState<string>('');
   const [showNovaCobranca, setShowNovaCobranca] = useState(false);
   const [showNovaSubconta, setShowNovaSubconta] = useState(false);
@@ -128,6 +140,7 @@ export default function PagamentosWooviPage() {
   const [novaCobrancaClienteId, setNovaCobrancaClienteId] = useState('');
   const [novaCobrancaValor, setNovaCobrancaValor] = useState('');
   const [novaCobrancaDescricao, setNovaCobrancaDescricao] = useState('');
+  const [novaCobrancaGateway, setNovaCobrancaGateway] = useState<'woovi' | 'efi'>('woovi');
 
   // Form state — nova subconta
   const [novaSubNome, setNovaSubNome] = useState('');
@@ -144,19 +157,43 @@ export default function PagamentosWooviPage() {
   const criarCobranca = useCriarCobrancaWoovi();
   const cancelarCobranca = useCancelarCobrancaWoovi();
   const criarSubconta = useCriarSubcontaWoovi();
+  const { data: efiBalanceData } = useSaldoEfi();
 
-  // Filtro de busca
-  const filteredCharges = cobrancas.filter(
-    (c) =>
-      c.clienteNome.toLowerCase().includes(busca.toLowerCase()) ||
-      c.wooviChargeId.toLowerCase().includes(busca.toLowerCase())
-  );
+  // Gateway-aware filtering
+  const filteredCharges = useMemo(() => {
+    return cobrancas.filter((c) => {
+      const matchGateway = gatewayFilter === 'todos' || (c.gateway || 'woovi') === gatewayFilter;
+      const matchBusca = c.clienteNome.toLowerCase().includes(busca.toLowerCase()) ||
+        c.wooviChargeId.toLowerCase().includes(busca.toLowerCase());
+      return matchGateway && matchBusca;
+    });
+  }, [cobrancas, gatewayFilter, busca]);
 
-  const filteredTx = transacoes.filter(
-    (t) =>
-      (t.descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
-      (t.destinatarioNome || '').toLowerCase().includes(busca.toLowerCase())
-  );
+  const filteredTx = useMemo(() => {
+    return transacoes.filter((t) => {
+      const matchGateway = gatewayFilter === 'todos' || (t.gateway || 'woovi') === gatewayFilter;
+      const matchBusca = (t.descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
+        (t.destinatarioNome || '').toLowerCase().includes(busca.toLowerCase());
+      return matchGateway && matchBusca;
+    });
+  }, [transacoes, gatewayFilter, busca]);
+
+  // KPIs per gateway
+  const kpis = useMemo(() => {
+    const chargesForGw = gatewayFilter === 'todos' ? cobrancas : cobrancas.filter(c => (c.gateway || 'woovi') === gatewayFilter);
+    const txForGw = gatewayFilter === 'todos' ? transacoes : transacoes.filter(t => (t.gateway || 'woovi') === gatewayFilter);
+    return {
+      total: chargesForGw.length,
+      ativas: chargesForGw.filter(c => c.status === 'ACTIVE').length,
+      pagas: chargesForGw.filter(c => c.status === 'COMPLETED').length,
+      expiradas: chargesForGw.filter(c => c.status === 'EXPIRED').length,
+      totalRecebido: chargesForGw.filter(c => c.status === 'COMPLETED').reduce((s, c) => s + c.valor, 0),
+      totalTx: txForGw.length,
+      // per-gateway counts (for "todos" view)
+      wooviCount: cobrancas.filter(c => (c.gateway || 'woovi') === 'woovi').length,
+      efiCount: cobrancas.filter(c => c.gateway === 'efi').length,
+    };
+  }, [cobrancas, transacoes, gatewayFilter]);
 
   const handleCriarCobranca = async () => {
     if (!novaCobrancaClienteId || !novaCobrancaValor) {
@@ -221,9 +258,9 @@ export default function PagamentosWooviPage() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Pagamentos Woovi</h1>
+          <h1 className="text-2xl font-bold">Pagamentos Pix</h1>
           <p className="text-sm text-muted-foreground">
-            Gestão de cobranças Pix, pagamentos e subcontas
+            Cobranças, pagamentos e subcontas — Woovi e EFI Bank
           </p>
         </div>
         <div className="flex gap-2">
@@ -234,28 +271,81 @@ export default function PagamentosWooviPage() {
         </div>
       </div>
 
-      {/* Saldo Card */}
-      <div className="grid gap-4 md:grid-cols-3">
+      {/* Gateway filter pills */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground mr-1">Gateway:</span>
+        {([
+          { key: 'todos', label: 'Todos', icon: null },
+          { key: 'woovi', label: 'Woovi', icon: <QrCode className="h-3.5 w-3.5" /> },
+          { key: 'efi', label: 'EFI Bank', icon: <Landmark className="h-3.5 w-3.5" /> },
+        ] as const).map(({ key, label, icon }) => (
+          <Button
+            key={key}
+            variant={gatewayFilter === key ? 'default' : 'outline'}
+            size="sm"
+            className="h-8"
+            onClick={() => setGatewayFilter(key)}
+          >
+            {icon && <span className="mr-1.5">{icon}</span>}
+            {label}
+            {key === 'woovi' && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1 py-0">{kpis.wooviCount}</Badge>}
+            {key === 'efi' && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1 py-0">{kpis.efiCount}</Badge>}
+          </Button>
+        ))}
+      </div>
+
+      {/* Saldo + KPIs */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <WooviSaldoCard />
 
-        {/* KPIs rápidos */}
+        {/* EFI Saldo Card */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <Landmark className="h-4 w-4 text-orange-500" />
+              Conta EFI Bank
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div>
+              <p className="text-xs text-muted-foreground">Saldo disponível</p>
+              <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">
+                {efiBalanceData?.balance?.saldo != null
+                  ? formatCurrency(parseFloat(efiBalanceData.balance.saldo))
+                  : '—'}
+              </p>
+              {efiBalanceData?.message && (
+                <p className="text-xs text-muted-foreground mt-1">{efiBalanceData.message}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <ArrowDownLeft className="h-4 w-4 text-green-500" />
-              Cobranças
+              Cobranças {gatewayFilter !== 'todos' && `(${gatewayFilter === 'woovi' ? 'Woovi' : 'EFI'})`}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{cobrancas.length}</p>
-            <div className="mt-2 flex gap-2 text-xs">
+            <p className="text-2xl font-bold">{kpis.total}</p>
+            <div className="mt-2 flex gap-3 text-xs">
               <span className="text-amber-600 dark:text-amber-400">
-                {cobrancas.filter((c) => c.status === 'ACTIVE').length} ativas
+                {kpis.ativas} ativas
               </span>
               <span className="text-green-600 dark:text-green-400">
-                {cobrancas.filter((c) => c.status === 'COMPLETED').length} pagas
+                {kpis.pagas} pagas
+              </span>
+              <span className="text-red-600 dark:text-red-400">
+                {kpis.expiradas} expiradas
               </span>
             </div>
+            {kpis.totalRecebido > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Recebido: {formatCurrency(kpis.totalRecebido)}
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -295,10 +385,12 @@ export default function PagamentosWooviPage() {
           <TabsTrigger value="cobrancas" className="flex items-center gap-2">
             <QrCode className="h-4 w-4" />
             Cobranças
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{filteredCharges.length}</Badge>
           </TabsTrigger>
           <TabsTrigger value="transacoes" className="flex items-center gap-2">
             <ArrowUpRight className="h-4 w-4" />
             Transações
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{filteredTx.length}</Badge>
           </TabsTrigger>
           <TabsTrigger value="subcontas" className="flex items-center gap-2">
             <Users className="h-4 w-4" />
@@ -335,17 +427,26 @@ export default function PagamentosWooviPage() {
             <div className="grid gap-3">
               {filteredCharges.map((charge) => {
                 const cfg = chargeStatusConfig[charge.status] || chargeStatusConfig.ERROR;
+                const gw = charge.gateway || 'woovi';
                 return (
                   <Card key={charge.id} className="p-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-4">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-900/20">
-                          <QrCode className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                        <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${
+                          gw === 'efi'
+                            ? 'bg-orange-50 dark:bg-orange-900/20'
+                            : 'bg-emerald-50 dark:bg-emerald-900/20'
+                        }`}>
+                          {gw === 'efi'
+                            ? <Landmark className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+                            : <QrCode className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                          }
                         </div>
                         <div>
                           <p className="font-medium">{charge.clienteNome || 'Cliente'}</p>
                           <p className="text-xs text-muted-foreground">
                             {charge.wooviChargeId.slice(0, 8)}... · {formatDate(charge.createdAt)}
+                            {' · '}<Badge className={`text-[10px] px-1 py-0 ${gatewayBadge(gw)}`}>{gatewayLabel(gw)}</Badge>
                           </p>
                         </div>
                       </div>
@@ -403,6 +504,7 @@ export default function PagamentosWooviPage() {
               {filteredTx.map((tx) => {
                 const txCfg = txStatusConfig[tx.status] || txStatusConfig.PENDING;
                 const isIncoming = tx.tipo === 'CHARGE';
+                const gw = tx.gateway || 'woovi';
                 return (
                   <Card key={tx.id} className="p-4">
                     <div className="flex items-center justify-between">
@@ -426,6 +528,7 @@ export default function PagamentosWooviPage() {
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {tx.descricao || tx.destinatarioNome || '—'} · {formatDate(tx.createdAt)}
+                            {' · '}<Badge className={`text-[10px] px-1 py-0 ${gatewayBadge(gw)}`}>{gatewayLabel(gw)}</Badge>
                           </p>
                         </div>
                       </div>
@@ -510,6 +613,22 @@ export default function PagamentosWooviPage() {
           </DialogHeader>
           <div className="space-y-4">
             <div>
+              <Label>Gateway</Label>
+              <Select value={novaCobrancaGateway} onValueChange={(v) => setNovaCobrancaGateway(v as 'woovi' | 'efi')}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="woovi">
+                    <span className="flex items-center gap-2"><QrCode className="h-3.5 w-3.5" /> Woovi (OpenPix)</span>
+                  </SelectItem>
+                  <SelectItem value="efi">
+                    <span className="flex items-center gap-2"><Landmark className="h-3.5 w-3.5" /> EFI Bank (Gerencianet)</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label>Cliente</Label>
               <Select
                 value={novaCobrancaClienteId}
@@ -559,6 +678,8 @@ export default function PagamentosWooviPage() {
             >
               {criarCobranca.isPending ? (
                 <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+              ) : novaCobrancaGateway === 'efi' ? (
+                <Landmark className="mr-2 h-4 w-4" />
               ) : (
                 <QrCode className="mr-2 h-4 w-4" />
               )}

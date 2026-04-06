@@ -1,0 +1,139 @@
+const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { pathToFileURL } = require('url');
+const ipGuard = require('./ip-guard.cjs');
+const encryptedStorage = require('./encrypted-storage.cjs');
+const usageTracker = require('./usage-tracker.cjs');
+
+const isDev = process.env.ELECTRON_DEV === 'true';
+const DIST_PATH = path.join(__dirname, '..', 'dist');
+
+let mainWindow = null;
+
+// Register custom protocol BEFORE app is ready (required by Electron)
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      secure: true,
+      standard: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 1024,
+    minHeight: 700,
+    title: 'Fintech Digital',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    autoHideMenuBar: true,
+    show: false,
+  });
+
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.webContents.openDevTools();
+  } else {
+    // Use custom protocol — acts like a real HTTP server
+    mainWindow.loadURL('app://bundle/index.html');
+  }
+
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
+    console.error(`Failed to load: ${code} — ${desc}`);
+    if (isDev) {
+      // Dev server probably not started yet — retry in 2s
+      setTimeout(() => mainWindow.loadURL('http://localhost:5173'), 2000);
+    }
+  });
+
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+// --- IPC Handlers ---
+
+ipcMain.handle('ip:check', async (_event, { supabaseUrl, supabaseKey }) => {
+  return ipGuard.checkIpWhitelist(supabaseUrl, supabaseKey);
+});
+
+ipcMain.handle('ip:getCurrent', async () => {
+  return ipGuard.getCurrentIp();
+});
+
+ipcMain.handle('machine:getId', () => {
+  return usageTracker.getMachineId();
+});
+
+ipcMain.handle('storage:encrypt', (_event, { name, data }) => {
+  return encryptedStorage.encryptAndSave(name, data);
+});
+
+ipcMain.handle('storage:decrypt', (_event, { name }) => {
+  return encryptedStorage.loadAndDecrypt(name);
+});
+
+ipcMain.handle('storage:delete', (_event, { name }) => {
+  return encryptedStorage.deleteEncrypted(name);
+});
+
+// --- App Lifecycle ---
+
+app.whenReady().then(async () => {
+  // Register protocol handler for production — serves dist/ files with SPA fallback
+  if (!isDev) {
+    protocol.handle('app', (request) => {
+      let { pathname } = new URL(request.url);
+      // Decode URI components (e.g. %20 → space)
+      pathname = decodeURIComponent(pathname);
+
+      const filePath = path.join(DIST_PATH, pathname);
+
+      // If file exists, serve it; otherwise serve index.html (SPA routing)
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        return net.fetch(pathToFileURL(filePath).toString());
+      }
+      return net.fetch(pathToFileURL(path.join(DIST_PATH, 'index.html')).toString());
+    });
+  }
+
+  // IP check on startup
+  try {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+    const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+
+    if (supabaseUrl && supabaseKey) {
+      const result = await ipGuard.checkIpWhitelist(supabaseUrl, supabaseKey);
+      if (!result.allowed) {
+        dialog.showErrorBox(
+          'Acesso Negado',
+          `Seu IP (${result.ip}) não está autorizado a usar este aplicativo.\nContate o administrador.`
+        );
+        app.quit();
+        return;
+      }
+    }
+  } catch (err) {
+    console.error('IP check on startup failed:', err.message);
+  }
+
+  createWindow();
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});

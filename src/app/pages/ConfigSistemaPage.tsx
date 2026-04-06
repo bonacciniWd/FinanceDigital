@@ -1,0 +1,175 @@
+/**
+ * @module ConfigSistemaPage
+ * @description Configurações globais do sistema — mensagens automáticas, cobranças, parâmetros.
+ *
+ * @route /configuracoes/sistema
+ * @access Protegido — admin, gerencia
+ */
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
+import { Label } from '../components/ui/label';
+import { Input } from '../components/ui/input';
+import { Switch } from '../components/ui/switch';
+import { Skeleton } from '../components/ui/skeleton';
+import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle } from 'lucide-react';
+import { toast } from 'sonner';
+import { useConfigSistema, useUpdateConfig } from '../hooks/useConfigSistema';
+
+export default function ConfigSistemaPage() {
+  const { data: config, isLoading, isError } = useConfigSistema();
+  const updateConfig = useUpdateConfig();
+
+  const handleToggle = (chave: string, valor: boolean) => {
+    updateConfig.mutate(
+      { chave, valor },
+      {
+        onSuccess: () => toast.success('Configuração atualizada'),
+        onError: (err) => toast.error(`Erro: ${err.message}`),
+      }
+    );
+  };
+
+  const handleNumber = (chave: string, valor: string) => {
+    const num = parseFloat(valor);
+    if (isNaN(num) || num < 0) return;
+    updateConfig.mutate(
+      { chave, valor: num },
+      {
+        onSuccess: () => toast.success('Configuração atualizada'),
+        onError: (err) => toast.error(`Erro: ${err.message}`),
+      }
+    );
+  };
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-8 w-64" />
+        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    );
+  }
+
+  if (isError || !config) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <AlertTriangle className="w-12 h-12 text-destructive mb-4" />
+        <h2 className="text-xl font-semibold mb-2">Erro ao carregar configurações</h2>
+        <p className="text-muted-foreground">Tente novamente mais tarde.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-foreground flex items-center gap-2">
+          <Settings2 className="w-6 h-6" />
+          Configurações do Sistema
+        </h1>
+        <p className="text-muted-foreground mt-1">
+          Controle global de funcionalidades automáticas e parâmetros financeiros.
+        </p>
+      </div>
+
+      {/* Mensagens automáticas */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquare className="w-5 h-5" />
+            Mensagens Automáticas (WhatsApp)
+          </CardTitle>
+          <CardDescription>
+            Controla o envio automático de mensagens via WhatsApp pelo sistema de notificações (cron de cobrança).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Notificações automáticas ativas</Label>
+              <p className="text-xs text-muted-foreground">
+                Lembretes de vencimento, cobranças e avisos enviados automaticamente.
+              </p>
+            </div>
+            <Switch
+              checked={config.mensagens_automaticas_ativas}
+              onCheckedChange={(checked) => handleToggle('mensagens_automaticas_ativas', checked)}
+              disabled={updateConfig.isPending}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Cobranças automáticas */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Receipt className="w-5 h-5" />
+            Cobranças PIX Automáticas
+          </CardTitle>
+          <CardDescription>
+            Geração automática de cobranças PIX com vencimento (QR Code) nas datas de vencimento das parcelas.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Cobranças automáticas ativas</Label>
+              <p className="text-xs text-muted-foreground">
+                Cria cobrança PIX EFI com QR code e envia ao cliente automaticamente.
+              </p>
+            </div>
+            <Switch
+              checked={config.cobv_auto_ativa}
+              onCheckedChange={(checked) => handleToggle('cobv_auto_ativa', checked)}
+              disabled={updateConfig.isPending}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Parâmetros financeiros */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Percent className="w-5 h-5" />
+            Parâmetros Financeiros
+          </CardTitle>
+          <CardDescription>
+            Multa e juros aplicados automaticamente nas cobranças PIX com vencimento.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <Label htmlFor="multa">Multa por atraso (%)</Label>
+              <Input
+                id="multa"
+                type="number"
+                step="0.1"
+                min="0"
+                max="100"
+                defaultValue={config.multa_percentual}
+                onBlur={(e) => handleNumber('multa_percentual', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">Aplicada após o vencimento pela EFI.</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="juros">Juros ao mês (%)</Label>
+              <Input
+                id="juros"
+                type="number"
+                step="0.1"
+                min="0"
+                max="100"
+                defaultValue={config.juros_percentual}
+                onBlur={(e) => handleNumber('juros_percentual', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">Juros mensais aplicados pela EFI após o vencimento.</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
