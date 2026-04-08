@@ -110,6 +110,12 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // Fallback: quando o browser envia media_base64 sem media_url (ex: QR code PIX)
+    if (!normalizedMediaUrl && media_base64) {
+      normalizedMediaUrl = (media_base64 as string).replace(/^data:[^;]+;base64,/, "");
+      isBase64Media = true;
+    }
+
     // Extrair apenas dígitos e passar para a Evolution API sem o sufixo @s.whatsapp.net.
     // A Evolution API aplica as regras de formatação de número (ex: Brasil remove o 9º dígito
     // em DDDs < 31 ou quando o número começa com dígito < 7). Passar o JID completo impede
