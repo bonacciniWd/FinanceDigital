@@ -1,25 +1,33 @@
 {
   "appId": "com.fintechdigital.app",
   "productName": "Fintech Digital",
+  "artifactName": "Fintech.Digital-${version}-${os}-${arch}.${ext}",
   "directories": {
-    "output": "release"
+    "output": "release",
+    "buildResources": "build"
   },
   "files": [
     "dist/**/*",
     "electron/**/*"
   ],
+  "publish": {
+    "provider": "github",
+    "owner": "bonacciniWd",
+    "repo": "FinanceDigital",
+    "releaseType": "release"
+  },
   "mac": {
     "target": ["dmg"],
-    "icon": "public/icon.icns",
+    "icon": "build/icon.icns",
     "category": "public.app-category.finance"
   },
   "win": {
     "target": ["nsis"],
-    "icon": "public/icon.ico"
+    "icon": "build/icon.ico"
   },
   "linux": {
     "target": ["AppImage"],
-    "icon": "public/icon.png",
+    "icon": "build/icon.png",
     "category": "Finance"
   },
   "nsis": {

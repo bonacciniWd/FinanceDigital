@@ -46,7 +46,7 @@ const PLATFORM_LOGOS: Record<string, string> = {
   linux: linuxLogo,
 };
 
-const APP_VERSION = '0.0.1';
+const APP_VERSION = '1.0.0';
 const GITHUB_REPO = 'https://github.com/bonacciniWd/FinanceDigital';
 const GITHUB_RELEASE = `${GITHUB_REPO}/releases/download/v${APP_VERSION}`;
 
@@ -55,8 +55,8 @@ const PLATFORMS = [
     id: 'windows',
     os: 'Windows',
     icon: Laptop,
-    url: `${GITHUB_RELEASE}/Fintech.Digital.Setup.${APP_VERSION}.exe`,
-    size: '103 MB',
+    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-win-x64.exe`,
+    size: '107 MB',
     note: 'Windows 10/11 (64-bit)',
     ext: '.exe',
     color: 'from-blue-500 to-cyan-500',
@@ -67,8 +67,8 @@ const PLATFORMS = [
     id: 'macos',
     os: 'macOS',
     icon: Apple,
-    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}.dmg`,
-    size: '132 MB',
+    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-mac-x64.dmg`,
+    size: '135 MB',
     note: 'macOS 12+ (Intel & Apple Silicon)',
     ext: '.dmg',
     color: 'from-purple-500 to-pink-500',
@@ -79,8 +79,8 @@ const PLATFORMS = [
     id: 'linux',
     os: 'Linux',
     icon: Monitor,
-    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}.AppImage`,
-    size: '135 MB',
+    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-linux-x86_64.AppImage`,
+    size: '139 MB',
     note: 'Ubuntu / Debian / Fedora (64-bit)',
     ext: '.AppImage',
     color: 'from-orange-500 to-yellow-500',
@@ -123,7 +123,17 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '8.5.0', date: '31 Mar 2026', isLatest: true, items: [
+  { version: '1.0.0', date: '11 Abr 2026', isLatest: true, items: [
+    'Documentos do cliente (RG/CNH, comprovante) no cadastro',
+    'Atribuição de documentos via chat WhatsApp',
+    'Verificação de identidade simplificada (vídeo + residência)',
+    '24 frases de verificação únicas',
+    'Juros automáticos por atraso (< R$1000 = R$100/dia, ≥ R$1000 = 10%/dia)',
+    'Rede de Indicações com valores reais dos empréstimos',
+    'Auto-refresh de sessão quando aba fica inativa',
+    'Modal de cadastro landscape com 2 colunas',
+  ]},
+  { version: '8.5.0', date: '31 Mar 2026', isLatest: false, items: [
     'Integração EFI Bank completa (cobranças cobv com vencimento)',
     'Geração de QR Code PIX e envio automático via WhatsApp',
     'Sistema de comprovantes de pagamento obrigatórios',
@@ -453,7 +463,7 @@ export default function DownloadPage() {
 
       {/* Changelog — Horizontal Timeline */}
       <div className="relative z-10 border-t border-white/[0.04]">
-        <div className="max-w-6xl mx-auto px-6 py-20">
+        <div className="max-w-full mx-auto py-20">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -469,7 +479,7 @@ export default function DownloadPage() {
             {/* Horizontal timeline line */}
             <div className="absolute top-[15px] left-0 right-0 h-px bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent" />
 
-            <div className="flex gap-6 overflow-x-auto pb-6 scrollbar-thin scrollbar-thumb-indigo-500/30 scrollbar-track-transparent snap-x snap-mandatory">
+            <div className="flex ml-3 gap-6 overflow-x-auto pb-6 scrollbar-thin scrollbar-thumb-indigo-500/30 scrollbar-track-transparent snap-x snap-mandatory">
               {CHANGELOG.map((release, rIdx) => (
                 <motion.div
                   key={release.version}

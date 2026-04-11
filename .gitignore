@@ -9,6 +9,7 @@ dist/
 
 # Electron builds — usar GitHub Releases para distribuição
 release/
+build/
 
 # Fly.io — não versionar estado local
 fly-evolution/.fly/
