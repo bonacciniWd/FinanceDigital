@@ -100,6 +100,10 @@ export interface Cliente {
   grupo?: string;
   pix_key?: string;
   pix_key_type?: string;
+  documentoFrenteUrl?: string;
+  documentoVersoUrl?: string;
+  comprovanteEnderecoUrl?: string;
+  contatosReferencia?: Array<{nome: string; telefone: string; parentesco: string}>;
 }
 
 /**

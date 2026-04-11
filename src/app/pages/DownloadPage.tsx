@@ -248,7 +248,7 @@ export default function DownloadPage() {
             className="text-6xl sm:text-7xl font-extrabold tracking-tight mb-4"
           >
             <span className="bg-gradient-to-r from-white via-indigo-200 to-purple-300 bg-clip-text text-transparent">
-              Fintech Digital
+              Fintech
             </span>
           </motion.h1>
           

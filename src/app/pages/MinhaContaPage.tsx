@@ -299,6 +299,8 @@ export default function MinhaContaPage() {
                 <Select value={seguranca.sessaoMaxima} onValueChange={v => setSeguranca({...seguranca, sessaoMaxima: v})}>
                   <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="2h">30 minutos</SelectItem>
+                    <SelectItem value="4h">1 hora</SelectItem>
                     <SelectItem value="2h">2 horas</SelectItem>
                     <SelectItem value="4h">4 horas</SelectItem>
                     <SelectItem value="8h">8 horas</SelectItem>

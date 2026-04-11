@@ -131,6 +131,10 @@ export interface Database {
           indicado_por: string | null;
           pix_key: string | null;
           pix_key_type: string | null;
+          documento_frente_url: string | null;
+          documento_verso_url: string | null;
+          comprovante_endereco_url: string | null;
+          contatos_referencia: unknown;
           created_at: string;
           updated_at: string;
         };
@@ -163,6 +167,10 @@ export interface Database {
           indicado_por?: string | null;
           pix_key?: string | null;
           pix_key_type?: string | null;
+          documento_frente_url?: string | null;
+          documento_verso_url?: string | null;
+          comprovante_endereco_url?: string | null;
+          contatos_referencia?: unknown;
         };
         Update: {
           nome?: string;
@@ -192,6 +200,10 @@ export interface Database {
           indicado_por?: string | null;
           pix_key?: string | null;
           pix_key_type?: string | null;
+          documento_frente_url?: string | null;
+          documento_verso_url?: string | null;
+          comprovante_endereco_url?: string | null;
+          contatos_referencia?: unknown;
           updated_at?: string;
         };
       };

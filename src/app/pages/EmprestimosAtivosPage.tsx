@@ -40,6 +40,7 @@ import { useCriarCobvEfi } from '../hooks/useWoovi';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { supabase } from '../lib/supabase';
 import type { Emprestimo, Parcela, Cliente } from '../lib/view-types';
+import { calcularJurosAtraso, diasDeAtraso } from '../lib/juros';
 
 export default function EmprestimosAtivosPage() {
   const navigate = useNavigate();
@@ -468,11 +469,19 @@ function EmprestimoDetailModal({
   const parcelasTotalCount = parcelasLive.length || emprestimo.parcelas;
   const pendentesCount = parcelasLive.filter(p => p.status === 'pendente' || p.status === 'vencida').length;
 
+  /** Juros efetivo da parcela: manual (se > 0) ou calculado automaticamente */
+  const jurosEfetivo = useCallback((p: Parcela) => {
+    if (p.status === 'paga' || p.status === 'cancelada') return p.juros;
+    if (p.juros > 0) return p.juros; // manual override
+    const dias = diasDeAtraso(p.dataVencimento);
+    return calcularJurosAtraso(p.valorOriginal, dias);
+  }, []);
+
   const saldoDevedor = parcelasLive
     .filter((p) => p.status !== 'paga' && p.status !== 'cancelada')
-    .reduce((acc, p) => acc + p.valor, 0);
+    .reduce((acc, p) => acc + p.valorOriginal + jurosEfetivo(p) + p.multa - p.desconto, 0);
 
-  const totalJuros = parcelasLive.reduce((acc, p) => acc + p.juros, 0);
+  const totalJuros = parcelasLive.reduce((acc, p) => acc + jurosEfetivo(p), 0);
   const totalMulta = parcelasLive.reduce((acc, p) => acc + p.multa, 0);
 
   const parcelaBadge = (status: string) => {
@@ -558,7 +567,8 @@ function EmprestimoDetailModal({
 
   const handleEfetuarPagamento = useCallback((parcela: Parcela) => {
     const desconto = parseFloat(pagamentoDesconto) || 0;
-    const valorCorrigido = parcela.valorOriginal + parcela.juros + parcela.multa;
+    const jEfetivo = jurosEfetivo(parcela);
+    const valorCorrigido = parcela.valorOriginal + jEfetivo + parcela.multa;
     const totalPagar = Math.max(valorCorrigido - desconto, 0);
 
     if (pagamentoTab === 'parcial') {
@@ -614,17 +624,18 @@ function EmprestimoDetailModal({
   }, [pagamentoTab, pagamentoDesconto, pagamentoValorParcial, pagamentoObs, pagamentoData, pagamentoConta, updateParcela, registrarPagamento, formatCurrency, pendentesCount, closePagamentoModal]);
 
   const handleQuitarApenasJuros = useCallback((parcela: Parcela) => {
-    if (parcela.juros <= 0) { toast.info('Sem juros a quitar nesta parcela'); return; }
+    const jEfetivo = jurosEfetivo(parcela);
+    if (jEfetivo <= 0) { toast.info('Sem juros a quitar nesta parcela'); return; }
     // Zera os juros/multa, ajusta valor = valorOriginal - desconto
     const novoValor = parcela.valorOriginal - parcela.desconto;
     updateParcela.mutate(
       { id: parcela.id, data: { juros: 0, multa: 0, valor: Math.max(novoValor, 0) } },
       {
-        onSuccess: () => toast.success(`Juros da parcela ${parcela.numero} quitados (${formatCurrency(parcela.juros + parcela.multa)})`),
+        onSuccess: () => toast.success(`Juros da parcela ${parcela.numero} quitados (${formatCurrency(jEfetivo + parcela.multa)})`),
         onError: (err) => toast.error(`Erro: ${err.message}`),
       },
     );
-  }, [updateParcela, formatCurrency]);
+  }, [updateParcela, formatCurrency, jurosEfetivo]);
 
   const isBusy = updateParcela.isPending || registrarPagamento.isPending || updateEmprestimo.isPending || updateCliente.isPending;
 
@@ -731,7 +742,12 @@ function EmprestimoDetailModal({
                             {isEditing ? (
                               <Input type="number" step="0.01" className="w-24 h-8 text-xs text-right rounded-lg border-red-300 focus:border-red-500" value={editJuros} onChange={(e) => setEditJuros(e.target.value)} />
                             ) : (
-                              <span className={p.juros > 0 ? 'text-red-600 font-semibold' : 'text-muted-foreground'}>{formatCurrency(p.juros)}</span>
+                              <span className={jurosEfetivo(p) > 0 ? 'text-red-600 font-semibold' : 'text-muted-foreground'}>
+                                {formatCurrency(jurosEfetivo(p))}
+                                {p.juros === 0 && jurosEfetivo(p) > 0 && (
+                                  <span className="text-[10px] text-red-400 block">auto {diasDeAtraso(p.dataVencimento)}d</span>
+                                )}
+                              </span>
                             )}
                           </td>
                           <td className="py-3 px-2 text-right tabular-nums">
@@ -741,7 +757,7 @@ function EmprestimoDetailModal({
                               <span className={p.multa > 0 ? 'text-orange-600 font-semibold' : 'text-muted-foreground'}>{formatCurrency(p.multa)}</span>
                             )}
                           </td>
-                          <td className="py-3 px-2 text-right font-bold tabular-nums">{formatCurrency(p.valor)}</td>
+                          <td className="py-3 px-2 text-right font-bold tabular-nums">{formatCurrency(p.valorOriginal + jurosEfetivo(p) + p.multa - p.desconto)}</td>
                           <td className="py-3 px-2 text-center">{parcelaBadge(p.status)}</td>
                           <td className="py-3 px-2">
                             {isPendente && (
@@ -827,10 +843,10 @@ function EmprestimoDetailModal({
                                     >
                                       <Upload className="w-3.5 h-3.5" />
                                     </Button>
-                                    <Button size="sm" variant="outline" className="h-7 text-xs px-2 rounded-lg" title="Atribuir juros/multa manualmente" onClick={() => { setEditingParcelaId(p.id); setEditJuros(String(p.juros)); setEditMulta(String(p.multa)); }} disabled={isBusy}>
+                                    <Button size="sm" variant="outline" className="h-7 text-xs px-2 rounded-lg" title="Atribuir juros/multa manualmente" onClick={() => { setEditingParcelaId(p.id); setEditJuros(String(jurosEfetivo(p))); setEditMulta(String(p.multa)); }} disabled={isBusy}>
                                       <Percent className="w-3.5 h-3.5" />
                                     </Button>
-                                    {(p.juros > 0 || p.multa > 0) && (
+                                    {(jurosEfetivo(p) > 0 || p.multa > 0) && (
                                       <Button size="sm" variant="outline" className="h-7 text-xs px-3 rounded-lg border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30" title="Quitar apenas juros/multa" onClick={() => handleQuitarApenasJuros(p)} disabled={isBusy}>
                                         Zerar J
                                       </Button>

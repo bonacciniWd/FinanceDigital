@@ -67,14 +67,46 @@ interface MembroRedeRow {
 async function buildRedeFromClientes(
   filterRedeId?: string,
 ): Promise<MembroRedeRow[]> {
-  const { data, error } = await supabase
-    .from('clientes')
-    .select('*')
-    .order('nome');
+  // Fetch clients + active loans + parcelas in parallel
+  const [clientesRes, emprestimosRes, parcelasRes] = await Promise.all([
+    supabase.from('clientes').select('*').order('nome'),
+    supabase.from('emprestimos').select('id, cliente_id, valor, status'),
+    supabase.from('parcelas').select('cliente_id, data_vencimento, status'),
+  ]);
 
-  if (error) throw new Error(error.message);
-  const clientes = (data ?? []) as unknown as Cliente[];
+  if (clientesRes.error) throw new Error(clientesRes.error.message);
+  const clientes = (clientesRes.data ?? []) as unknown as Cliente[];
   if (clientes.length === 0) return [];
+
+  const emprestimos = (emprestimosRes.data ?? []) as unknown as { id: string; cliente_id: string; valor: number; status: string }[];
+  const parcelas = (parcelasRes.data ?? []) as unknown as { cliente_id: string; data_vencimento: string; status: string }[];
+
+  // Build loan totals per client (sum of active loans)
+  const loanTotals = new Map<string, number>();
+  for (const e of emprestimos) {
+    if (e.status === 'ativo' || e.status === 'inadimplente') {
+      loanTotals.set(e.cliente_id, (loanTotals.get(e.cliente_id) ?? 0) + e.valor);
+    }
+  }
+
+  // Derive real status from parcelas: if any pendente parcela is past due → vencido; if any due within 5 days → a_vencer; else em_dia
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const nearDays = 5;
+  const nearDate = new Date(today);
+  nearDate.setDate(nearDate.getDate() + nearDays);
+
+  const clientStatus = new Map<string, 'em_dia' | 'a_vencer' | 'vencido'>();
+  for (const p of parcelas) {
+    if (p.status !== 'pendente') continue;
+    const venc = new Date(p.data_vencimento + 'T00:00:00');
+    const current = clientStatus.get(p.cliente_id) ?? 'em_dia';
+    if (venc < today) {
+      clientStatus.set(p.cliente_id, 'vencido');
+    } else if (venc <= nearDate && current !== 'vencido') {
+      clientStatus.set(p.cliente_id, 'a_vencer');
+    }
+  }
 
   const clienteMap = new Map<string, Cliente>(clientes.map((c) => [c.id, c]));
 
@@ -145,8 +177,8 @@ async function buildRedeFromClientes(
           nome: c.nome,
           email: c.email,
           telefone: c.telefone,
-          status: c.status,
-          valor: c.valor,
+          status: clientStatus.get(c.id) ?? 'em_dia',
+          valor: loanTotals.get(c.id) ?? 0,
           bonus_acumulado: c.bonus_acumulado,
           score_interno: c.score_interno,
         },

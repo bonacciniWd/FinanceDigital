@@ -49,6 +49,7 @@ export default function RelatoriosOperacionaisPage() {
   const inadimplenciaData = useMemo(() => {
     if (!parcelas) return [];
     const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const result: { mes: string; taxa: number }[] = [];
     for (let i = meses - 1; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -58,7 +59,7 @@ export default function RelatoriosOperacionaisPage() {
         const dv = new Date(p.dataVencimento);
         return dv.getMonth() === mesNum && dv.getFullYear() === anoNum;
       });
-      const vencidas = doMes.filter((p) => p.status === 'vencida').length;
+      const vencidas = doMes.filter((p) => p.status !== 'paga' && p.status !== 'cancelada' && new Date(p.dataVencimento) < today).length;
       const taxa = doMes.length > 0 ? parseFloat(((vencidas / doMes.length) * 100).toFixed(1)) : 0;
       result.push({ mes: MESES_NOME[mesNum], taxa });
     }
@@ -115,33 +116,53 @@ export default function RelatoriosOperacionaisPage() {
     });
   }, [parcelas]);
 
-  // ── Eficiência de Cobrança por Etapa ──
+  // ── Eficiência de Cobrança por Etapa (com N1/N2/N3) ──
   const cobrancaData = useMemo(() => {
     if (!cardsCobranca) return [];
-    const etapas: { etapa: string; key: string }[] = [
-      { etapa: '1° Contato', key: 'contatado' },
-      { etapa: 'Negociação', key: 'negociacao' },
-      { etapa: 'Acordo', key: 'acordo' },
-      { etapa: 'Pago', key: 'pago' },
-      { etapa: 'Perdido', key: 'perdido' },
+    const vencidos = cardsCobranca.filter((c) => c.etapa === 'vencido');
+    const n1Cards = vencidos.filter((c) => c.diasAtraso >= 1 && c.diasAtraso <= 15);
+    const n2Cards = vencidos.filter((c) => c.diasAtraso >= 16 && c.diasAtraso <= 45);
+    const n3Cards = vencidos.filter((c) => c.diasAtraso >= 46);
+
+    type EtapaDef = { etapa: string; cards: typeof cardsCobranca; successFn: (c: typeof cardsCobranca) => number };
+    const etapas: EtapaDef[] = [
+      { etapa: 'N1 — Vencido (1-15d)', cards: n1Cards, successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
+      { etapa: 'N2 — Vencido (16-45d)', cards: n2Cards, successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
+      { etapa: 'N3 — Vencido (46d+)', cards: n3Cards, successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
+      { etapa: '1° Contato', cards: cardsCobranca.filter((c) => c.etapa === 'contatado'), successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
+      { etapa: 'Negociação', cards: cardsCobranca.filter((c) => c.etapa === 'negociacao'), successFn: (cs) => cs.filter((c) => c.tentativasContato >= 2).length },
+      { etapa: 'Acordo', cards: cardsCobranca.filter((c) => c.etapa === 'acordo'), successFn: (cs) => cs.length },
+      { etapa: 'Pago', cards: cardsCobranca.filter((c) => c.etapa === 'pago'), successFn: (cs) => cs.length },
+      { etapa: 'Perdido', cards: cardsCobranca.filter((c) => c.etapa === 'perdido'), successFn: () => 0 },
     ];
-    return etapas.map(({ etapa, key }) => {
-      const cards = cardsCobranca.filter((c) => c.etapa === key);
+    return etapas.map(({ etapa, cards, successFn }) => {
       const total = cards.length;
-      // "sucesso" = cards em etapas avançadas (acordo ou pago)
-      const sucesso =
-        key === 'pago'
-          ? total
-          : key === 'acordo'
-          ? total
-          : key === 'negociacao'
-          ? cards.filter((c) => c.tentativasContato >= 2).length
-          : key === 'contatado'
-          ? cards.filter((c) => c.tentativasContato >= 1).length
-          : 0;
+      const sucesso = successFn(cards);
       const taxa = total > 0 ? Math.round((sucesso / total) * 100) : 0;
       return { etapa, total, sucesso, taxa };
     });
+  }, [cardsCobranca]);
+
+  // ── Desempenho por Responsável ──
+  const userCobrancaData = useMemo(() => {
+    if (!cardsCobranca) return [];
+    const byUser = new Map<string, { nome: string; total: number; contatados: number; acordos: number; pagos: number; perdidos: number; n1: number; n2: number; n3: number }>();
+    for (const c of cardsCobranca) {
+      const nome = c.responsavelNome || 'Sem responsável';
+      if (!byUser.has(nome)) byUser.set(nome, { nome, total: 0, contatados: 0, acordos: 0, pagos: 0, perdidos: 0, n1: 0, n2: 0, n3: 0 });
+      const u = byUser.get(nome)!;
+      u.total++;
+      if (c.etapa === 'contatado') u.contatados++;
+      if (c.etapa === 'acordo') u.acordos++;
+      if (c.etapa === 'pago') u.pagos++;
+      if (c.etapa === 'perdido') u.perdidos++;
+      if (c.etapa === 'vencido') {
+        if (c.diasAtraso >= 1 && c.diasAtraso <= 15) u.n1++;
+        else if (c.diasAtraso >= 16 && c.diasAtraso <= 45) u.n2++;
+        else if (c.diasAtraso >= 46) u.n3++;
+      }
+    }
+    return Array.from(byUser.values()).sort((a, b) => b.total - a.total);
   }, [cardsCobranca]);
 
   // ── KPIs ──
@@ -155,8 +176,9 @@ export default function RelatoriosOperacionaisPage() {
     const empPeriodo = emprestimos.filter((e) => new Date(e.dataContrato) >= limiteInicio);
     const volumeTotal = empPeriodo.reduce((s, e) => s + e.valor, 0);
 
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const parcelasPeriodo = parcelas.filter((p) => new Date(p.dataVencimento) >= limiteInicio);
-    const vencidas = parcelasPeriodo.filter((p) => p.status === 'vencida').length;
+    const vencidas = parcelasPeriodo.filter((p) => p.status !== 'paga' && p.status !== 'cancelada' && new Date(p.dataVencimento) < today).length;
     const inadimplencia =
       parcelasPeriodo.length > 0
         ? parseFloat(((vencidas / parcelasPeriodo.length) * 100).toFixed(1))
@@ -339,7 +361,7 @@ export default function RelatoriosOperacionaisPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="cobranca" className="mt-4">
+        <TabsContent value="cobranca" className="mt-4 space-y-4">
           <Card>
             <CardHeader><CardTitle className="text-base">Eficiência por Etapa de Cobrança</CardTitle></CardHeader>
             <CardContent>
@@ -369,6 +391,68 @@ export default function RelatoriosOperacionaisPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Desempenho por Responsável */}
+          <Card>
+            <CardHeader><CardTitle className="text-base">Desempenho por Responsável</CardTitle></CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin mr-2" /> Carregando...
+                </div>
+              ) : userCobrancaData.length === 0 ? (
+                <div className="flex items-center justify-center py-8 text-muted-foreground">
+                  Sem dados de responsáveis
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th className="py-2 pr-4 font-medium">Responsável</th>
+                        <th className="py-2 px-2 font-medium text-center">Total</th>
+                        <th className="py-2 px-2 font-medium text-center text-yellow-600">N1</th>
+                        <th className="py-2 px-2 font-medium text-center text-orange-600">N2</th>
+                        <th className="py-2 px-2 font-medium text-center text-red-600">N3</th>
+                        <th className="py-2 px-2 font-medium text-center">Contatados</th>
+                        <th className="py-2 px-2 font-medium text-center">Acordos</th>
+                        <th className="py-2 px-2 font-medium text-center text-green-600">Pagos</th>
+                        <th className="py-2 px-2 font-medium text-center text-red-500">Perdidos</th>
+                        <th className="py-2 pl-2 font-medium text-center">Eficiência</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {userCobrancaData.map((u) => {
+                        const eficiencia = u.total > 0 ? Math.round(((u.pagos + u.acordos) / u.total) * 100) : 0;
+                        return (
+                          <tr key={u.nome} className="border-b last:border-0 hover:bg-muted/50">
+                            <td className="py-2 pr-4 font-medium">{u.nome}</td>
+                            <td className="py-2 px-2 text-center">{u.total}</td>
+                            <td className="py-2 px-2 text-center text-yellow-600 font-medium">{u.n1 || '-'}</td>
+                            <td className="py-2 px-2 text-center text-orange-600 font-medium">{u.n2 || '-'}</td>
+                            <td className="py-2 px-2 text-center text-red-600 font-medium">{u.n3 || '-'}</td>
+                            <td className="py-2 px-2 text-center">{u.contatados || '-'}</td>
+                            <td className="py-2 px-2 text-center">{u.acordos || '-'}</td>
+                            <td className="py-2 px-2 text-center text-green-600 font-medium">{u.pagos || '-'}</td>
+                            <td className="py-2 px-2 text-center text-red-500 font-medium">{u.perdidos || '-'}</td>
+                            <td className="py-2 pl-2 text-center">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                eficiencia >= 70 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                                : eficiencia >= 35 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                                : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                              }`}>
+                                {eficiencia}%
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </CardContent>

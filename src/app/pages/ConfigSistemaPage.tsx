@@ -10,9 +10,10 @@ import { Label } from '../components/ui/label';
 import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { Skeleton } from '../components/ui/skeleton';
-import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle } from 'lucide-react';
+import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle, Calculator } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfigSistema, useUpdateConfig } from '../hooks/useConfigSistema';
+import { JUROS_FIXO_DIA, JUROS_PERC_DIA, JUROS_LIMIAR } from '../lib/juros';
 
 export default function ConfigSistemaPage() {
   const { data: config, isLoading, isError } = useConfigSistema();
@@ -128,15 +129,15 @@ export default function ConfigSistemaPage() {
         </CardContent>
       </Card>
 
-      {/* Parâmetros financeiros */}
+      {/* Parâmetros financeiros — PIX EFI */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Percent className="w-5 h-5" />
-            Parâmetros Financeiros
+            Parâmetros Financeiros — PIX EFI
           </CardTitle>
           <CardDescription>
-            Multa e juros aplicados automaticamente nas cobranças PIX com vencimento.
+            Multa e juros aplicados automaticamente nas cobranças PIX com vencimento (EFI Bank).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -167,6 +168,36 @@ export default function ConfigSistemaPage() {
               />
               <p className="text-xs text-muted-foreground">Juros mensais aplicados pela EFI após o vencimento.</p>
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Juros automáticos por atraso (calculados no sistema) */}
+      <Card className="border-amber-200 dark:border-amber-900/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Calculator className="w-5 h-5 text-amber-600" />
+            Juros Automáticos por Atraso
+          </CardTitle>
+          <CardDescription>
+            Juros calculados automaticamente por dia sobre parcelas vencidas. Aplicados em empréstimos ativos e gestão de parcelas.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900/30 p-4">
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Dívida abaixo de R$ {JUROS_LIMIAR.toLocaleString('pt-BR')}</p>
+              <p className="text-2xl font-bold text-amber-700 dark:text-amber-400 mt-1">R$ {JUROS_FIXO_DIA},00 <span className="text-sm font-normal">/ dia</span></p>
+              <p className="text-xs text-muted-foreground mt-1">Valor fixo por dia de atraso</p>
+            </div>
+            <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-900/30 p-4">
+              <p className="text-sm font-semibold text-red-800 dark:text-red-300">Dívida a partir de R$ {JUROS_LIMIAR.toLocaleString('pt-BR')}</p>
+              <p className="text-2xl font-bold text-red-700 dark:text-red-400 mt-1">{(JUROS_PERC_DIA * 100).toFixed(0)}% <span className="text-sm font-normal">/ dia</span></p>
+              <p className="text-xs text-muted-foreground mt-1">Percentual do valor original por dia de atraso</p>
+            </div>
+          </div>
+          <div className="mt-4 p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground">
+            <p><strong>Nota:</strong> Juros são calculados automaticamente em tempo real sobre parcelas vencidas não pagas. Se um juros manual for atribuído à parcela, o cálculo automático não é aplicado. Para alterar as regras, edite o arquivo <code>src/app/lib/juros.ts</code>.</p>
           </div>
         </CardContent>
       </Card>

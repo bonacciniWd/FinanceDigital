@@ -29,19 +29,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import {
   Video,
   Camera,
-  Upload,
   CheckCircle2,
   AlertTriangle,
-  FileImage,
-  X,
   Loader2,
   Shield,
   RefreshCw,
   ExternalLink,
-  MapPin,
   Home,
-  Users,
-  User,
   ChevronRight,
   ChevronLeft,
 } from 'lucide-react';
@@ -51,7 +45,7 @@ import animSelfie from '../assets/animations/id.json';
 import animData from '../assets/animations/docs.json';
 import animSent from '../assets/animations/sent.json';
 import animWelcome from '../assets/animations/init.json';
-import type { IdentityVerificationRow, ReferenceContact } from '../lib/database.types';
+import type { IdentityVerificationRow } from '../lib/database.types';
 
 const MIN_VIDEO_DURATION = 5;
 const MAX_VIDEO_DURATION = 30;
@@ -68,22 +62,22 @@ const INTRO_SLIDES = [
   },
   {
     animation: animSelfie,
-    title: 'Vídeo Selfie e Documentos',
-    description: 'Grave um vídeo lendo uma frase de verificação e envie fotos da frente e verso do seu documento (CNH ou RG).',
+    title: 'Vídeo Selfie',
+    description: 'Grave um vídeo lendo uma frase de verificação, olhando para a câmera.',
   },
   {
     animation: animData,
-    title: 'Endereço e Referências',
-    description: 'Envie comprovante de endereço, informe seu endereço completo e 3 contatos de referência familiar.',
+    title: 'Vídeo da Residência',
+    description: 'Grave um vídeo da fachada da sua residência mostrando o número.',
   },
   {
     animation: animSent,
     title: 'Revisão e Envio',
-    description: 'Por fim, grave um vídeo da fachada da sua residência, revise tudo e envie para análise. Leva apenas alguns minutos!',
+    description: 'Revise seus vídeos, confirme a chave PIX e envie para análise. Leva apenas alguns minutos!',
   },
 ] as const;
 
-type Step = 'loading' | 'intro' | 'video' | 'documents' | 'proof_address' | 'address_refs' | 'residence_video' | 'review' | 'submitted' | 'error' | 'expired';
+type Step = 'loading' | 'intro' | 'video' | 'residence_video' | 'review' | 'submitted' | 'error' | 'expired';
 
 // Detectar navegador in-app (WhatsApp, Instagram, Facebook, etc.)
 function isInAppBrowser(): boolean {
@@ -137,67 +131,12 @@ export default function VerifyIdentityPage() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Document state
-  const [docFrontPreview, setDocFrontPreview] = useState<string | null>(null);
-  const [docBackPreview, setDocBackPreview] = useState<string | null>(null);
+  // Document state removed — docs moved to ClientesPage
 
-  // Proof of address state
-  const [proofOfAddressPreview, setProofOfAddressPreview] = useState<string | null>(null);
-
-  // Address & reference contacts state
-  const [addrRua, setAddrRua] = useState('');
-  const [addrNumero, setAddrNumero] = useState('');
-  const [addrBairro, setAddrBairro] = useState('');
-  const [addrEstado, setAddrEstado] = useState('');
-  const [addrCidade, setAddrCidade] = useState('');
-  const [addrCep, setAddrCep] = useState('');
-  const [cidadesLista, setCidadesLista] = useState<string[]>([]);
-  const [cidadesLoading, setCidadesLoading] = useState(false);
-  const [cidadeSearch, setCidadeSearch] = useState('');
-
-  const ESTADOS_BR = [
-    'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG',
-    'PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO',
-  ] as const;
-
-  useEffect(() => {
-    if (!addrEstado) { setCidadesLista([]); setAddrCidade(''); return; }
-    let cancelled = false;
-    setCidadesLoading(true);
-    setAddrCidade('');
-    setCidadeSearch('');
-    fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${addrEstado}/municipios?orderBy=nome`)
-      .then(r => r.json())
-      .then((data: Array<{ nome: string }>) => {
-        if (!cancelled) setCidadesLista(data.map(m => m.nome));
-      })
-      .catch(() => { if (!cancelled) setCidadesLista([]); })
-      .finally(() => { if (!cancelled) setCidadesLoading(false); });
-    return () => { cancelled = true; };
-  }, [addrEstado]);
-
-  const cidadesFiltradas = cidadeSearch
-    ? cidadesLista.filter(c => c.toLowerCase().includes(cidadeSearch.toLowerCase()))
-    : cidadesLista;
-
-  const formatCep = (v: string) => {
-    const digits = v.replace(/\D/g, '').slice(0, 8);
-    return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
-  };
-
-  const clientAddress = [addrRua.trim(), addrNumero.trim(), addrBairro.trim(), addrCidade.trim(), addrEstado, addrCep.trim()]
-    .filter(Boolean)
-    .join(', ');
-  const addressFilled = addrRua.trim() && addrNumero.trim() && addrBairro.trim() && addrEstado && addrCidade && addrCep.replace(/\D/g, '').length === 8;
-  const [clientProfissao, setClientProfissao] = useState('');
+  // PIX key state (kept for verification review)
   const [pixKey, setPixKey] = useState('');
   const [pixKeyType, setPixKeyType] = useState('cpf');
   const [pixKeyConfirmed, setPixKeyConfirmed] = useState(false);
-  const [referenceContacts, setReferenceContacts] = useState<ReferenceContact[]>([
-    { name: '', phone: '', relationship: '' },
-    { name: '', phone: '', relationship: '' },
-    { name: '', phone: '', relationship: '' },
-  ]);
 
   // Residence video state
   const [residenceVideoUrl, setResidenceVideoUrl] = useState<string | null>(null);
@@ -221,9 +160,6 @@ export default function VerifyIdentityPage() {
   // Paths de arquivos já enviados ao storage
   const [uploadedPaths, setUploadedPaths] = useState<{
     video?: string;
-    docFront?: string;
-    docBack?: string;
-    proofOfAddress?: string;
     residenceVideo?: string;
   }>({});
 
@@ -302,11 +238,8 @@ export default function VerifyIdentityPage() {
       if (residenceTimerRef.current) clearInterval(residenceTimerRef.current);
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       if (residenceVideoUrl) URL.revokeObjectURL(residenceVideoUrl);
-      if (docFrontPreview) URL.revokeObjectURL(docFrontPreview);
-      if (docBackPreview) URL.revokeObjectURL(docBackPreview);
-      if (proofOfAddressPreview) URL.revokeObjectURL(proofOfAddressPreview);
     };
-  }, [videoUrl, residenceVideoUrl, docFrontPreview, docBackPreview, proofOfAddressPreview]);
+  }, [videoUrl, residenceVideoUrl]);
 
   // ── Upload progressivo: envia cada arquivo ao storage imediatamente ──
   // Safari iOS faz GC agressivo de Blob backing-data (WebKitBlobResource error 1).
@@ -518,77 +451,7 @@ export default function VerifyIdentityPage() {
 
   // ── Document Upload ──────────────────────────────────────
 
-  const handleDocUpload = useCallback(async (side: 'front' | 'back', file: File) => {
-    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
-      toast.error('Formato não aceito. Use JPG, PNG ou WebP.');
-      return;
-    }
-    if (file.size > MAX_DOC_SIZE) {
-      toast.error('Arquivo muito grande. Máximo 5MB.');
-      return;
-    }
-    const previewUrl = URL.createObjectURL(file);
-    if (side === 'front') {
-      if (docFrontPreview) URL.revokeObjectURL(docFrontPreview);
-      setDocFrontPreview(previewUrl);
-    } else {
-      if (docBackPreview) URL.revokeObjectURL(docBackPreview);
-      setDocBackPreview(previewUrl);
-    }
-    // Upload progressivo
-    const ext = file.name.split('.').pop() ?? 'jpg';
-    const key = side === 'front' ? 'docFront' : 'docBack';
-    try { await uploadToStorage(`doc-${side}.${ext}`, file, key); } catch { /* toast já exibido */ }
-  }, [docFrontPreview, docBackPreview, uploadToStorage]);
-
-  const removeDoc = useCallback((side: 'front' | 'back') => {
-    if (side === 'front') {
-      if (docFrontPreview) URL.revokeObjectURL(docFrontPreview);
-      setUploadedPaths((prev) => ({ ...prev, docFront: undefined }));
-      setDocFrontPreview(null);
-    } else {
-      if (docBackPreview) URL.revokeObjectURL(docBackPreview);
-      setUploadedPaths((prev) => ({ ...prev, docBack: undefined }));
-      setDocBackPreview(null);
-    }
-  }, [docFrontPreview, docBackPreview]);
-
-  // ── Proof of Address Upload ──────────────────────────────
-
-  const handleProofOfAddressUpload = useCallback(async (file: File) => {
-    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
-      toast.error('Formato não aceito. Use JPG, PNG ou WebP.');
-      return;
-    }
-    if (file.size > MAX_DOC_SIZE) {
-      toast.error('Arquivo muito grande. Máximo 5MB.');
-      return;
-    }
-    const previewUrl = URL.createObjectURL(file);
-    if (proofOfAddressPreview) URL.revokeObjectURL(proofOfAddressPreview);
-    setProofOfAddressPreview(previewUrl);
-    // Upload progressivo
-    const ext = file.name.split('.').pop() ?? 'jpg';
-    try { await uploadToStorage(`proof-of-address.${ext}`, file, 'proofOfAddress'); } catch { /* toast já exibido */ }
-  }, [proofOfAddressPreview, uploadToStorage]);
-
-  const removeProofOfAddress = useCallback(() => {
-    if (proofOfAddressPreview) URL.revokeObjectURL(proofOfAddressPreview);
-    setUploadedPaths((prev) => ({ ...prev, proofOfAddress: undefined }));
-    setProofOfAddressPreview(null);
-  }, [proofOfAddressPreview]);
-
-  // ── Reference Contact Helpers ────────────────────────────
-
-  const updateContact = useCallback((index: number, field: keyof ReferenceContact, value: string) => {
-    setReferenceContacts((prev) => {
-      const updated = [...prev];
-      updated[index] = { ...updated[index], [field]: value };
-      return updated;
-    });
-  }, []);
-
-  const allContactsFilled = referenceContacts.every((c) => c.name.trim() && c.phone.trim() && c.relationship.trim());
+  // ── Document/address upload handlers removed — moved to ClientesPage ──
 
   // ── Residence Video Recording ────────────────────────────
 
@@ -712,9 +575,7 @@ export default function VerifyIdentityPage() {
 
   const handleSubmit = async () => {
     if (!verification
-      || !uploadedPaths.video || !uploadedPaths.docFront || !uploadedPaths.docBack
-      || !uploadedPaths.proofOfAddress || !uploadedPaths.residenceVideo
-      || !addressFilled || !clientProfissao.trim() || !allContactsFilled
+      || !uploadedPaths.video || !uploadedPaths.residenceVideo
       || !pixKey.trim() || !pixKeyConfirmed) return;
 
     setUploading(true);
@@ -727,17 +588,7 @@ export default function VerifyIdentityPage() {
         .from('identity_verifications')
         .update({
           video_url: uploadedPaths.video,
-          document_front_url: uploadedPaths.docFront,
-          document_back_url: uploadedPaths.docBack,
-          proof_of_address_url: uploadedPaths.proofOfAddress,
           residence_video_url: uploadedPaths.residenceVideo,
-          client_address: clientAddress.trim(),
-          profissao_informada: clientProfissao.trim(),
-          reference_contacts: referenceContacts.map((c) => ({
-            name: c.name.trim(),
-            phone: c.phone.trim(),
-            relationship: c.relationship.trim(),
-          })),
           status: 'pending' as const,
           updated_at: new Date().toISOString(),
         })
@@ -767,13 +618,7 @@ export default function VerifyIdentityPage() {
         performed_by: verification.user_id,
         details: {
           video_path: uploadedPaths.video,
-          doc_front_path: uploadedPaths.docFront,
-          doc_back_path: uploadedPaths.docBack,
-          proof_of_address_path: uploadedPaths.proofOfAddress,
           residence_video_path: uploadedPaths.residenceVideo,
-          client_address: clientAddress.trim(),
-          profissao_informada: clientProfissao.trim(),
-          reference_contacts_count: referenceContacts.length,
           pix_key: pixKey.trim(),
           pix_key_type: pixKeyType,
         },
@@ -875,11 +720,11 @@ export default function VerifyIdentityPage() {
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
         {/* Step indicator */}
         <div className="flex items-center gap-2">
-          {['intro', 'video', 'documents', 'proof_address', 'address_refs', 'residence_video', 'review'].map((s, i) => (
+          {['intro', 'video', 'residence_video', 'review'].map((s, i) => (
             <div key={s} className="flex items-center gap-2 flex-1">
               <div
                 className={`h-2 flex-1 rounded-full transition-colors ${
-                  ['intro', 'video', 'documents', 'proof_address', 'address_refs', 'residence_video', 'review'].indexOf(step) >= i
+                  ['intro', 'video', 'residence_video', 'review'].indexOf(step) >= i
                     ? 'bg-primary'
                     : 'bg-muted'
                 }`}
@@ -1120,7 +965,7 @@ export default function VerifyIdentityPage() {
                       <RefreshCw className="h-4 w-4 mr-2" />
                       Regravar
                     </Button>
-                    <Button className="flex-1" onClick={() => setStep('documents')} disabled={!uploadedPaths.video || uploadingFile === 'video'}>
+                    <Button className="flex-1" onClick={() => setStep('residence_video')} disabled={!uploadedPaths.video || uploadingFile === 'video'}>
                       {uploadingFile === 'video' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Enviando...</> : 'Próximo'}
                     </Button>
                   </>
@@ -1195,339 +1040,6 @@ export default function VerifyIdentityPage() {
           </Card>
         )}
 
-        {/* Step: Document Upload */}
-        {step === 'documents' && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileImage className="h-5 w-5" />
-                Documentos
-              </CardTitle>
-              <CardDescription>
-                Envie foto da frente e do verso do seu documento (CNH ou RG).
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Front */}
-              <div>
-                <p className="text-sm font-medium mb-2">Frente do Documento</p>
-                {docFrontPreview ? (
-                  <div className="relative rounded-lg overflow-hidden border">
-                    <img src={docFrontPreview} alt="Frente" className="w-full h-48 object-contain bg-muted" />
-                    <button
-                      onClick={() => removeDoc('front')}
-                      className="absolute top-2 right-2 h-6 w-6 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors">
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Clique para selecionar</span>
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleDocUpload('front', file);
-                      }}
-                    />
-                  </label>
-                )}
-              </div>
-
-              {/* Back */}
-              <div>
-                <p className="text-sm font-medium mb-2">Verso do Documento</p>
-                {docBackPreview ? (
-                  <div className="relative rounded-lg overflow-hidden border">
-                    <img src={docBackPreview} alt="Verso" className="w-full h-48 object-contain bg-muted" />
-                    <button
-                      onClick={() => removeDoc('back')}
-                      className="absolute top-2 right-2 h-6 w-6 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors">
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">Clique para selecionar</span>
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleDocUpload('back', file);
-                      }}
-                    />
-                  </label>
-                )}
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setStep('video')}>
-                  Voltar
-                </Button>
-                <Button
-                  className="flex-1"
-                  disabled={!uploadedPaths.docFront || !uploadedPaths.docBack || !!uploadingFile}
-                  onClick={() => setStep('proof_address')}
-                >
-                  {uploadingFile === 'docFront' || uploadingFile === 'docBack' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Enviando...</> : 'Próximo'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Step: Proof of Address */}
-        {step === 'proof_address' && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MapPin className="h-5 w-5" />
-                Comprovante de Endereço
-              </CardTitle>
-              <CardDescription>
-                Envie uma foto do comprovante de endereço <strong>no seu nome</strong> e atualizado.
-                Exemplos: conta de luz, água, telefone, internet ou correspondência bancária.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {proofOfAddressPreview ? (
-                <div className="relative rounded-lg overflow-hidden border">
-                  <img src={proofOfAddressPreview} alt="Comprovante de Endereço" className="w-full h-64 object-contain bg-muted" />
-                  <button
-                    onClick={removeProofOfAddress}
-                    className="absolute top-2 right-2 h-6 w-6 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center gap-2 p-8 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors">
-                  <Upload className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Clique para selecionar o comprovante</span>
-                  <span className="text-xs text-muted-foreground">JPG, PNG ou WebP — Máximo 5MB</span>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) handleProofOfAddressUpload(file);
-                    }}
-                  />
-                </label>
-              )}
-
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setStep('documents')}>
-                  Voltar
-                </Button>
-                <Button
-                  className="flex-1"
-                  disabled={!uploadedPaths.proofOfAddress || uploadingFile === 'proofOfAddress'}
-                  onClick={() => setStep('address_refs')}
-                >
-                  {uploadingFile === 'proofOfAddress' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Enviando...</> : 'Próximo'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Step: Address + Reference Contacts */}
-        {step === 'address_refs' && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Users className="h-5 w-5" />
-                Endereço e Referências
-              </CardTitle>
-              <CardDescription>
-                Informe seu endereço completo e 3 contatos de referência familiar.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Profissão */}
-              <div className="space-y-2">
-                <Label htmlFor="profissao" className="flex items-center gap-2">
-                  <User className="h-4 w-4" />
-                  Profissão
-                </Label>
-                <Input
-                  id="profissao"
-                  placeholder="Informe sua profissão (ex: Engenheiro, Médico, Autônomo...)"
-                  value={clientProfissao}
-                  onChange={(e) => setClientProfissao(e.target.value)}
-                />
-              </div>
-
-              {/* Address */}
-              <div className="space-y-3">
-                <Label className="flex items-center gap-2">
-                  <MapPin className="h-4 w-4" />
-                  Endereço Completo
-                </Label>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2">
-                    <Label htmlFor="addr-rua" className="text-xs">Rua / Logradouro</Label>
-                    <Input id="addr-rua" placeholder="Ex: Rua das Flores" value={addrRua} onChange={(e) => setAddrRua(e.target.value)} />
-                  </div>
-                  <div>
-                    <Label htmlFor="addr-numero" className="text-xs">Número</Label>
-                    <Input id="addr-numero" placeholder="123" value={addrNumero} onChange={(e) => setAddrNumero(e.target.value)} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <Label htmlFor="addr-bairro" className="text-xs">Bairro</Label>
-                    <Input id="addr-bairro" placeholder="Centro" value={addrBairro} onChange={(e) => setAddrBairro(e.target.value)} />
-                  </div>
-                  <div>
-                    <Label htmlFor="addr-cep" className="text-xs">CEP</Label>
-                    <Input id="addr-cep" placeholder="00000-000" value={addrCep} onChange={(e) => setAddrCep(formatCep(e.target.value))} inputMode="numeric" />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Estado</Label>
-                    <Select value={addrEstado} onValueChange={setAddrEstado}>
-                      <SelectTrigger className="h-9">
-                        <SelectValue placeholder="UF" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ESTADOS_BR.map(uf => (
-                          <SelectItem key={uf} value={uf}>{uf}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-xs">Cidade</Label>
-                  {!addrEstado ? (
-                    <Input placeholder="Selecione o estado primeiro" disabled className="h-9" />
-                  ) : cidadesLoading ? (
-                    <Input placeholder="Carregando cidades..." disabled className="h-9" />
-                  ) : (
-                    <Select value={addrCidade} onValueChange={setAddrCidade}>
-                      <SelectTrigger className="h-9">
-                        <SelectValue placeholder="Selecione a cidade" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <div className="px-2 pb-2 pt-1 sticky top-0 bg-popover">
-                          <Input
-                            placeholder="Buscar cidade..."
-                            className="h-7 text-xs"
-                            value={cidadeSearch}
-                            onChange={(e) => setCidadeSearch(e.target.value)}
-                            autoFocus
-                          />
-                        </div>
-                        {cidadesFiltradas.length === 0 && (
-                          <p className="text-xs text-muted-foreground text-center py-2">Nenhuma cidade encontrada</p>
-                        )}
-                        {cidadesFiltradas.map(cidade => (
-                          <SelectItem key={cidade} value={cidade}>{cidade}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-              </div>
-
-              {/* Reference contacts */}
-              <div className="space-y-4">
-                <Label className="flex items-center gap-2">
-                  <Users className="h-4 w-4" />
-                  Contatos de Referência (3 familiares)
-                </Label>
-                {referenceContacts.map((contact, idx) => (
-                  <div key={idx} className="p-4 rounded-lg border space-y-3">
-                    <p className="text-sm font-medium text-muted-foreground">Referência {idx + 1}</p>
-                    <div className="grid grid-cols-1 gap-3">
-                      <Input
-                        placeholder="Nome completo"
-                        value={contact.name}
-                        onChange={(e) => updateContact(idx, 'name', e.target.value)}
-                      />
-                      <Input
-                        placeholder="Telefone com DDD (ex: 11999999999)"
-                        value={contact.phone}
-                        onChange={(e) => updateContact(idx, 'phone', e.target.value)}
-                        type="tel"
-                      />
-                      <Input
-                        placeholder="Parentesco (ex: Mãe, Pai, Irmão)"
-                        value={contact.relationship}
-                        onChange={(e) => updateContact(idx, 'relationship', e.target.value)}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* PIX Key */}
-              <div className="space-y-3">
-                <Label className="flex items-center gap-2">
-                  💰 Chave PIX para Recebimento
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  Informe sua chave PIX. É para ela que o valor aprovado será enviado automaticamente.
-                </p>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <Label className="text-xs">Tipo da Chave</Label>
-                    <Select value={pixKeyType} onValueChange={setPixKeyType}>
-                      <SelectTrigger className="h-9">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="cpf">CPF</SelectItem>
-                        <SelectItem value="cnpj">CNPJ</SelectItem>
-                        <SelectItem value="email">E-mail</SelectItem>
-                        <SelectItem value="phone">Telefone</SelectItem>
-                        <SelectItem value="random">Aleatória</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="col-span-2">
-                    <Label className="text-xs">Chave PIX</Label>
-                    <Input
-                      placeholder={
-                        pixKeyType === 'cpf' ? '000.000.000-00' :
-                        pixKeyType === 'cnpj' ? '00.000.000/0000-00' :
-                        pixKeyType === 'email' ? 'seu@email.com' :
-                        pixKeyType === 'phone' ? '+5511999999999' :
-                        'Chave aleatória'
-                      }
-                      value={pixKey}
-                      onChange={(e) => setPixKey(e.target.value)}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setStep('proof_address')}>
-                  Voltar
-                </Button>
-                <Button
-                  className="flex-1"
-                  disabled={!addressFilled || !clientProfissao.trim() || !allContactsFilled || !pixKey.trim()}
-                  onClick={() => setStep('residence_video')}
-                >
-                  Próximo
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
         {/* Step: Residence Video */}
         {step === 'residence_video' && (
           <Card>
@@ -1541,13 +1053,6 @@ export default function VerifyIdentityPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {clientAddress && (
-                <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
-                  <p className="text-sm text-muted-foreground mb-1">Endereço informado:</p>
-                  <p className="text-sm font-medium">{clientAddress}</p>
-                </div>
-              )}
-
               <div className="relative aspect-[9/16] max-h-[70vh] mx-auto bg-black rounded-lg overflow-hidden">
                 {!residenceVideoUrl && (
                   <video
@@ -1643,7 +1148,7 @@ export default function VerifyIdentityPage() {
               )}
 
               <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setStep('address_refs')}>
+                <Button variant="outline" className="flex-1" onClick={() => setStep('video')}>
                   Voltar
                 </Button>
               </div>
@@ -1677,50 +1182,6 @@ export default function VerifyIdentityPage() {
                 )}
               </div>
 
-              {/* Document previews */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-sm font-medium mb-2">Doc. Frente</p>
-                  {docFrontPreview && (
-                    <img src={docFrontPreview} alt="Frente" className="w-full h-32 object-contain rounded-lg border bg-muted" />
-                  )}
-                </div>
-                <div>
-                  <p className="text-sm font-medium mb-2">Doc. Verso</p>
-                  {docBackPreview && (
-                    <img src={docBackPreview} alt="Verso" className="w-full h-32 object-contain rounded-lg border bg-muted" />
-                  )}
-                </div>
-              </div>
-
-              {/* Proof of address */}
-              <div>
-                <p className="text-sm font-medium mb-2">Comprovante de Endereço</p>
-                {proofOfAddressPreview && (
-                  <img src={proofOfAddressPreview} alt="Comprovante" className="w-full h-48 object-contain rounded-lg border bg-muted" />
-                )}
-              </div>
-
-              {/* Address */}
-              <div>
-                <p className="text-sm font-medium mb-1">Endereço</p>
-                <p className="text-sm text-muted-foreground">{clientAddress}</p>
-              </div>
-
-              {/* Reference contacts */}
-              <div>
-                <p className="text-sm font-medium mb-2">Contatos de Referência</p>
-                <div className="space-y-2">
-                  {referenceContacts.map((c, i) => (
-                    <div key={i} className="p-2 rounded bg-muted/50 text-sm">
-                      <span className="font-medium">{c.name}</span>
-                      <span className="text-muted-foreground"> — {c.relationship}</span>
-                      <span className="text-muted-foreground ml-2">({c.phone})</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
               {/* Residence video */}
               <div>
                 <p className="text-sm font-medium mb-2">Vídeo da Fachada ({residenceDuration}s)</p>
@@ -1737,14 +1198,38 @@ export default function VerifyIdentityPage() {
               {/* PIX Key Confirmation */}
               <div className="p-4 rounded-lg border-2 border-amber-300 bg-amber-50 dark:bg-amber-950/30 space-y-3">
                 <p className="text-sm font-medium flex items-center gap-2">💰 Chave PIX para Recebimento</p>
-                <div className="text-sm space-y-1">
-                  <p><span className="text-muted-foreground">Tipo:</span> <span className="font-medium">{
-                    pixKeyType === 'cpf' ? 'CPF' :
-                    pixKeyType === 'cnpj' ? 'CNPJ' :
-                    pixKeyType === 'email' ? 'E-mail' :
-                    pixKeyType === 'phone' ? 'Telefone' : 'Aleatória'
-                  }</span></p>
-                  <p><span className="text-muted-foreground">Chave:</span> <span className="font-medium">{pixKey}</span></p>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <Label className="text-xs">Tipo da Chave</Label>
+                      <Select value={pixKeyType} onValueChange={setPixKeyType}>
+                        <SelectTrigger className="h-9">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="cpf">CPF</SelectItem>
+                          <SelectItem value="cnpj">CNPJ</SelectItem>
+                          <SelectItem value="email">E-mail</SelectItem>
+                          <SelectItem value="phone">Telefone</SelectItem>
+                          <SelectItem value="random">Aleatória</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs">Chave PIX</Label>
+                      <Input
+                        placeholder={
+                          pixKeyType === 'cpf' ? '000.000.000-00' :
+                          pixKeyType === 'cnpj' ? '00.000.000/0000-00' :
+                          pixKeyType === 'email' ? 'seu@email.com' :
+                          pixKeyType === 'phone' ? '+5511999999999' :
+                          'Chave aleatória'
+                        }
+                        value={pixKey}
+                        onChange={(e) => setPixKey(e.target.value)}
+                      />
+                    </div>
+                  </div>
                 </div>
                 <label className="flex items-start gap-3 cursor-pointer pt-2 border-t border-amber-200 dark:border-amber-800">
                   <input
@@ -1781,7 +1266,7 @@ export default function VerifyIdentityPage() {
                 <Button
                   className="flex-1"
                   onClick={handleSubmit}
-                  disabled={uploading || !pixKeyConfirmed}
+                  disabled={uploading || !pixKeyConfirmed || !pixKey.trim()}
                 >
                   {uploading ? (
                     <>

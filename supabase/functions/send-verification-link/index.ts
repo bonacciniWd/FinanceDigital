@@ -203,7 +203,28 @@ Deno.serve(async (req: Request) => {
     const phrases = [
       `Eu, titular do CPF informado, confirmo minha identidade para análise de crédito.`,
       `Autorizo a verificação dos meus dados para liberação de crédito.`,
-      `Declaro ser o titular desta solicitação de crédito junto à FinanceDigital.`,
+      `Declaro ser o titular desta solicitação de crédito junto à Fintech.`,
+      `Confirmo que estou solicitando crédito de forma voluntária e consciente.`,
+      `Eu autorizo a consulta dos meus dados cadastrais para fins de análise financeira.`,
+      `Declaro que todas as informações fornecidas nesta solicitação são verdadeiras.`,
+      `Confirmo ser o titular do CPF e dos documentos apresentados nesta verificação.`,
+      `Autorizo a Fintech a realizar a análise do meu perfil de crédito.`,
+      `Eu, por livre vontade, solicito a liberação de crédito e confirmo minha identidade.`,
+      `Declaro que estou ciente dos termos desta solicitação de crédito.`,
+      `Confirmo que sou o responsável por esta solicitação e autorizo o processamento.`,
+      `Eu atesto que esta verificação está sendo feita por mim, titular dos documentos.`,
+      `Autorizo o uso dos meus dados pessoais para análise e concessão de crédito.`,
+      `Declaro ser o legítimo solicitante deste crédito junto à plataforma Fintech.`,
+      `Confirmo minha identidade e autorizo a verificação para liberação do crédito solicitado.`,
+      `Eu reconheço e aceito os termos da análise de crédito da Fintech.`,
+      `Declaro que esta solicitação é feita por mim e assumo total responsabilidade.`,
+      `Autorizo a consulta e verificação dos meus dados para aprovação de crédito.`,
+      `Confirmo que estou realizando esta verificação de identidade pessoalmente.`,
+      `Eu, titular desta conta, autorizo a análise financeira e verificação de identidade.`,
+      `Declaro que os dados e documentos enviados pertencem exclusivamente a mim.`,
+      `Confirmo a veracidade de todas as informações prestadas nesta solicitação de crédito.`,
+      `Autorizo expressamente a Fintech a validar minha identidade e dados financeiros.`,
+      `Eu declaro estar ciente de que esta verificação é obrigatória para liberação do crédito.`,
     ];
     const verificationPhrase = phrases[Math.floor(Math.random() * phrases.length)];
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
@@ -256,7 +277,7 @@ Deno.serve(async (req: Request) => {
     // ── Montar link e mensagem ───────────────────────────
     const verifyUrl = `${siteUrl}/verify-identity?analise_id=${analise_id}`;
 
-    const mensagem = `🔐 *Verificação de Identidade — FinanceDigital*\n\nOlá, *${analise.cliente_nome}*!\n\nPara dar continuidade à sua análise de crédito, precisamos que você confirme sua identidade.\n\n📋 *O que você vai precisar:*\n• Gravar um vídeo-selfie lendo uma frase de verificação\n• Enviar foto do seu documento (frente e verso)\n\n⏰ *Prazo:* Este link expira em 48 horas.\n\n👉 Clique no link abaixo para iniciar:\n${verifyUrl}\n\n_Se você não solicitou esta verificação, ignore esta mensagem._`;
+    const mensagem = `🔐 *Verificação de Identidade — Fintech*\n\nOlá, *${analise.cliente_nome}*!\n\nPara dar continuidade à sua análise de crédito, precisamos que você confirme sua identidade.\n\n📋 *O que você vai precisar:*\n• Gravar um vídeo-selfie lendo uma frase de verificação\n• Enviar foto do seu documento (frente e verso)\n\n⏰ *Prazo:* Este link expira em 48 horas.\n\n👉 Clique no link abaixo para iniciar:\n${verifyUrl}\n\n_Se você não solicitou esta verificação, ignore esta mensagem._`;
 
     // ── Enviar via Evolution API ─────────────────────────
     // Normalizar número: apenas dígitos + garantir DDI 55

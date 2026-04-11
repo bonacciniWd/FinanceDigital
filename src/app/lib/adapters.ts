@@ -101,6 +101,10 @@ export function dbClienteToView(
     grupo: c.grupo ?? undefined,
     pix_key: c.pix_key ?? undefined,
     pix_key_type: c.pix_key_type ?? undefined,
+    documentoFrenteUrl: c.documento_frente_url ?? undefined,
+    documentoVersoUrl: c.documento_verso_url ?? undefined,
+    comprovanteEnderecoUrl: c.comprovante_endereco_url ?? undefined,
+    contatosReferencia: (c.contatos_referencia as any[]) ?? undefined,
     indicadoPor: c.indicado_por ?? undefined,
     indicou: indicou ?? [],
   };

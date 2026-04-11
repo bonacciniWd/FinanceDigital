@@ -33,6 +33,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Parcela } from '../lib/view-types';
 import type { ParcelaUpdate } from '../lib/database.types';
+import { calcularJurosAtraso, diasDeAtraso } from '../lib/juros';
 
 /* ── Types ───────────────────────────────────────────────── */
 
@@ -618,9 +619,22 @@ export default function GestaoParcelasPage() {
                                       <td className="py-2 px-2 text-center font-mono text-xs">{p.numero}</td>
                                       <td className="py-2 px-2 text-right">{formatCurrency(p.valorOriginal)}</td>
                                       <td className="py-2 px-2 text-right text-red-600 dark:text-red-400">
-                                        {p.juros + p.multa > 0 ? `+${formatCurrency(p.juros + p.multa)}` : '—'}
+                                        {(() => {
+                                          const jAuto = p.status !== 'paga' && p.status !== 'cancelada' && p.juros === 0
+                                            ? calcularJurosAtraso(p.valorOriginal, diasDeAtraso(p.dataVencimento))
+                                            : p.juros;
+                                          const total = jAuto + p.multa;
+                                          return total > 0 ? `+${formatCurrency(total)}` : '—';
+                                        })()}
                                       </td>
-                                      <td className="py-2 px-2 text-right font-semibold">{formatCurrency(p.valor)}</td>
+                                      <td className="py-2 px-2 text-right font-semibold">
+                                        {(() => {
+                                          const jAuto = p.status !== 'paga' && p.status !== 'cancelada' && p.juros === 0
+                                            ? calcularJurosAtraso(p.valorOriginal, diasDeAtraso(p.dataVencimento))
+                                            : p.juros;
+                                          return formatCurrency(p.valorOriginal + jAuto + p.multa - p.desconto);
+                                        })()}
+                                      </td>
                                       <td className="py-2 px-2 text-center text-xs">{new Date(p.dataVencimento).toLocaleDateString('pt-BR')}</td>
                                       <td className="py-2 px-2 text-center text-xs">
                                         {p.dataPagamento ? new Date(p.dataPagamento).toLocaleDateString('pt-BR') : '—'}

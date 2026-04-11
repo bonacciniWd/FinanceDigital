@@ -47,3 +47,37 @@ export async function getCurrentUserId(): Promise<string | null> {
   return user?.id ?? null;
 }
 
+// ── Session keep-alive on tab visibility change ─────────
+// Browsers throttle timers on hidden tabs, which can cause the
+// Supabase auto-refresh to miss the JWT renewal window.
+// When the user returns, we proactively refresh the session so
+// subsequent queries don't fail with an expired token.
+if (typeof document !== 'undefined') {
+  let hiddenSince = 0;
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'hidden') {
+      hiddenSince = Date.now();
+      return;
+    }
+
+    // Tab became visible — only refresh if hidden > 60 s
+    const elapsed = Date.now() - hiddenSince;
+    if (elapsed < 60_000) return;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const expiresAt = (session.expires_at ?? 0) * 1000;
+      // If token expires within 5 min, force refresh now
+      if (expiresAt - Date.now() < 5 * 60_000) {
+        console.log('[Supabase] Refreshing session after tab was hidden for', Math.round(elapsed / 1000), 's');
+        await supabase.auth.refreshSession();
+      }
+    } catch (e) {
+      console.warn('[Supabase] Session refresh on visibility change failed:', e);
+    }
+  });
+}
+

@@ -61,18 +61,30 @@ import type { KanbanCobrancaView, Emprestimo } from '../lib/view-types';
 import type { KanbanCobrancaEtapa } from '../lib/database.types';
 
 interface ColumnDef {
-  id: KanbanCobrancaEtapa;
+  id: string;
   title: string;
   dotColor: string;
 }
 
+/** Virtual column IDs → real DB etapa */
+const VIRTUAL_ETAPA_MAP: Record<string, KanbanCobrancaEtapa> = {
+  vencido_n1: 'vencido',
+  vencido_n2: 'vencido',
+  vencido_n3: 'vencido',
+};
+
+const columnToEtapa = (colId: string): KanbanCobrancaEtapa =>
+  VIRTUAL_ETAPA_MAP[colId] ?? (colId as KanbanCobrancaEtapa);
+
 const COLUMNS: ColumnDef[] = [
-  { id: 'a_vencer', title: 'A VENCER', dotColor: '#eab308' },
-  { id: 'vencido', title: 'VENCIDOS', dotColor: '#ef4444' },
-  { id: 'contatado', title: 'CONTATADO', dotColor: '#3b82f6' },
-  { id: 'negociacao', title: 'NEGOCIAÇÃO', dotColor: '#f97316' },
-  { id: 'acordo', title: 'ACORDOS', dotColor: '#22c55e' },
-  { id: 'pago', title: 'PAGOS', dotColor: '#10b981' },
+  { id: 'a_vencer',    title: 'A VENCER',         dotColor: '#eab308' },
+  { id: 'vencido_n1',  title: 'N1 · 1-15 dias',   dotColor: '#f97316' },
+  { id: 'vencido_n2',  title: 'N2 · 16-45 dias',  dotColor: '#ef4444' },
+  { id: 'vencido_n3',  title: 'N3 · 46+ dias',     dotColor: '#991b1b' },
+  { id: 'contatado',   title: 'CONTATADO',         dotColor: '#3b82f6' },
+  { id: 'negociacao',  title: 'NEGOCIAÇÃO',        dotColor: '#f97316' },
+  { id: 'acordo',      title: 'ACORDOS',           dotColor: '#22c55e' },
+  { id: 'pago',        title: 'PAGOS',             dotColor: '#10b981' },
 ];
 
 export default function KanbanCobrancaPage() {
@@ -116,6 +128,7 @@ export default function KanbanCobrancaPage() {
   const { data: instancias = [] } = useInstancias();
   const { data: templatesCobranca = [] } = useTemplatesByCategoria('cobranca');
   const { data: templatesNegociacao = [] } = useTemplatesByCategoria('negociacao');
+  const { data: templatesLembrete = [] } = useTemplatesByCategoria('lembrete');
   const moverCard = useMoverCardCobranca();
   const registrarContato = useRegistrarContato();
   const updateCard = useUpdateCardCobranca();
@@ -133,8 +146,8 @@ export default function KanbanCobrancaPage() {
   );
 
   const allTemplates = useMemo(
-    () => [...templatesCobranca, ...templatesNegociacao],
-    [templatesCobranca, templatesNegociacao]
+    () => [...templatesCobranca, ...templatesNegociacao, ...templatesLembrete],
+    [templatesCobranca, templatesNegociacao, templatesLembrete]
   );
 
   // Sync automático na montagem (uma vez)
@@ -202,7 +215,15 @@ export default function KanbanCobrancaPage() {
   const cardsByEtapa = useMemo(() => {
     const map: Record<string, KanbanCobrancaView[]> = {};
     for (const col of COLUMNS) {
-      map[col.id] = filteredCards.filter((c) => c.etapa === col.id);
+      if (col.id === 'vencido_n1') {
+        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 1 && c.diasAtraso <= 15);
+      } else if (col.id === 'vencido_n2') {
+        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 16 && c.diasAtraso <= 45);
+      } else if (col.id === 'vencido_n3') {
+        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 46);
+      } else {
+        map[col.id] = filteredCards.filter((c) => c.etapa === col.id);
+      }
     }
     return map;
   }, [filteredCards]);
@@ -240,9 +261,8 @@ export default function KanbanCobrancaPage() {
     if (!cardId) return;
 
     const card = allCards.find((c) => c.id === cardId);
-    if (!card || card.etapa === columnId) return;
-
-    const novaEtapa = columnId as KanbanCobrancaEtapa;
+    const novaEtapa = columnToEtapa(columnId);
+    if (!card || card.etapa === novaEtapa) return;
     moverCard.mutate(
       { id: cardId, etapa: novaEtapa },
       {
@@ -581,33 +601,48 @@ export default function KanbanCobrancaPage() {
                         <CardContent className="p-4">
                           <div className="space-y-2">
                             <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <div className="font-semibold text-sm text-foreground">{card.clienteNome}</div>
-                                <div className="text-xs text-muted-foreground mt-0.5">{card.clienteEmail}</div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-semibold text-sm text-foreground truncate">{card.clienteNome}</div>
+                                <div className="text-xs text-muted-foreground mt-0.5 truncate">{card.clienteTelefone}</div>
                               </div>
-                              <span className="text-lg"></span>
+                              {card.diasAtraso > 0 && (
+                                <Badge variant="destructive" className="text-[10px] px-1.5 py-0 ml-1 shrink-0">
+                                  {card.diasAtraso}d
+                                </Badge>
+                              )}
                             </div>
                             <div className="space-y-1 text-xs">
                               <div className="flex justify-between">
                                 <span className="text-muted-foreground">Valor:</span>
                                 <span className="font-semibold text-foreground">{formatCurrency(card.valorDivida)}</span>
                               </div>
-                              {card.diasAtraso > 0 && (
-                                <div className="flex justify-between">
-                                  <span className="text-muted-foreground">Atraso:</span>
-                                  <span className="font-semibold text-red-600 dark:text-red-400">{card.diasAtraso} dias</span>
-                                </div>
-                              )}
                               {(() => {
                                 const emps = emprestimosByCliente.get(card.clienteId) ?? [];
                                 const ativos = emps.filter((e) => e.status === 'ativo' || e.status === 'inadimplente');
                                 if (ativos.length === 0) return null;
-                                const totalEmps = ativos.reduce((s, e) => s + e.valor, 0);
+                                const totalParcelas = ativos.reduce((s, e) => s + e.parcelas, 0);
+                                const totalPagas = ativos.reduce((s, e) => s + e.parcelasPagas, 0);
+                                const proxVenc = ativos
+                                  .map((e) => e.proximoVencimento)
+                                  .filter(Boolean)
+                                  .sort()[0];
                                 return (
-                                  <div className="flex justify-between">
-                                    <span className="text-muted-foreground">Empréstimos:</span>
-                                    <span className="font-medium text-foreground">{ativos.length}x · {formatCurrency(totalEmps)}</span>
-                                  </div>
+                                  <>
+                                    <div className="flex justify-between">
+                                      <span className="text-muted-foreground">Empréstimos:</span>
+                                      <span className="font-medium text-foreground">{ativos.length}x · {formatCurrency(ativos.reduce((s, e) => s + e.valor, 0))}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-muted-foreground">Parcelas:</span>
+                                      <span className="font-medium text-foreground">{totalPagas}/{totalParcelas}</span>
+                                    </div>
+                                    {proxVenc && (
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Próx. venc.:</span>
+                                        <span className="font-medium text-foreground">{new Date(proxVenc).toLocaleDateString('pt-BR')}</span>
+                                      </div>
+                                    )}
+                                  </>
                                 );
                               })()}
                               {card.tentativasContato > 0 && (
@@ -616,9 +651,21 @@ export default function KanbanCobrancaPage() {
                                   <span className="font-medium text-foreground">{card.tentativasContato}x</span>
                                 </div>
                               )}
-                              {card.responsavelNome !== 'Não atribuído' && (
-                                <div className="flex items-center gap-1 mt-1">
-                                  <UserCheck className="w-3 h-3 text-muted-foreground" />
+                              {card.ultimoContato && (() => {
+                                const dataStr = new Date(card.ultimoContato).toLocaleDateString('pt-BR');
+                                const userMatch = card.observacao?.match(/por (.+)$/);
+                                return (
+                                  <div className="flex items-center gap-1 mt-1 text-[10px]">
+                                    <UserCheck className="w-3 h-3 text-muted-foreground shrink-0" />
+                                    <span className="text-muted-foreground truncate">
+                                      {dataStr}{userMatch ? ` — ${userMatch[1]}` : ''}
+                                    </span>
+                                  </div>
+                                );
+                              })()}
+                              {!card.ultimoContato && card.responsavelNome !== 'Não atribuído' && (
+                                <div className="flex items-center gap-1 mt-1 text-[10px]">
+                                  <UserCheck className="w-3 h-3 text-muted-foreground shrink-0" />
                                   <span className="text-muted-foreground">{card.responsavelNome}</span>
                                 </div>
                               )}
@@ -735,7 +782,14 @@ export default function KanbanCobrancaPage() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Etapa:</span>
-                  <Badge>{COLUMNS.find((c) => c.id === selectedCard.etapa)?.title}</Badge>
+                  <Badge>{(() => {
+                    if (selectedCard.etapa === 'vencido') {
+                      if (selectedCard.diasAtraso <= 15) return 'N1 · 1-15 dias';
+                      if (selectedCard.diasAtraso <= 45) return 'N2 · 16-45 dias';
+                      return 'N3 · 46+ dias';
+                    }
+                    return COLUMNS.find((c) => c.id === selectedCard.etapa)?.title ?? selectedCard.etapa;
+                  })()}</Badge>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Responsável:</span>
@@ -798,7 +852,7 @@ export default function KanbanCobrancaPage() {
                               <span className="text-muted-foreground">Parcela:</span>
                               <span className="font-medium">{formatCurrency(emp.valorParcela)}</span>
                             </div>
-                            <div className="flex justify-between">
+                            <div className="flex justify-between">  
                               <span className="text-muted-foreground">Venc.:</span>
                               <span className="font-medium">{new Date(emp.proximoVencimento).toLocaleDateString('pt-BR')}</span>
                             </div>
@@ -832,6 +886,69 @@ export default function KanbanCobrancaPage() {
                   </div>
                 );
               })()}
+
+              {/* ── Envio Rápido via Templates ──────────────── */}
+              {allTemplates.length > 0 && instanciasConectadas.length > 0 && (
+                <div className="space-y-2 border-t pt-3">
+                  <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                    <Send className="w-4 h-4 text-muted-foreground" />
+                    Envio Rápido
+                  </label>
+                  {instanciasConectadas.length > 1 && (
+                    <Select
+                      value={negInstanciaId || instanciasConectadas[0]?.id}
+                      onValueChange={setNegInstanciaId}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Instância WhatsApp" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {instanciasConectadas.map((inst) => (
+                          <SelectItem key={inst.id} value={inst.id}>
+                            {inst.instance_name} ({inst.phone_number || 'sem número'})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <div className="grid grid-cols-1 gap-1.5 max-h-40 overflow-y-auto">
+                    {allTemplates.map((tpl) => {
+                      const catColors: Record<string, string> = {
+                        cobranca: 'text-red-600 border-red-200 hover:bg-red-50 dark:hover:bg-red-900/20',
+                        lembrete: 'text-amber-600 border-amber-200 hover:bg-amber-50 dark:hover:bg-amber-900/20',
+                        negociacao: 'text-orange-600 border-orange-200 hover:bg-orange-50 dark:hover:bg-orange-900/20',
+                      };
+                      return (
+                        <Button
+                          key={tpl.id}
+                          size="sm"
+                          variant="outline"
+                          className={`h-auto py-1.5 px-2 text-xs justify-start ${catColors[tpl.categoria] || ''}`}
+                          disabled={enviarWhatsapp.isPending}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // Preencher variáveis do template
+                            let msg = tpl.mensagemMasculino;
+                            msg = msg.replace(/\{nome\}/gi, selectedCard.clienteNome);
+                            msg = msg.replace(/\{valor\}/gi, formatCurrency(selectedCard.valorDivida));
+                            msg = msg.replace(/\{dias_atraso\}/gi, String(selectedCard.diasAtraso));
+                            const instId = negInstanciaId || instanciasConectadas[0]?.id;
+                            if (!instId) { toast.error('Nenhuma instância conectada'); return; }
+                            handleEnviarWhatsappCobranca(selectedCard, instId, msg);
+                          }}
+                        >
+                          <Badge variant="outline" className="text-[9px] px-1 mr-1.5 shrink-0">{tpl.categoria}</Badge>
+                          <span className="truncate">{tpl.nome}</span>
+                          <Send className="w-3 h-3 ml-auto shrink-0 opacity-50" />
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Clique para enviar automaticamente via WhatsApp e mover para Contatado
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2 border-t pt-3">
                 <label className="text-sm font-medium text-foreground">Registrar contato</label>

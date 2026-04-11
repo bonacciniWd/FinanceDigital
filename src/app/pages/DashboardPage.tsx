@@ -16,18 +16,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Input } from '../components/ui/input';
-import { TrendingUp, TrendingDown, Users, Percent, DollarSign, Search, MessageSquare, Eye, Edit, Loader2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, Percent, DollarSign, Search, MessageSquare, Eye, Edit, Loader2, CheckCircle2 } from 'lucide-react';
 import { LWCChart } from '../components/charts/LWCChart';
 import { DonutChart } from '../components/charts/DonutChart';
 import { useClientes } from '../hooks/useClientes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
-import { useDashboardStats, useFinancialSummary } from '../hooks/useDashboardStats';
+import { useParcelas } from '../hooks/useParcelas';
+import { useDashboardStats } from '../hooks/useDashboardStats';
 import { StatusBadge } from '../components/StatusBadge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 
 const DONUT_COLORS = ['#22c55e', '#eab308', '#ef4444'];
 
-const PERIODO_MESES: Record<string, number> = { '7': 1, '30': 2, '90': 3, '365': 12 };
+const PERIODO_MESES: Record<string, number> = { '1': 0, '7': 1, '30': 2, '90': 3, '365': 12 };
 
 export default function DashboardPage() {
   const [selectedClient, setSelectedClient] = useState<any>(null);
@@ -38,8 +39,9 @@ export default function DashboardPage() {
 
   const { data: clientes = [] } = useClientes();
   const { data: emprestimos = [] } = useEmprestimos();
+  const { data: parcelasPagas = [] } = useParcelas('paga');
+  const { data: todasParcelas = [] } = useParcelas();
   const { data: stats, isLoading: loadingStats } = useDashboardStats();
-  const { data: evoluacaoFinanceira = [] } = useFinancialSummary(PERIODO_MESES[periodo] ?? 2);
 
   // Derivar inadimplência real a partir dos empréstimos
   const clienteIdsInadimplentes = new Set(
@@ -47,16 +49,66 @@ export default function DashboardPage() {
   );
   const vencidosReal = clienteIdsInadimplentes.size;
 
-  // KPIs reais do RPC (com fallback derivado dos empréstimos)
-  const totalCarteira = stats?.total_carteira ?? 0;
+  // KPIs reais — carteira inclui ativo + inadimplente
+  const carteiraAtiva = emprestimos
+    .filter(e => e.status === 'ativo' || e.status === 'inadimplente')
+    .reduce((sum, e) => sum + e.valor, 0);
+  const emprestimosAtivos = emprestimos.filter(e => e.status === 'ativo' || e.status === 'inadimplente').length;
   const taxaInadimplenciaReal = clientes.length > 0
     ? Math.round((vencidosReal / clientes.length) * 100)
     : (stats?.taxa_inadimplencia ?? 0);
+
+  // Pagamentos recebidos (filtrados pelo período selecionado)
+  const periodoMs = Number(periodo) * 24 * 60 * 60 * 1000;
+  const cutoffDate = new Date(Date.now() - periodoMs);
+  const pagamentosRecebidos = parcelasPagas
+    .filter(p => p.dataPagamento && new Date(p.dataPagamento) >= cutoffDate)
+    .reduce((sum, p) => sum + p.valor, 0);
+  const qtdPagamentos = parcelasPagas
+    .filter(p => p.dataPagamento && new Date(p.dataPagamento) >= cutoffDate)
+    .length;
+
   const clientesAtivos = stats?.total_clientes ?? clientes.length;
   // Taxa conversão = aprovados / (aprovados + recusados) — derivado de clientes em_dia / total
   const taxaConversao = clientesAtivos > 0
     ? Math.round(((stats?.clientes_em_dia ?? 0) / clientesAtivos) * 100)
     : 0;
+
+  // Evolução Receita x Inadimplência — calculado client-side a partir de parcelas reais
+  // Ambos em R$ para compartilhar a mesma escala Y de forma coerente.
+  // Inadimplência = parcelas não-pagas cujo vencimento já passou (fonte de verdade real,
+  // não depende do campo status='vencida' que pode não estar atualizado).
+  const evoluacaoFinanceira = useMemo(() => {
+    const meses = PERIODO_MESES[periodo] ?? 2;
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - meses);
+    cutoff.setDate(1);
+    const today = new Date();
+
+    // Agrupar parcelas por mês (YYYY-MM)
+    const buckets = new Map<string, { receita: number; inadimplencia: number }>();
+    for (const p of todasParcelas) {
+      const dv = new Date(p.dataVencimento);
+      if (dv < cutoff) continue;
+      const key = `${dv.getFullYear()}-${String(dv.getMonth() + 1).padStart(2, '0')}`;
+      const b = buckets.get(key) || { receita: 0, inadimplencia: 0 };
+      if (p.status === 'paga') {
+        b.receita += p.valor;
+      } else if (p.status !== 'cancelada' && dv < today) {
+        // Parcela vencida (não paga e data já passou)
+        b.inadimplencia += p.valor;
+      }
+      buckets.set(key, b);
+    }
+
+    return [...buckets.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, b]) => ({
+        mes: `${key}-01`, // YYYY-MM-DD for LWCChart
+        receita: b.receita,
+        inadimplencia: b.inadimplencia,
+      }));
+  }, [todasParcelas, periodo]);
 
   // Effective status per client — empréstimos are source of truth for 'vencido'
   const getEffectiveStatus = (c: typeof clientes[0]) =>
@@ -144,6 +196,7 @@ export default function DashboardPage() {
                 <SelectValue placeholder="Período" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="1">Hoje</SelectItem>
                 <SelectItem value="7">Últimos 7 dias</SelectItem>
                 <SelectItem value="30">Últimos 30 dias</SelectItem>
                 <SelectItem value="90">Últimos 90 dias</SelectItem>
@@ -200,9 +253,9 @@ export default function DashboardPage() {
             <DollarSign className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{loadingStats ? '...' : formatCurrency(totalCarteira)}</div>
+            <div className="text-2xl font-bold">{loadingStats ? '...' : formatCurrency(carteiraAtiva)}</div>
             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-              {stats?.total_emprestimos_ativos ?? 0} empréstimos ativos
+              {emprestimosAtivos} empréstimos ativos
             </p>
           </CardContent>
         </Card>
@@ -225,14 +278,14 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Clientes Ativos
+              Pagamentos Recebidos
             </CardTitle>
-            <Users className="w-4 h-4 text-muted-foreground" />
+            <CheckCircle2 className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{loadingStats ? '...' : clientesAtivos.toLocaleString('pt-BR')}</div>
+            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{formatCurrency(pagamentosRecebidos)}</div>
             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-              {stats?.clientes_a_vencer ?? 0} a vencer
+              {qtdPagamentos} parcelas pagas
             </p>
           </CardContent>
         </Card>
@@ -270,9 +323,9 @@ export default function DashboardPage() {
                   data: evoluacaoFinanceira.map((m) => ({ time: m.mes, value: m.receita })),
                 },
                 {
-                  label: 'Inadimplência (%)',
+                  label: 'Inadimplência (R$)',
                   color: '#ef4444',
-                  type: 'line',
+                  type: 'area',
                   data: evoluacaoFinanceira.map((m) => ({ time: m.mes, value: m.inadimplencia })),
                 },
               ]}

@@ -371,10 +371,9 @@ Deno.serve(async (req: Request) => {
     if (phone.length <= 11) phone = "55" + phone;
 
     try {
-      // A Evolution API aceita base64 no campo media
-      const mediaUrl = qrCodeBase64.startsWith("data:")
-        ? qrCodeBase64
-        : `data:image/png;base64,${qrCodeBase64}`;
+      // Extrair base64 puro (sem prefixo data:...) + encoding: true
+      // A Evolution API rejeita data URIs — aceita apenas base64 puro com encoding: true
+      const rawBase64 = qrCodeBase64.replace(/^data:[^;]+;base64,/, "");
 
       const res = await fetch(`${baseUrl}/message/sendMedia/${instancia.instance_name}`, {
         method: "POST",
@@ -386,9 +385,10 @@ Deno.serve(async (req: Request) => {
           number: phone,
           mediaMessage: {
             mediatype: "image",
-            media: mediaUrl,
+            media: rawBase64,
             caption,
             fileName: "qrcode-pix.png",
+            encoding: true,
           },
         }),
       });

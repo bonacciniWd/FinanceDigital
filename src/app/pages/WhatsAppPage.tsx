@@ -299,7 +299,7 @@ function MessageContent({ msg, onImageClick, localMediaUrls }: {
             <img
               src={mediaUrl}
               alt="Imagem"
-              className="max-w-full rounded-lg max-h-64 object-cover cursor-zoom-in hover:opacity-90 transition-opacity"
+              className="max-w-full min-w-[200px] rounded-lg max-h-96 object-cover cursor-zoom-in hover:opacity-90 transition-opacity"
               loading="lazy"
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).nextElementSibling?.classList.remove('hidden'); }}
             />
@@ -398,6 +398,13 @@ export default function WhatsAppPage() {
   const [showClienteMenu, setShowClienteMenu] = useState(false);
   const [clienteSearchTerm, setClienteSearchTerm] = useState('');
   const [showNewInstance, setShowNewInstance] = useState(false);
+  // Doc assignment to client profile
+  const [docAssignOpen, setDocAssignOpen] = useState(false);
+  const [docAssignMediaUrl, setDocAssignMediaUrl] = useState<string | null>(null);
+  const [docAssignType, setDocAssignType] = useState<'documento_frente_url' | 'documento_verso_url' | 'comprovante_endereco_url'>('documento_frente_url');
+  const [docAssignClienteId, setDocAssignClienteId] = useState<string | null>(null);
+  const [docAssignSearch, setDocAssignSearch] = useState('');
+  const [docAssignLoading, setDocAssignLoading] = useState(false);
   const [newInstanceForm, setNewInstanceForm] = useState({
     instance_name: '',
     evolution_url: '',
@@ -499,6 +506,55 @@ export default function WhatsAppPage() {
   const { data: stats } = useEstatisticasWhatsapp(activeInstanciaId || undefined);
 
   const activeInstancia = instancias.find((i) => i.id === activeInstanciaId);
+
+  // ── Doc Assignment Handler ─────────────────────────────
+  const handleDocAssign = useCallback(async () => {
+    if (!docAssignClienteId || !docAssignMediaUrl) return;
+    setDocAssignLoading(true);
+    try {
+      // Download media from URL
+      const res = await fetch(docAssignMediaUrl);
+      if (!res.ok) throw new Error('Falha ao baixar mídia');
+      const blob = await res.blob();
+      const ext = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
+      const fileName = docAssignType === 'documento_frente_url' ? 'doc-frente'
+        : docAssignType === 'documento_verso_url' ? 'doc-verso'
+        : 'comprovante-endereco';
+      const path = `${docAssignClienteId}/${fileName}.${ext}`;
+
+      // Upload to client-documents bucket
+      const { error: uploadErr } = await supabase.storage.from('client-documents').upload(path, blob, {
+        cacheControl: '3600',
+        upsert: true,
+        contentType: blob.type,
+      });
+      if (uploadErr) throw uploadErr;
+
+      // Update client record
+      const { error: dbErr } = await (supabase.from('clientes') as any).update({ [docAssignType]: path }).eq('id', docAssignClienteId);
+      if (dbErr) throw dbErr;
+
+      const label = docAssignType === 'documento_frente_url' ? 'Doc. Frente'
+        : docAssignType === 'documento_verso_url' ? 'Doc. Verso'
+        : 'Comp. Endereço';
+      const clienteNome = allClientes.find(c => c.id === docAssignClienteId)?.nome ?? '';
+      toast.success(`${label} atribuído a ${clienteNome}`);
+      setDocAssignOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['clientes'] });
+    } catch (err) {
+      toast.error(`Erro: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDocAssignLoading(false);
+    }
+  }, [docAssignClienteId, docAssignMediaUrl, docAssignType, allClientes, queryClient]);
+
+  const openDocAssign = useCallback((mediaUrl: string) => {
+    setDocAssignMediaUrl(mediaUrl);
+    setDocAssignClienteId(linkedClienteId ?? null);
+    setDocAssignSearch('');
+    setDocAssignType('documento_frente_url');
+    setDocAssignOpen(true);
+  }, [linkedClienteId]);
 
   // Auto-scroll ao receber nova mensagem
   useEffect(() => {
@@ -1497,11 +1553,26 @@ export default function WhatsAppPage() {
                           <div className="space-y-3 max-w-2xl mx-auto">
                             {mensagens.map((msg) => (
                               <div key={msg.id} className={`flex ${msg.direcao === 'saida' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[75%] rounded-2xl px-3 py-2 shadow-sm ${
+                                <div className={`max-w-[75%] rounded-2xl px-3 py-2 shadow-sm relative group ${
                                   msg.direcao === 'saida'
                                     ? 'bg-[#d9fdd3] dark:bg-[#005c4b] text-gray-800 dark:text-gray-100 rounded-tr-sm'
                                     : 'bg-white dark:bg-[#202c33] text-gray-800 dark:text-gray-100 rounded-tl-sm'
                                 }`}>
+                                  {/* Assign doc button for incoming image/document messages */}
+                                  {msg.direcao === 'entrada' && (msg.tipo === 'image' || msg.tipo === 'document') && (() => {
+                                    const m = (msg.metadata ?? {}) as Record<string, unknown>;
+                                    const mUrl = typeof m.media_url === 'string' ? m.media_url : null;
+                                    return mUrl ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => openDocAssign(mUrl)}
+                                        className="absolute top-1 right-1 z-10 bg-blue-600 hover:bg-blue-700 text-white rounded-full p-1.5 shadow-lg transition-colors"
+                                        title="Atribuir ao cliente"
+                                      >
+                                        <UserPlus className="h-4 w-4" />
+                                      </button>
+                                    ) : null;
+                                  })()}
                                   <MessageContent
                                 msg={{ tipo: msg.tipo, conteudo: msg.conteudo, metadata: (msg.metadata ?? {}) as Record<string, unknown> }}
                                 onImageClick={setLightboxImg}
@@ -1636,6 +1707,73 @@ export default function WhatsAppPage() {
               className="w-full h-auto max-h-[85vh] object-contain rounded-lg"
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Doc Assignment Dialog */}
+      <Dialog open={docAssignOpen} onOpenChange={setDocAssignOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Atribuir Documento ao Cliente</DialogTitle>
+            <DialogDescription>Selecione o cliente e o tipo de documento para vincular esta mídia ao cadastro.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {/* Preview */}
+            {docAssignMediaUrl && (
+              <img src={docAssignMediaUrl} alt="Mídia" className="w-full h-40 object-contain rounded-lg border bg-muted" />
+            )}
+            {/* Document type */}
+            <div>
+              <label className="text-sm font-medium mb-1 block">Tipo de Documento</label>
+              <select
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={docAssignType}
+                onChange={(e) => setDocAssignType(e.target.value as typeof docAssignType)}
+              >
+                <option value="documento_frente_url">Documento Frente (RG/CNH)</option>
+                <option value="documento_verso_url">Documento Verso</option>
+                <option value="comprovante_endereco_url">Comprovante de Endereço</option>
+              </select>
+            </div>
+            {/* Client search */}
+            <div>
+              <label className="text-sm font-medium mb-1 block">Cliente</label>
+              <Input
+                placeholder="Buscar por nome, telefone ou CPF..."
+                value={docAssignSearch}
+                onChange={(e) => setDocAssignSearch(e.target.value)}
+                className="mb-2"
+              />
+              <div className="max-h-40 overflow-y-auto border rounded-md">
+                {allClientes
+                  .filter(c => {
+                    if (!docAssignSearch.trim()) return true;
+                    const q = docAssignSearch.toLowerCase();
+                    return c.nome.toLowerCase().includes(q) || c.telefone.includes(q) || (c.cpf && c.cpf.includes(q));
+                  })
+                  .slice(0, 15)
+                  .map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent flex items-center justify-between ${docAssignClienteId === c.id ? 'bg-accent' : ''}`}
+                      onClick={() => setDocAssignClienteId(c.id)}
+                    >
+                      <span>{c.nome}</span>
+                      <span className="text-xs text-muted-foreground">{c.telefone}</span>
+                    </button>
+                  ))
+                }
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDocAssignOpen(false)}>Cancelar</Button>
+            <Button onClick={handleDocAssign} disabled={!docAssignClienteId || docAssignLoading}>
+              {docAssignLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Atribuir
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
