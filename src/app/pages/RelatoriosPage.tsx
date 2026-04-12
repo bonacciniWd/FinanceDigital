@@ -20,6 +20,7 @@ import { useParcelas } from '../hooks/useParcelas';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useMembrosRede } from '../hooks/useRedeIndicacoes';
 import { useAnalises } from '../hooks/useAnaliseCredito';
+import { valorCorrigido } from '../lib/juros';
 import { toast } from 'sonner';
 
 interface Relatorio {
@@ -93,6 +94,21 @@ export default function RelatoriosPage() {
 
   const loading = loadingClientes || loadingParcelas || loadingMembros || loadingEmprestimos || loadingAnalises;
 
+  // Mapa: clienteId → dívida corrigida (soma das parcelas abertas com juros)
+  const clienteDebitoMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!parcelas) return map;
+    for (const p of parcelas) {
+      if (p.status === 'paga' || p.status === 'cancelada') continue;
+      const corrigido = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
+      map.set(p.clienteId, (map.get(p.clienteId) ?? 0) + corrigido);
+    }
+    return map;
+  }, [parcelas]);
+
+  /** Retorna o débito corrigido do cliente (parcelas abertas com juros) ou c.valor como fallback */
+  const debitoCliente = (c: { id: string; valor: number }) => clienteDebitoMap.get(c.id) ?? c.valor;
+
   // ── Clientes por Status ──
   const clientesPorStatus = useMemo(() => {
     if (!clientes) return { emDia: 0, aVencer: 0, vencidos: 0 };
@@ -103,30 +119,30 @@ export default function RelatoriosPage() {
     };
   }, [clientes]);
 
-  // ── Valores por Status ──
+  // ── Valores por Status (com juros corrigidos) ──
   const valoresPorStatus = useMemo(() => {
     if (!clientes) return { emDia: 0, aVencer: 0, vencidos: 0 };
     return {
       emDia: clientes
         .filter((c) => c.status === 'em_dia')
-        .reduce((s, c) => s + c.valor, 0),
+        .reduce((s, c) => s + debitoCliente(c), 0),
       aVencer: clientes
         .filter((c) => c.status === 'a_vencer')
-        .reduce((s, c) => s + c.valor, 0),
+        .reduce((s, c) => s + debitoCliente(c), 0),
       vencidos: clientes
         .filter((c) => c.status === 'vencido')
-        .reduce((s, c) => s + c.valor, 0),
+        .reduce((s, c) => s + debitoCliente(c), 0),
     };
-  }, [clientes]);
+  }, [clientes, clienteDebitoMap]);
 
-  // ── Top 5 Devedores (clientes vencidos com maior valor) ──
+  // ── Top 5 Devedores (clientes vencidos com maior dívida corrigida) ──
   const topDevedores = useMemo(() => {
     if (!clientes) return [];
     return clientes
       .filter((c) => c.status === 'vencido')
-      .sort((a, b) => b.valor - a.valor)
+      .sort((a, b) => debitoCliente(b) - debitoCliente(a))
       .slice(0, 5);
-  }, [clientes]);
+  }, [clientes, clienteDebitoMap]);
 
   // ── Indicações do Mês ──
   const indicacoesMes = useMemo(() => {
@@ -156,7 +172,7 @@ export default function RelatoriosPage() {
     const taxaInadimplencia =
       totalClientes > 0 ? ((qtdInadimplentes / totalClientes) * 100).toFixed(1) : '0';
     const parcelasVencidas = parcelas.filter((p) => p.status === 'vencida');
-    const valorEmAtraso = parcelasVencidas.reduce((s, p) => s + p.valor, 0);
+    const valorEmAtraso = parcelasVencidas.reduce((s, p) => s + valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total, 0);
     const mediaDiasAtraso =
       inadimplentes.length > 0
         ? Math.round(
@@ -164,7 +180,7 @@ export default function RelatoriosPage() {
               inadimplentes.length
           )
         : 0;
-    const top5 = inadimplentes.sort((a, b) => b.valor - a.valor).slice(0, 5);
+    const top5 = inadimplentes.sort((a, b) => debitoCliente(b) - debitoCliente(a)).slice(0, 5);
     return {
       totalClientes,
       qtdInadimplentes,
@@ -173,7 +189,7 @@ export default function RelatoriosPage() {
       mediaDiasAtraso,
       top5,
     };
-  }, [clientes, parcelas]);
+  }, [clientes, parcelas, clienteDebitoMap]);
 
   // ── Fluxo de Caixa Mensal ──
   const fluxoCaixaPreview = useMemo(() => {
@@ -243,15 +259,15 @@ export default function RelatoriosPage() {
     });
     const semContato = inativos.filter((c) => !c.ultimoContato);
     const comContatoAntigo = inativos.filter((c) => c.ultimoContato);
-    const valorTotal = inativos.reduce((s, c) => s + c.valor, 0);
+    const valorTotal = inativos.reduce((s, c) => s + debitoCliente(c), 0);
     return {
       total: inativos.length,
       semContato: semContato.length,
       comContatoAntigo: comContatoAntigo.length,
       valorTotal,
-      lista: inativos.sort((a, b) => b.valor - a.valor).slice(0, 10),
+      lista: inativos.sort((a, b) => debitoCliente(b) - debitoCliente(a)).slice(0, 10),
     };
-  }, [clientes]);
+  }, [clientes, clienteDebitoMap]);
 
   // ── Análise de Crédito ──
   const creditoPreview = useMemo(() => {
@@ -292,11 +308,11 @@ export default function RelatoriosPage() {
     if (!clientes) return;
     downloadCsv(
       'clientes_por_status.csv',
-      ['Nome', 'Status', 'Valor', 'Dias Atraso', 'Email', 'Telefone'],
+      ['Nome', 'Status', 'Valor Corrigido', 'Dias Atraso', 'Email', 'Telefone'],
       clientes.map((c) => [
         c.nome,
         c.status,
-        String(c.valor),
+        String(debitoCliente(c)),
         String(c.diasAtraso ?? 0),
         c.email,
         c.telefone,
@@ -308,10 +324,10 @@ export default function RelatoriosPage() {
     if (!topDevedores.length) return;
     downloadCsv(
       'top_devedores.csv',
-      ['Nome', 'Valor', 'Dias Atraso', 'Telefone'],
+      ['Nome', 'Valor Corrigido', 'Dias Atraso', 'Telefone'],
       topDevedores.map((c) => [
         c.nome,
-        String(c.valor),
+        String(debitoCliente(c)),
         String(c.diasAtraso ?? 0),
         c.telefone,
       ])
@@ -345,7 +361,7 @@ export default function RelatoriosPage() {
         const inad = clientes.filter((c) => c.status === 'vencido');
         downloadCsv(`inadimplencia_${agora}.csv`,
           ['Nome', 'Valor', 'Dias Atraso', 'Telefone', 'Email', 'Último Contato'],
-          inad.map((c) => [c.nome, String(c.valor), String(c.diasAtraso ?? 0), c.telefone, c.email, c.ultimoContato ?? ''])
+          inad.map((c) => [c.nome, String(debitoCliente(c)), String(c.diasAtraso ?? 0), c.telefone, c.email, c.ultimoContato ?? ''])
         );
         break;
       }
@@ -382,7 +398,7 @@ export default function RelatoriosPage() {
         }) ?? [];
         downloadCsv(`clientes_inativos_${agora}.csv`,
           ['Nome', 'Telefone', 'Email', 'Status', 'Valor', 'Último Contato'],
-          inat.map((c) => [c.nome, c.telefone, c.email, c.status, String(c.valor), c.ultimoContato ?? 'Nunca'])
+          inat.map((c) => [c.nome, c.telefone, c.email, c.status, String(debitoCliente(c)), c.ultimoContato ?? 'Nunca'])
         );
         break;
       }
@@ -546,7 +562,7 @@ export default function RelatoriosPage() {
                     <div key={c.id} className="flex justify-between">
                       <span className="truncate mr-2">{c.nome}</span>
                       <span className="font-semibold whitespace-nowrap">
-                        {formatCurrency(c.valor)}
+                        {formatCurrency(debitoCliente(c))}
                       </span>
                     </div>
                   ))
@@ -661,7 +677,7 @@ export default function RelatoriosPage() {
                       ) : (
                         <ol className="space-y-1 text-sm">
                           {inadimplenciaPreview.top5.map((c, i) => (
-                            <li key={c.id}>{i + 1}. {c.nome} - {formatCurrency(c.valor)} ({c.diasAtraso ?? 0} dias)</li>
+                            <li key={c.id}>{i + 1}. {c.nome} - {formatCurrency(debitoCliente(c))} ({c.diasAtraso ?? 0} dias)</li>
                           ))}
                         </ol>
                       )}
@@ -855,7 +871,7 @@ export default function RelatoriosPage() {
                                   <td className="p-2 font-medium">{c.nome}</td>
                                   <td className="p-2">{c.telefone}</td>
                                   <td className="p-2">{c.ultimoContato ? new Date(c.ultimoContato).toLocaleDateString('pt-BR') : 'Nunca'}</td>
-                                  <td className="p-2 text-right font-semibold">{formatCurrency(c.valor)}</td>
+                                  <td className="p-2 text-right font-semibold">{formatCurrency(debitoCliente(c))}</td>
                                 </tr>
                               ))}
                             </tbody>

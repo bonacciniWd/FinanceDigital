@@ -8,6 +8,7 @@
  * @see database.types para tipagem completa
  */
 import { supabase } from '../lib/supabase';
+import { valorCorrigido } from '../lib/juros';
 import type {
   KanbanCobrancaComCliente,
   KanbanCobrancaInsert,
@@ -195,12 +196,13 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
   const empIds = emprestimos.map((e) => e.id);
   let parcelasVencidas: Array<{
     id: string; emprestimo_id: string; cliente_id: string;
-    valor: number; data_vencimento: string; status: string;
+    valor: number; valor_original: number; juros: number; multa: number; desconto: number;
+    data_vencimento: string; status: string;
   }> = [];
   if (empIds.length > 0) {
     const { data: parcelas, error: parErr } = await supabase
       .from('parcelas')
-      .select('id, emprestimo_id, cliente_id, valor, data_vencimento, status')
+      .select('id, emprestimo_id, cliente_id, valor, valor_original, juros, multa, desconto, data_vencimento, status')
       .in('emprestimo_id', empIds)
       .in('status', ['pendente', 'vencida'])
       .order('data_vencimento');
@@ -223,9 +225,12 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
     const clienteId = emp.cliente_id;
     const existing = debtMap.get(clienteId);
 
-    // Parcelas desse empréstimo
+    // Parcelas desse empréstimo (valor corrigido com juros automáticos)
     const empParcelas = parcelasVencidas.filter((p) => p.emprestimo_id === emp.id);
-    const valorPendente = empParcelas.reduce((sum, p) => sum + Number(p.valor), 0);
+    const valorPendente = empParcelas.reduce((sum, p) => {
+      const { total } = valorCorrigido(p.valor_original, p.data_vencimento, p.juros, p.multa, p.desconto);
+      return sum + total;
+    }, 0);
 
     // Dia de atraso mais antigo
     const vencidas = empParcelas.filter((p) => p.status === 'vencida');

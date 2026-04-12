@@ -145,6 +145,15 @@ export function dbEmprestimoToView(e: EmprestimoComCliente): Emprestimo {
 
 /** Converte parcela do banco para formato de view */
 export function dbParcelaToView(p: ParcelaComCliente): Parcela {
+  // Derivar status: se o DB diz "pendente" mas a data de vencimento já passou → "vencida"
+  let status = p.status;
+  if (status === 'pendente') {
+    const venc = new Date(p.data_vencimento + 'T00:00:00');
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    if (venc < hoje) status = 'vencida';
+  }
+
   return {
     id: p.id,
     emprestimoId: p.emprestimo_id,
@@ -155,7 +164,7 @@ export function dbParcelaToView(p: ParcelaComCliente): Parcela {
     valorOriginal: p.valor_original,
     dataVencimento: p.data_vencimento,
     dataPagamento: p.data_pagamento ?? undefined,
-    status: p.status,
+    status,
     juros: p.juros,
     multa: p.multa,
     desconto: p.desconto,

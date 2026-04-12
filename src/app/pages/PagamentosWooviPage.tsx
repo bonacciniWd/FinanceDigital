@@ -1,21 +1,20 @@
 /**
  * @module PagamentosWooviPage
- * @description Página de gestão de pagamentos Pix (Woovi + EFI).
- * Exibe saldo, cobranças, transações e subcontas com separação por gateway.
+ * @description Página de gestão de pagamentos Pix — EFI Bank.
+ * Exibe saldo, cobranças e transações EFI (cron + manuais).
  */
 import { useState, useMemo } from 'react';
 import {
-  Wallet,
   QrCode,
   ArrowUpRight,
   ArrowDownLeft,
-  Users,
   Plus,
   Search,
   RefreshCw,
   Eye,
-  Trash2,
   Landmark,
+  Send,
+  Loader2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -42,21 +41,19 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { Label } from '../components/ui/label';
-import { WooviSaldoCard } from '../components/WooviSaldoCard';
 import { PixQRCode } from '../components/PixQRCode';
 import {
   useCobrancasWoovi,
   useTransacoesWoovi,
-  useSubcontasWoovi,
-  useCriarCobrancaWoovi,
-  useCancelarCobrancaWoovi,
-  useCriarSubcontaWoovi,
   useSaldoEfi,
+  useCriarCobrancaEfi,
 } from '../hooks/useWoovi';
+import { useParcelas } from '../hooks/useParcelas';
 import { useClientes } from '../hooks/useClientes';
+import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { toast } from 'sonner';
-
-type GatewayFilter = 'todos' | 'woovi' | 'efi';
+import { valorCorrigido } from '../lib/juros';
+import type { Parcela } from '../lib/view-types';
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('pt-BR', {
@@ -74,14 +71,6 @@ function formatDate(date: string): string {
     minute: '2-digit',
   });
 }
-
-const gatewayLabel = (gw?: string | null) =>
-  gw === 'efi' ? 'EFI Bank' : gw === 'woovi' ? 'Woovi' : gw || '—';
-
-const gatewayBadge = (gw?: string | null) => {
-  if (gw === 'efi') return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
-  return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400';
-};
 
 const chargeStatusConfig: Record<string, { label: string; className: string }> = {
   ACTIVE: {
@@ -128,128 +117,173 @@ const txTypeLabels: Record<string, string> = {
   WITHDRAWAL: 'Saque',
 };
 
+/** Valor total corrigido de uma parcela (original + juros + multa - desconto) */
+const parcelaTotal = (p: Parcela) =>
+  valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
+
 export default function PagamentosWooviPage() {
   const [busca, setBusca] = useState('');
-  const [gatewayFilter, setGatewayFilter] = useState<GatewayFilter>('todos');
   const [chargeStatusFilter, setChargeStatusFilter] = useState<string>('');
   const [showNovaCobranca, setShowNovaCobranca] = useState(false);
-  const [showNovaSubconta, setShowNovaSubconta] = useState(false);
   const [selectedCharge, setSelectedCharge] = useState<any>(null);
+  const [criandoCobranca, setCriandoCobranca] = useState(false);
 
-  // Form state — nova cobrança
+  // Form state — nova cobrança (parcela-based)
   const [novaCobrancaClienteId, setNovaCobrancaClienteId] = useState('');
-  const [novaCobrancaValor, setNovaCobrancaValor] = useState('');
-  const [novaCobrancaDescricao, setNovaCobrancaDescricao] = useState('');
-  const [novaCobrancaGateway, setNovaCobrancaGateway] = useState<'woovi' | 'efi'>('woovi');
-
-  // Form state — nova subconta
-  const [novaSubNome, setNovaSubNome] = useState('');
-  const [novaSubDocumento, setNovaSubDocumento] = useState('');
-  const [novaSubPixKey, setNovaSubPixKey] = useState('');
-  const [novaSubClienteId, setNovaSubClienteId] = useState('');
+  const [novaCobrancaParcelaId, setNovaCobrancaParcelaId] = useState('');
+  const [novaCobrancaValorAjustado, setNovaCobrancaValorAjustado] = useState('');
 
   // Hooks
   const { data: cobrancas = [], isLoading: loadingCharges } = useCobrancasWoovi(chargeStatusFilter || undefined);
   const { data: transacoes = [], isLoading: loadingTx } = useTransacoesWoovi();
-  const { data: subcontas = [], isLoading: loadingSub } = useSubcontasWoovi();
+  const { data: allParcelas = [] } = useParcelas();
   const { data: clientes = [] } = useClientes();
+  const { data: instancias = [] } = useInstancias();
+  const enviarWhatsapp = useEnviarWhatsapp();
 
-  const criarCobranca = useCriarCobrancaWoovi();
-  const cancelarCobranca = useCancelarCobrancaWoovi();
-  const criarSubconta = useCriarSubcontaWoovi();
+  const criarCobrancaEfi = useCriarCobrancaEfi();
   const { data: efiBalanceData } = useSaldoEfi();
 
-  // Gateway-aware filtering
+  // Parcelas pendentes/vencidas do cliente selecionado
+  const parcelasDoCliente = useMemo(() => {
+    if (!novaCobrancaClienteId) return [];
+    return allParcelas
+      .filter(p => p.clienteId === novaCobrancaClienteId && (p.status === 'pendente' || p.status === 'vencida'))
+      .sort((a, b) => a.numero - b.numero);
+  }, [allParcelas, novaCobrancaClienteId]);
+
+  // When parcela is selected, auto-fill the value
+  const parcelaSelecionada = useMemo(() => {
+    if (!novaCobrancaParcelaId) return null;
+    return parcelasDoCliente.find(p => p.id === novaCobrancaParcelaId) ?? null;
+  }, [parcelasDoCliente, novaCobrancaParcelaId]);
+
+  const valorCalculado = useMemo(() => {
+    if (!parcelaSelecionada) return 0;
+    return parcelaTotal(parcelaSelecionada);
+  }, [parcelaSelecionada]);
+
+  const valorFinal = novaCobrancaValorAjustado
+    ? parseFloat(novaCobrancaValorAjustado)
+    : valorCalculado;
+
+  // Existing EFI charges lookup (for duplicate check)
+  const chargesAtivas = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const c of cobrancas) {
+      if (c.gateway === 'efi' && c.status === 'ACTIVE' && c.parcelaId) {
+        map.set(c.parcelaId, true);
+      }
+    }
+    return map;
+  }, [cobrancas]);
+
+  // Show only EFI charges
   const filteredCharges = useMemo(() => {
     return cobrancas.filter((c) => {
-      const matchGateway = gatewayFilter === 'todos' || (c.gateway || 'woovi') === gatewayFilter;
+      const isEfi = c.gateway === 'efi';
       const matchBusca = c.clienteNome.toLowerCase().includes(busca.toLowerCase()) ||
         c.wooviChargeId.toLowerCase().includes(busca.toLowerCase());
-      return matchGateway && matchBusca;
+      return isEfi && matchBusca;
     });
-  }, [cobrancas, gatewayFilter, busca]);
+  }, [cobrancas, busca]);
 
+  // Show only EFI transactions
   const filteredTx = useMemo(() => {
     return transacoes.filter((t) => {
-      const matchGateway = gatewayFilter === 'todos' || (t.gateway || 'woovi') === gatewayFilter;
+      const isEfi = t.gateway === 'efi';
       const matchBusca = (t.descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
         (t.destinatarioNome || '').toLowerCase().includes(busca.toLowerCase());
-      return matchGateway && matchBusca;
+      return isEfi && matchBusca;
     });
-  }, [transacoes, gatewayFilter, busca]);
+  }, [transacoes, busca]);
 
-  // KPIs per gateway
+  // KPIs — only EFI
   const kpis = useMemo(() => {
-    const chargesForGw = gatewayFilter === 'todos' ? cobrancas : cobrancas.filter(c => (c.gateway || 'woovi') === gatewayFilter);
-    const txForGw = gatewayFilter === 'todos' ? transacoes : transacoes.filter(t => (t.gateway || 'woovi') === gatewayFilter);
+    const efiCharges = cobrancas.filter(c => c.gateway === 'efi');
+    const efiTx = transacoes.filter(t => t.gateway === 'efi');
+    const totalRecebido = efiCharges.filter(c => c.status === 'COMPLETED').reduce((s, c) => s + c.valor, 0);
+    const totalEnviado = efiTx.filter(t => t.tipo === 'PAYMENT' && t.status === 'CONFIRMED').reduce((s, t) => s + t.valor, 0);
     return {
-      total: chargesForGw.length,
-      ativas: chargesForGw.filter(c => c.status === 'ACTIVE').length,
-      pagas: chargesForGw.filter(c => c.status === 'COMPLETED').length,
-      expiradas: chargesForGw.filter(c => c.status === 'EXPIRED').length,
-      totalRecebido: chargesForGw.filter(c => c.status === 'COMPLETED').reduce((s, c) => s + c.valor, 0),
-      totalTx: txForGw.length,
-      // per-gateway counts (for "todos" view)
-      wooviCount: cobrancas.filter(c => (c.gateway || 'woovi') === 'woovi').length,
-      efiCount: cobrancas.filter(c => c.gateway === 'efi').length,
+      total: efiCharges.length,
+      ativas: efiCharges.filter(c => c.status === 'ACTIVE').length,
+      pagas: efiCharges.filter(c => c.status === 'COMPLETED').length,
+      expiradas: efiCharges.filter(c => c.status === 'EXPIRED').length,
+      totalRecebido,
+      totalEnviado,
+      totalTx: efiTx.length,
     };
-  }, [cobrancas, transacoes, gatewayFilter]);
+  }, [cobrancas, transacoes]);
+
+  const resetNovaCobForm = () => {
+    setNovaCobrancaClienteId('');
+    setNovaCobrancaParcelaId('');
+    setNovaCobrancaValorAjustado('');
+  };
 
   const handleCriarCobranca = async () => {
-    if (!novaCobrancaClienteId || !novaCobrancaValor) {
-      toast.error('Preencha cliente e valor');
+    if (!novaCobrancaClienteId || !novaCobrancaParcelaId || !parcelaSelecionada) {
+      toast.error('Selecione cliente e parcela');
+      return;
+    }
+    if (valorFinal <= 0) {
+      toast.error('Valor deve ser maior que zero');
+      return;
+    }
+    // Duplicate check
+    if (chargesAtivas.has(novaCobrancaParcelaId)) {
+      toast.error('Já existe uma cobrança ATIVA para esta parcela. Aguarde a expiração ou cancele a anterior.');
       return;
     }
 
+    setCriandoCobranca(true);
     const cliente = clientes.find((c) => c.id === novaCobrancaClienteId);
     try {
-      await criarCobranca.mutateAsync({
+      const result = await criarCobrancaEfi.mutateAsync({
+        parcela_id: novaCobrancaParcelaId,
+        emprestimo_id: parcelaSelecionada.emprestimoId,
         cliente_id: novaCobrancaClienteId,
-        valor: parseFloat(novaCobrancaValor),
-        descricao: novaCobrancaDescricao || undefined,
+        valor: valorFinal,
+        descricao: `Parcela ${parcelaSelecionada.numero} - ${parcelaSelecionada.clienteNome}`,
         cliente_nome: cliente?.nome,
         cliente_cpf: cliente?.cpf,
       });
-      toast.success('Cobrança criada com sucesso!');
+
+      const charge = (result as any)?.charge;
+      const brCode = charge?.br_code || '';
+      const qrImage = charge?.qr_code_image || '';
+
+      if (!brCode && !qrImage) {
+        toast.warning('Cobrança registrada na EFI, mas QR Code não foi gerado.');
+      } else {
+        // Send via WhatsApp if possible
+        const instSistema = instancias.find(i => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
+        if (instSistema && cliente?.telefone && brCode) {
+          const phone = cliente.telefone.replace(/\D/g, '').length <= 11
+            ? '55' + cliente.telefone.replace(/\D/g, '')
+            : cliente.telefone.replace(/\D/g, '');
+          const msg = `💰 *Cobrança PIX - Parcela ${parcelaSelecionada.numero}*\n\nOlá ${parcelaSelecionada.clienteNome}!\n\nValor: *${formatCurrency(valorFinal)}*\nVencimento: ${new Date(parcelaSelecionada.dataVencimento).toLocaleDateString('pt-BR')}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_FinanceDigital_`;
+          await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
+          if (qrImage) {
+            const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
+            await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: `QR Code - Parcela ${parcelaSelecionada.numero}`, tipo: 'image', media_base64: base64Data });
+          }
+          toast.success('Cobrança PIX gerada e enviada ao cliente via WhatsApp!');
+        } else if (!instSistema) {
+          toast.success('Cobrança PIX gerada! Nenhuma instância WhatsApp conectada.');
+        } else if (!cliente?.telefone) {
+          toast.success('Cobrança PIX gerada! Cliente sem telefone cadastrado.');
+        } else {
+          toast.success('Cobrança PIX gerada!');
+        }
+      }
+
       setShowNovaCobranca(false);
-      setNovaCobrancaClienteId('');
-      setNovaCobrancaValor('');
-      setNovaCobrancaDescricao('');
+      resetNovaCobForm();
     } catch (err) {
       toast.error(`Erro ao criar cobrança: ${(err as Error).message}`);
-    }
-  };
-
-  const handleCriarSubconta = async () => {
-    if (!novaSubClienteId || !novaSubNome) {
-      toast.error('Preencha cliente e nome');
-      return;
-    }
-
-    try {
-      await criarSubconta.mutateAsync({
-        cliente_id: novaSubClienteId,
-        nome: novaSubNome,
-        documento: novaSubDocumento || undefined,
-        pix_key: novaSubPixKey || undefined,
-      });
-      toast.success('Subconta criada com sucesso!');
-      setShowNovaSubconta(false);
-      setNovaSubNome('');
-      setNovaSubDocumento('');
-      setNovaSubPixKey('');
-      setNovaSubClienteId('');
-    } catch (err) {
-      toast.error(`Erro ao criar subconta: ${(err as Error).message}`);
-    }
-  };
-
-  const handleCancelarCobranca = async (chargeId: string) => {
-    try {
-      await cancelarCobranca.mutateAsync(chargeId);
-      toast.success('Cobrança cancelada');
-    } catch (err) {
-      toast.error(`Erro: ${(err as Error).message}`);
+    } finally {
+      setCriandoCobranca(false);
     }
   };
 
@@ -260,7 +294,7 @@ export default function PagamentosWooviPage() {
         <div>
           <h1 className="text-2xl font-bold">Pagamentos Pix</h1>
           <p className="text-sm text-muted-foreground">
-            Cobranças, pagamentos e subcontas — Woovi e EFI Bank
+            Cobranças e pagamentos Pix — EFI Bank
           </p>
         </div>
         <div className="flex gap-2">
@@ -271,33 +305,8 @@ export default function PagamentosWooviPage() {
         </div>
       </div>
 
-      {/* Gateway filter pills */}
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground mr-1">Gateway:</span>
-        {([
-          { key: 'todos', label: 'Todos', icon: null },
-          { key: 'woovi', label: 'Woovi', icon: <QrCode className="h-3.5 w-3.5" /> },
-          { key: 'efi', label: 'EFI Bank', icon: <Landmark className="h-3.5 w-3.5" /> },
-        ] as const).map(({ key, label, icon }) => (
-          <Button
-            key={key}
-            variant={gatewayFilter === key ? 'default' : 'outline'}
-            size="sm"
-            className="h-8"
-            onClick={() => setGatewayFilter(key)}
-          >
-            {icon && <span className="mr-1.5">{icon}</span>}
-            {label}
-            {key === 'woovi' && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1 py-0">{kpis.wooviCount}</Badge>}
-            {key === 'efi' && <Badge variant="secondary" className="ml-1.5 text-[10px] px-1 py-0">{kpis.efiCount}</Badge>}
-          </Button>
-        ))}
-      </div>
-
       {/* Saldo + KPIs */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <WooviSaldoCard />
-
         {/* EFI Saldo Card */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -321,11 +330,48 @@ export default function PagamentosWooviPage() {
           </CardContent>
         </Card>
 
+        {/* Entradas */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-medium">
               <ArrowDownLeft className="h-4 w-4 text-green-500" />
-              Cobranças {gatewayFilter !== 'todos' && `(${gatewayFilter === 'woovi' ? 'Woovi' : 'EFI'})`}
+              Entradas
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold text-green-600 dark:text-green-400">
+              {formatCurrency(kpis.totalRecebido)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {kpis.pagas} cobranças pagas
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Saídas */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <ArrowUpRight className="h-4 w-4 text-red-500" />
+              Saídas
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold text-red-600 dark:text-red-400">
+              {formatCurrency(kpis.totalEnviado)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Pagamentos enviados
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Cobranças */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium">
+              <QrCode className="h-4 w-4 text-orange-500" />
+              Cobranças
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -340,27 +386,6 @@ export default function PagamentosWooviPage() {
               <span className="text-red-600 dark:text-red-400">
                 {kpis.expiradas} expiradas
               </span>
-            </div>
-            {kpis.totalRecebido > 0 && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Recebido: {formatCurrency(kpis.totalRecebido)}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium">
-              <Users className="h-4 w-4 text-purple-500" />
-              Subcontas Indicadores
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{subcontas.length}</p>
-            <div className="mt-2 text-xs text-muted-foreground">
-              Saldo total:{' '}
-              {formatCurrency(subcontas.reduce((sum, s) => sum + s.saldo, 0))}
             </div>
           </CardContent>
         </Card>
@@ -391,10 +416,6 @@ export default function PagamentosWooviPage() {
             <ArrowUpRight className="h-4 w-4" />
             Transações
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{filteredTx.length}</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="subcontas" className="flex items-center gap-2">
-            <Users className="h-4 w-4" />
-            Subcontas
           </TabsTrigger>
         </TabsList>
 
@@ -427,26 +448,17 @@ export default function PagamentosWooviPage() {
             <div className="grid gap-3">
               {filteredCharges.map((charge) => {
                 const cfg = chargeStatusConfig[charge.status] || chargeStatusConfig.ERROR;
-                const gw = charge.gateway || 'woovi';
                 return (
                   <Card key={charge.id} className="p-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-4">
-                        <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                          gw === 'efi'
-                            ? 'bg-orange-50 dark:bg-orange-900/20'
-                            : 'bg-emerald-50 dark:bg-emerald-900/20'
-                        }`}>
-                          {gw === 'efi'
-                            ? <Landmark className="h-5 w-5 text-orange-600 dark:text-orange-400" />
-                            : <QrCode className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                          }
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-50 dark:bg-orange-900/20">
+                          <Landmark className="h-5 w-5 text-orange-600 dark:text-orange-400" />
                         </div>
                         <div>
                           <p className="font-medium">{charge.clienteNome || 'Cliente'}</p>
                           <p className="text-xs text-muted-foreground">
                             {charge.wooviChargeId.slice(0, 8)}... · {formatDate(charge.createdAt)}
-                            {' · '}<Badge className={`text-[10px] px-1 py-0 ${gatewayBadge(gw)}`}>{gatewayLabel(gw)}</Badge>
                           </p>
                         </div>
                       </div>
@@ -465,17 +477,6 @@ export default function PagamentosWooviPage() {
                               title="Ver QR Code"
                             >
                               <Eye className="h-4 w-4" />
-                            </Button>
-                          )}
-                          {charge.status === 'ACTIVE' && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-red-500"
-                              onClick={() => handleCancelarCobranca(charge.wooviChargeId)}
-                              title="Cancelar"
-                            >
-                              <Trash2 className="h-4 w-4" />
                             </Button>
                           )}
                         </div>
@@ -504,7 +505,6 @@ export default function PagamentosWooviPage() {
               {filteredTx.map((tx) => {
                 const txCfg = txStatusConfig[tx.status] || txStatusConfig.PENDING;
                 const isIncoming = tx.tipo === 'CHARGE';
-                const gw = tx.gateway || 'woovi';
                 return (
                   <Card key={tx.id} className="p-4">
                     <div className="flex items-center justify-between">
@@ -528,7 +528,6 @@ export default function PagamentosWooviPage() {
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {tx.descricao || tx.destinatarioNome || '—'} · {formatDate(tx.createdAt)}
-                            {' · '}<Badge className={`text-[10px] px-1 py-0 ${gatewayBadge(gw)}`}>{gatewayLabel(gw)}</Badge>
                           </p>
                         </div>
                       </div>
@@ -550,89 +549,25 @@ export default function PagamentosWooviPage() {
           )}
         </TabsContent>
 
-        {/* ── Tab: Subcontas ────────────────────────────── */}
-        <TabsContent value="subcontas" className="space-y-4">
-          <div className="flex justify-end">
-            <Button variant="outline" onClick={() => setShowNovaSubconta(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Nova Subconta
-            </Button>
-          </div>
-
-          {loadingSub ? (
-            <p className="text-muted-foreground text-sm">Carregando...</p>
-          ) : subcontas.length === 0 ? (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <Users className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                <p className="text-muted-foreground">
-                  Nenhuma subconta cadastrada
-                </p>
-                <Button
-                  variant="outline"
-                  className="mt-4"
-                  onClick={() => setShowNovaSubconta(true)}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Criar primeira subconta
-                </Button>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-3 md:grid-cols-2">
-              {subcontas.map((sub) => (
-                <Card key={sub.id} className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">{sub.nome}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {sub.clienteNome} · {sub.documento || 'Sem CPF'}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold text-emerald-600 dark:text-emerald-400">
-                        {formatCurrency(sub.saldo)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Total recebido: {formatCurrency(sub.totalRecebido)}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
       </Tabs>
 
       {/* ── Dialog: Nova Cobrança ──────────────────────── */}
-      <Dialog open={showNovaCobranca} onOpenChange={setShowNovaCobranca}>
-        <DialogContent>
+      <Dialog open={showNovaCobranca} onOpenChange={(open) => { setShowNovaCobranca(open); if (!open) resetNovaCobForm(); }}>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Nova Cobrança Pix</DialogTitle>
+            <DialogTitle>Nova Cobrança Pix — EFI Bank</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label>Gateway</Label>
-              <Select value={novaCobrancaGateway} onValueChange={(v) => setNovaCobrancaGateway(v as 'woovi' | 'efi')}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="woovi">
-                    <span className="flex items-center gap-2"><QrCode className="h-3.5 w-3.5" /> Woovi (OpenPix)</span>
-                  </SelectItem>
-                  <SelectItem value="efi">
-                    <span className="flex items-center gap-2"><Landmark className="h-3.5 w-3.5" /> EFI Bank (Gerencianet)</span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {/* 1. Selecionar Cliente */}
             <div>
               <Label>Cliente</Label>
               <Select
                 value={novaCobrancaClienteId}
-                onValueChange={setNovaCobrancaClienteId}
+                onValueChange={(v) => {
+                  setNovaCobrancaClienteId(v);
+                  setNovaCobrancaParcelaId('');
+                  setNovaCobrancaValorAjustado('');
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Selecionar cliente" />
@@ -646,116 +581,109 @@ export default function PagamentosWooviPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>Valor (R$)</Label>
-              <Input
-                type="number"
-                step="0.01"
-                placeholder="0,00"
-                value={novaCobrancaValor}
-                onChange={(e) => setNovaCobrancaValor(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label>Descrição (opcional)</Label>
-              <Input
-                placeholder="Ex: Parcela 3/12"
-                value={novaCobrancaDescricao}
-                onChange={(e) => setNovaCobrancaDescricao(e.target.value)}
-              />
-            </div>
+
+            {/* 2. Selecionar Parcela */}
+            {novaCobrancaClienteId && (
+              <div>
+                <Label>Parcela a cobrar</Label>
+                {parcelasDoCliente.length === 0 ? (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Nenhuma parcela pendente/vencida para este cliente.
+                  </p>
+                ) : (
+                  <Select
+                    value={novaCobrancaParcelaId}
+                    onValueChange={(v) => {
+                      setNovaCobrancaParcelaId(v);
+                      setNovaCobrancaValorAjustado('');
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecionar parcela" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {parcelasDoCliente.map((p) => {
+                        const total = parcelaTotal(p);
+                        const hasCharge = chargesAtivas.has(p.id);
+                        return (
+                          <SelectItem key={p.id} value={p.id} disabled={hasCharge}>
+                            Parcela {p.numero} — {formatCurrency(total)} — Venc: {new Date(p.dataVencimento).toLocaleDateString('pt-BR')}
+                            {p.status === 'vencida' ? ' ⚠️ Vencida' : ''}
+                            {hasCharge ? ' (cobrança ativa)' : ''}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
+
+            {/* 3. Valor calculado + juros breakdown */}
+            {parcelaSelecionada && (
+              <div className="rounded-lg border p-3 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Valor original:</span>
+                  <span>{formatCurrency(parcelaSelecionada.valorOriginal)}</span>
+                </div>
+                {parcelaSelecionada.status === 'vencida' && (() => {
+                  const corr = valorCorrigido(
+                    parcelaSelecionada.valorOriginal,
+                    parcelaSelecionada.dataVencimento,
+                    parcelaSelecionada.juros,
+                    parcelaSelecionada.multa,
+                    parcelaSelecionada.desconto,
+                  );
+                  return corr.jurosValor > 0 ? (
+                    <div className="flex justify-between text-sm text-red-600 dark:text-red-400">
+                      <span>Juros/multa atraso:</span>
+                      <span>+ {formatCurrency(corr.jurosValor)}</span>
+                    </div>
+                  ) : null;
+                })()}
+                <div className="flex justify-between text-sm font-semibold border-t pt-2">
+                  <span>Valor calculado:</span>
+                  <span>{formatCurrency(valorCalculado)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* 4. Ajustar valor manualmente */}
+            {parcelaSelecionada && (
+              <div>
+                <Label>Ajustar valor manualmente (opcional)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder={formatCurrency(valorCalculado)}
+                  value={novaCobrancaValorAjustado}
+                  onChange={(e) => setNovaCobrancaValorAjustado(e.target.value)}
+                />
+                {novaCobrancaValorAjustado && parseFloat(novaCobrancaValorAjustado) !== valorCalculado && (
+                  <p className="text-xs text-amber-600 mt-1">
+                    Valor ajustado: {formatCurrency(parseFloat(novaCobrancaValorAjustado))} (calculado era {formatCurrency(valorCalculado)})
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setShowNovaCobranca(false)}
+              onClick={() => { setShowNovaCobranca(false); resetNovaCobForm(); }}
             >
               Cancelar
             </Button>
             <Button
               onClick={handleCriarCobranca}
-              disabled={criarCobranca.isPending}
+              disabled={criandoCobranca || !novaCobrancaParcelaId}
             >
-              {criarCobranca.isPending ? (
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              ) : novaCobrancaGateway === 'efi' ? (
-                <Landmark className="mr-2 h-4 w-4" />
+              {criandoCobranca ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
-                <QrCode className="mr-2 h-4 w-4" />
+                <Send className="mr-2 h-4 w-4" />
               )}
-              Gerar Cobrança
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Dialog: Nova Subconta ──────────────────────── */}
-      <Dialog open={showNovaSubconta} onOpenChange={setShowNovaSubconta}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Nova Subconta Indicador</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>Cliente (indicador)</Label>
-              <Select
-                value={novaSubClienteId}
-                onValueChange={setNovaSubClienteId}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecionar cliente" />
-                </SelectTrigger>
-                <SelectContent>
-                  {clientes.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.nome}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Nome da subconta</Label>
-              <Input
-                placeholder="Nome do indicador"
-                value={novaSubNome}
-                onChange={(e) => setNovaSubNome(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label>CPF/CNPJ</Label>
-              <Input
-                placeholder="000.000.000-00"
-                value={novaSubDocumento}
-                onChange={(e) => setNovaSubDocumento(e.target.value)}
-              />
-            </div>
-            <div>
-              <Label>Chave Pix (opcional)</Label>
-              <Input
-                placeholder="Chave Pix para saques"
-                value={novaSubPixKey}
-                onChange={(e) => setNovaSubPixKey(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowNovaSubconta(false)}
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={handleCriarSubconta}
-              disabled={criarSubconta.isPending}
-            >
-              {criarSubconta.isPending ? (
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Users className="mr-2 h-4 w-4" />
-              )}
-              Criar Subconta
+              Gerar e Enviar Cobrança
             </Button>
           </DialogFooter>
         </DialogContent>

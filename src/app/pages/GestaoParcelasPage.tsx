@@ -27,13 +27,17 @@ import {
 import { toast } from 'sonner';
 import { useParcelas, useRegistrarPagamento, useUpdateParcela } from '../hooks/useParcelas';
 import { useEmprestimos } from '../hooks/useEmprestimos';
-import { useCriarCobvEfi } from '../hooks/useWoovi';
+import { useCriarCobrancaEfi, useCobrancasWoovi } from '../hooks/useWoovi';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Parcela } from '../lib/view-types';
 import type { ParcelaUpdate } from '../lib/database.types';
-import { calcularJurosAtraso, diasDeAtraso } from '../lib/juros';
+import { calcularJurosAtraso, diasDeAtraso, valorCorrigido } from '../lib/juros';
+
+/** Valor total corrigido de uma parcela (original + juros + multa - desconto) */
+const parcelaTotal = (p: Parcela) =>
+  valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
 
 /* ── Types ───────────────────────────────────────────────── */
 
@@ -94,9 +98,21 @@ export default function GestaoParcelasPage() {
   const { data: emprestimos = [], isLoading: loadingE } = useEmprestimos();
   const registrarPagamento = useRegistrarPagamento();
   const updateParcela = useUpdateParcela();
-  const criarCobvEfi = useCriarCobvEfi();
+  const criarCobrancaEfi = useCriarCobrancaEfi();
   const { data: instancias = [] } = useInstancias();
   const enviarWhatsapp = useEnviarWhatsapp();
+  const { data: cobrancasExistentes = [] } = useCobrancasWoovi();
+
+  // Lookup: parcela_id → true if there's an ACTIVE EFI charge
+  const parcelaComCobrancaAtiva = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const c of cobrancasExistentes) {
+      if (c.gateway === 'efi' && c.status === 'ACTIVE' && c.parcelaId) {
+        map.set(c.parcelaId, true);
+      }
+    }
+    return map;
+  }, [cobrancasExistentes]);
 
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -219,9 +235,9 @@ export default function GestaoParcelasPage() {
     const pagas = parcelas.filter(p => p.status === 'paga');
     return {
       totalPendentes: pendentes.length,
-      valorPendentes: pendentes.reduce((a, p) => a + p.valor, 0),
+      valorPendentes: pendentes.reduce((a, p) => a + parcelaTotal(p), 0),
       totalVencidas: vencidas.length,
-      valorVencidas: vencidas.reduce((a, p) => a + p.valor, 0),
+      valorVencidas: vencidas.reduce((a, p) => a + parcelaTotal(p), 0),
       totalPagas: pagas.length,
       valorPagas: pagas.reduce((a, p) => a + p.valor, 0),
       total: parcelas.length,
@@ -246,7 +262,7 @@ export default function GestaoParcelasPage() {
   );
 
   const totalSelecionado = useMemo(
-    () => selectedParcelas.reduce((a, p) => a + p.valor, 0),
+    () => selectedParcelas.reduce((a, p) => a + parcelaTotal(p), 0),
     [selectedParcelas],
   );
 
@@ -648,22 +664,26 @@ export default function GestaoParcelasPage() {
                                                 size="sm"
                                                 variant="ghost"
                                                 className="h-7 w-7 p-0 text-blue-600"
-                                                title="Gerar cobrança PIX"
-                                                disabled={gerandoPixId === p.id || criarCobvEfi.isPending}
+                                                title={parcelaComCobrancaAtiva.has(p.id) ? 'Cobrança ativa já existe' : 'Gerar cobrança PIX'}
+                                                disabled={gerandoPixId === p.id || criarCobrancaEfi.isPending || parcelaComCobrancaAtiva.has(p.id)}
                                                 onClick={async () => {
+                                                  if (parcelaComCobrancaAtiva.has(p.id)) {
+                                                    toast.warning('Já existe uma cobrança ATIVA para esta parcela. Aguarde a expiração ou cancele a anterior.');
+                                                    return;
+                                                  }
                                                   setGerandoPixId(p.id);
                                                   try {
                                                     // Buscar CPF do cliente
                                                     const { data: cli } = await supabase.from('clientes').select('cpf, nome, telefone').eq('id', p.clienteId).single() as { data: { cpf: string | null; nome: string; telefone: string } | null };
-                                                    const result = await criarCobvEfi.mutateAsync({
+                                                    const valorCob = parcelaTotal(p);
+                                                    const result = await criarCobrancaEfi.mutateAsync({
                                                       parcela_id: p.id,
                                                       emprestimo_id: p.emprestimoId,
                                                       cliente_id: p.clienteId,
-                                                      valor: p.valor,
+                                                      valor: valorCob,
                                                       descricao: `Parcela ${p.numero} - ${p.clienteNome}`,
                                                       cliente_nome: p.clienteNome,
                                                       cliente_cpf: cli?.cpf || undefined,
-                                                      data_vencimento: p.dataVencimento,
                                                     });
                                                     const charge = (result as any)?.charge;
                                                     const brCode = charge?.br_code || '';
@@ -672,22 +692,28 @@ export default function GestaoParcelasPage() {
                                                     if (brCode || qrImage) {
                                                       setPixResultDialog({ qrImage, brCode, parcelaNumero: p.numero });
                                                     }
-                                                    // Enviar via WhatsApp se possível
-                                                    const instSistema = instancias.find(i => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
-                                                    if (instSistema && cli?.telefone && brCode) {
-                                                      const phone = cli.telefone.replace(/\D/g, '').length <= 11 ? '55' + cli.telefone.replace(/\D/g, '') : cli.telefone.replace(/\D/g, '');
-                                                      const msg = `💰 *Cobrança PIX - Parcela ${p.numero}*\n\nOlá ${p.clienteNome}!\n\nValor: *${formatCurrency(p.valor)}*\nVencimento: ${new Date(p.dataVencimento).toLocaleDateString('pt-BR')}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_FinanceDigital_`;
-                                                      await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
-                                                      // Enviar QR como imagem
-                                                      if (qrImage) {
-                                                        const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
-                                                        await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: `QR Code - Parcela ${p.numero}`, tipo: 'image', media_base64: base64Data });
-                                                      }
-                                                      toast.success('Cobrança PIX gerada e enviada ao cliente!');
-                                                    } else if (!instSistema || !cli?.telefone) {
-                                                      toast.success('Cobrança PIX gerada! Sem WhatsApp conectado para envio automático.');
+                                                    if (!brCode && !qrImage) {
+                                                      toast.warning('Cobrança registrada na EFI, mas QR Code não foi gerado. Tente consultar novamente.');
                                                     } else {
-                                                      toast.success('Cobrança PIX gerada!');
+                                                      // Enviar via WhatsApp se possível
+                                                      const instSistema = instancias.find(i => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
+                                                      if (instSistema && cli?.telefone && brCode) {
+                                                        const phone = cli.telefone.replace(/\D/g, '').length <= 11 ? '55' + cli.telefone.replace(/\D/g, '') : cli.telefone.replace(/\D/g, '');
+                                                        const msg = `💰 *Cobrança PIX - Parcela ${p.numero}*\n\nOlá ${p.clienteNome}!\n\nValor: *${formatCurrency(valorCob)}*\nVencimento: ${new Date(p.dataVencimento).toLocaleDateString('pt-BR')}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_FinanceDigital_`;
+                                                        await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
+                                                        // Enviar QR como imagem
+                                                        if (qrImage) {
+                                                          const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
+                                                          await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: `QR Code - Parcela ${p.numero}`, tipo: 'image', media_base64: base64Data });
+                                                        }
+                                                        toast.success('Cobrança PIX gerada e enviada ao cliente!');
+                                                      } else if (!instSistema) {
+                                                        toast.success('Cobrança PIX gerada! Nenhuma instância WhatsApp conectada.');
+                                                      } else if (!cli?.telefone) {
+                                                        toast.success('Cobrança PIX gerada! Cliente sem telefone cadastrado.');
+                                                      } else {
+                                                        toast.success('Cobrança PIX gerada!');
+                                                      }
                                                     }
                                                   } catch (err) {
                                                     toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao gerar PIX'}`);
@@ -761,7 +787,7 @@ export default function GestaoParcelasPage() {
               {selectedParcelas.map(p => (
                 <div key={p.id} className="flex justify-between text-sm py-2 border-b">
                   <span>{p.clienteNome} — Parcela {p.numero}</span>
-                  <span className="font-medium">{formatCurrency(p.valor)}</span>
+                  <span className="font-medium">{formatCurrency(parcelaTotal(p))}</span>
                 </div>
               ))}
             </div>
@@ -829,7 +855,7 @@ export default function GestaoParcelasPage() {
               {selectedParcelas.map(p => (
                 <div key={p.id} className="flex justify-between text-sm py-2 border-b">
                   <span>{p.clienteNome} — Parcela {p.numero}</span>
-                  <span className="font-medium">{formatCurrency(p.valor)}</span>
+                  <span className="font-medium">{formatCurrency(parcelaTotal(p))}</span>
                 </div>
               ))}
             </div>
@@ -851,7 +877,7 @@ export default function GestaoParcelasPage() {
             <div className="space-y-4">
               <div className="p-3 bg-muted rounded-lg text-sm">
                 <div className="flex justify-between"><span className="text-muted-foreground">Cliente:</span><span className="font-medium">{comprovanteParcela.clienteNome}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Parcela:</span><span className="font-medium">#{comprovanteParcela.numero} — {formatCurrency(comprovanteParcela.valor)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Parcela:</span><span className="font-medium">#{comprovanteParcela.numero} — {formatCurrency(parcelaTotal(comprovanteParcela))}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Vencimento:</span><span className="font-medium">{new Date(comprovanteParcela.dataVencimento).toLocaleDateString('pt-BR')}</span></div>
               </div>
               <p className="text-sm text-muted-foreground">Anexe o comprovante de pagamento (imagem) recebido do cliente.</p>

@@ -17,18 +17,21 @@ import { Alert, AlertDescription } from '../components/ui/alert';
 import { AlertTriangle, MessageSquare, HandshakeIcon, TrendingUp, Banknote } from 'lucide-react';
 import { useClientes } from '../hooks/useClientes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useParcelas } from '../hooks/useParcelas';
 import { useCardsCobranca } from '../hooks/useKanbanCobranca';
+import { valorCorrigido } from '../lib/juros';
 
 export default function DashboardCobrancaPage() {
   const navigate = useNavigate();
   const { data: allClientes = [] } = useClientes();
   const { data: emprestimos = [] } = useEmprestimos();
+  const { data: allParcelas = [] } = useParcelas();
   const { data: cardsCobranca = [] } = useCardsCobranca();
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 
-  // ── Derivar dados reais dos empréstimos ──────────────────
+  // ── Derivar dados reais dos empréstimos + parcelas com juros ──
   const dados = useMemo(() => {
     // Empréstimos inadimplentes
     const inadimplentes = emprestimos.filter(e => e.status === 'inadimplente');
@@ -38,24 +41,45 @@ export default function DashboardCobrancaPage() {
     const clienteIdsInadimplentes = new Set(inadimplentes.map(e => e.clienteId));
     const clientesInadimplentes = allClientes.filter(c => clienteIdsInadimplentes.has(c.id));
 
-    // Valor total em atraso = soma do saldo devedor dos inadimplentes
-    // (parcelas restantes * valor_parcela)
+    // Parcelas pendentes/vencidas (não pagas) indexadas por empréstimo e cliente
+    const parcelasAbertas = allParcelas.filter(p => p.status !== 'paga' && p.status !== 'cancelada');
+
+    // Calcular valor corrigido de cada parcela (com juros automáticos)
+    const valorCorrigidoParcela = (p: typeof parcelasAbertas[0]) => {
+      const { total } = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto);
+      return total;
+    };
+
+    // Parcelas abertas por empréstimo
+    const parcelasPorEmp = new Map<string, typeof parcelasAbertas>();
+    for (const p of parcelasAbertas) {
+      const arr = parcelasPorEmp.get(p.emprestimoId) ?? [];
+      arr.push(p);
+      parcelasPorEmp.set(p.emprestimoId, arr);
+    }
+
+    // Valor total em atraso = soma corrigida das parcelas abertas dos inadimplentes
     const valorTotalAtraso = inadimplentes.reduce((acc, e) => {
-      const restantes = e.parcelas - e.parcelasPagas;
-      return acc + (restantes * e.valorParcela);
+      const ps = parcelasPorEmp.get(e.id) ?? [];
+      return acc + ps.reduce((s, p) => s + valorCorrigidoParcela(p), 0);
     }, 0);
 
     // Valor total da carteira ativa (ativos + inadimplentes)
     const valorCarteira = [...ativos, ...inadimplentes].reduce((acc, e) => {
-      const restantes = e.parcelas - e.parcelasPagas;
-      return acc + (restantes * e.valorParcela);
+      const ps = parcelasPorEmp.get(e.id) ?? [];
+      return acc + ps.reduce((s, p) => s + valorCorrigidoParcela(p), 0);
     }, 0);
 
     // Dias de atraso real por cliente (baseado em próximoVencimento dos inadimplentes)
     const today = new Date();
     const clientesDados = clientesInadimplentes.map(c => {
       const empsCliente = inadimplentes.filter(e => e.clienteId === c.id);
-      const totalDevido = empsCliente.reduce((s, e) => s + ((e.parcelas - e.parcelasPagas) * e.valorParcela), 0);
+
+      // Total devido = soma corrigida de todas as parcelas abertas desse cliente
+      const totalDevido = empsCliente.reduce((s, e) => {
+        const ps = parcelasPorEmp.get(e.id) ?? [];
+        return s + ps.reduce((sum, p) => sum + valorCorrigidoParcela(p), 0);
+      }, 0);
 
       // Dias de atraso = max entre todos os empréstimos inadimplentes do cliente
       const diasAtraso = empsCliente.reduce((max, e) => {
@@ -96,7 +120,7 @@ export default function DashboardCobrancaPage() {
       taxaRecuperacao,
       clientesDados,
     };
-  }, [allClientes, emprestimos, cardsCobranca]);
+  }, [allClientes, emprestimos, allParcelas, cardsCobranca]);
 
   return (
     <div className="space-y-6">

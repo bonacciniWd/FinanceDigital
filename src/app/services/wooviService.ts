@@ -76,7 +76,7 @@ export async function cancelarCobranca(chargeId: string) {
 export async function getCobrancas(status?: string): Promise<WooviChargeComCliente[]> {
   let query = supabase
     .from('woovi_charges')
-    .select('*, clientes(nome, telefone)')
+    .select('*, clientes!cliente_id(nome, telefone)')
     .order('created_at', { ascending: false });
 
   if (status) query = query.eq('status', status);
@@ -90,7 +90,7 @@ export async function getCobrancas(status?: string): Promise<WooviChargeComClien
 export async function getCobrancaById(id: string): Promise<WooviChargeComCliente | null> {
   const { data, error } = await supabase
     .from('woovi_charges')
-    .select('*, clientes(nome, telefone)')
+    .select('*, clientes!cliente_id(nome, telefone)')
     .eq('id', id)
     .single();
 

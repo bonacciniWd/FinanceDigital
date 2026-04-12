@@ -23,6 +23,7 @@ import { useClientes } from '../hooks/useClientes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useParcelas } from '../hooks/useParcelas';
 import { useDashboardStats } from '../hooks/useDashboardStats';
+import { valorCorrigido } from '../lib/juros';
 import { StatusBadge } from '../components/StatusBadge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 
@@ -49,10 +50,19 @@ export default function DashboardPage() {
   );
   const vencidosReal = clienteIdsInadimplentes.size;
 
-  // KPIs reais — carteira inclui ativo + inadimplente
-  const carteiraAtiva = emprestimos
-    .filter(e => e.status === 'ativo' || e.status === 'inadimplente')
-    .reduce((sum, e) => sum + e.valor, 0);
+  // Valor corrigido de uma parcela aberta (com juros automáticos)
+  const valorParcCorrigido = (p: typeof todasParcelas[0]) => {
+    if (p.status === 'paga' || p.status === 'cancelada') return p.valor;
+    return valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
+  };
+
+  // KPIs reais — carteira inclui ativo + inadimplente (com juros corrigidos)
+  const empIds = new Set(
+    emprestimos.filter(e => e.status === 'ativo' || e.status === 'inadimplente').map(e => e.id)
+  );
+  const carteiraAtiva = todasParcelas
+    .filter(p => empIds.has(p.emprestimoId) && p.status !== 'paga' && p.status !== 'cancelada')
+    .reduce((sum, p) => sum + valorParcCorrigido(p), 0);
   const emprestimosAtivos = emprestimos.filter(e => e.status === 'ativo' || e.status === 'inadimplente').length;
   const taxaInadimplenciaReal = clientes.length > 0
     ? Math.round((vencidosReal / clientes.length) * 100)
@@ -95,8 +105,8 @@ export default function DashboardPage() {
       if (p.status === 'paga') {
         b.receita += p.valor;
       } else if (p.status !== 'cancelada' && dv < today) {
-        // Parcela vencida (não paga e data já passou)
-        b.inadimplencia += p.valor;
+        // Parcela vencida (não paga e data já passou) — valor corrigido com juros
+        b.inadimplencia += valorParcCorrigido(p);
       }
       buckets.set(key, b);
     }

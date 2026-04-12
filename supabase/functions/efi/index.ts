@@ -311,7 +311,14 @@ Deno.serve(async (req: Request) => {
           .select()
           .single();
 
-        if (saveError) console.error("Erro ao salvar cobrança EFI:", saveError);
+        if (saveError) {
+          console.error("Erro ao salvar cobrança EFI:", saveError);
+          return jsonResponse({
+            success: false,
+            error: `Cobrança criada na EFI (txid=${txid}), mas falhou ao salvar no banco: ${saveError.message}`,
+            efi: { txid, brCode, qrCodeImage },
+          });
+        }
 
         if (parcela_id) {
           await adminClient
@@ -480,8 +487,14 @@ Deno.serve(async (req: Request) => {
 
         let cobvQr = null, cobvBrCode = null;
         try {
-          if (cobvResp.loc?.id) {
-            const qr = await efiRequest(creds, "GET", `/v2/loc/${cobvResp.loc.id}/qrcode`);
+          let locId = cobvResp.loc?.id;
+          // cobv nem sempre retorna loc no PUT — consultar via GET se necessário
+          if (!locId) {
+            const cobvGet = await efiRequest(creds, "GET", `/v2/cobv/${cobvTxid}`);
+            locId = cobvGet.loc?.id;
+          }
+          if (locId) {
+            const qr = await efiRequest(creds, "GET", `/v2/loc/${locId}/qrcode`);
             cobvQr = qr.imagemQrcode;
             cobvBrCode = qr.qrcode;
           }

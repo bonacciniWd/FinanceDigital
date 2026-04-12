@@ -268,11 +268,12 @@ export async function getMensagensByTelefone(
     .from('whatsapp_mensagens_log')
     .select('*')
     .eq('telefone', telefone)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(limit);
 
   if (error) throw new Error(error.message);
-  return data ?? [];
+  // Reverse to display in chronological order (oldest first)
+  return (data ?? []).reverse();
 }
 
 /** Buscar mensagens por instância */

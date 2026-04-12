@@ -176,8 +176,10 @@ export function useEnviarWhatsapp() {
     mutationFn: (params: EnviarMensagemParams) =>
       whatsappService.enviarMensagem(params),
     onSuccess: (_, variables) => {
+      // Strip JID suffix to match the bare phone query key
+      const phone = variables.telefone.replace(/@.*$/, '').replace(/\D/g, '');
       queryClient.invalidateQueries({
-        queryKey: [MENSAGENS_KEY, variables.telefone],
+        queryKey: [MENSAGENS_KEY, phone],
       });
       queryClient.invalidateQueries({ queryKey: [CONVERSAS_KEY] });
       queryClient.invalidateQueries({ queryKey: [STATS_KEY] });

@@ -65,7 +65,11 @@ async function callEfi<T = any>(action: string, params: Record<string, any>): Pr
   });
 
   if (response.error) throw new Error(response.error.message);
-  return response.data as T;
+  const result = response.data as any;
+  if (result && result.success === false && result.error) {
+    throw new Error(result.error);
+  }
+  return result as T;
 }
 
 // ── Cobranças imediatas (cob) ─────────────────────────────

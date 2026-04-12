@@ -230,6 +230,61 @@ Deno.serve(async (req: Request) => {
         .eq("telefone", telefone)
         .maybeSingle();
 
+      // ── Download full-quality media via Evolution API ────────
+      // The webhook payload usually only contains jpegThumbnail (~100px).
+      // We call getBase64FromMediaMessage to get the full image, then upload to Storage.
+      const mediaTypes = ["image", "audio", "video", "document", "sticker"];
+      if (mediaTypes.includes(tipo) && instancia?.evolution_url && instancia.instance_token) {
+        const evoUrl = (Deno.env.get("EVOLUTION_API_URL") || instancia.evolution_url).replace(/\/$/, "");
+        try {
+          const mediaResp = await fetch(
+            `${evoUrl}/chat/getBase64FromMediaMessage/${instancia.instance_name}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
+              body: JSON.stringify({ message: { key: message.key, message: message.message } }),
+            }
+          );
+          if (mediaResp.ok) {
+            const mediaData = await mediaResp.json();
+            const b64 = mediaData.base64 || mediaData.data || null;
+            const fetchedMimetype = mediaData.mimetype || mediaMimetype || "application/octet-stream";
+            if (b64 && typeof b64 === "string") {
+              // Upload to Supabase Storage whatsapp-media bucket
+              const extMap: Record<string, string> = {
+                "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+                "audio/ogg": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a",
+                "video/mp4": "mp4", "image/gif": "gif",
+              };
+              const ext = extMap[fetchedMimetype] || fetchedMimetype.split("/")[1]?.split(";")[0] || "bin";
+              const storagePath = `incoming/${telefone}/${Date.now()}-${messageId || "msg"}.${ext}`;
+
+              // Decode base64 to Uint8Array
+              const raw = atob(b64.includes(",") ? b64.split(",")[1] : b64);
+              const bytes = new Uint8Array(raw.length);
+              for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+              const { error: upErr } = await adminClient.storage
+                .from("whatsapp-media")
+                .upload(storagePath, bytes, { contentType: fetchedMimetype, upsert: false });
+
+              if (!upErr) {
+                const { data: urlData } = adminClient.storage.from("whatsapp-media").getPublicUrl(storagePath);
+                mediaUrl = urlData.publicUrl;
+                mediaMimetype = fetchedMimetype;
+                console.log(`[webhook-whatsapp] Media uploaded to Storage: ${storagePath}`);
+              } else {
+                console.error("[webhook-whatsapp] Storage upload error:", upErr.message);
+              }
+            }
+          } else {
+            console.warn(`[webhook-whatsapp] getBase64FromMediaMessage failed: ${mediaResp.status}`);
+          }
+        } catch (mediaErr) {
+          console.error("[webhook-whatsapp] Error fetching full media:", mediaErr);
+        }
+      }
+
       // Salvar mensagem de entrada
       const { error: insertErr } = await adminClient.from("whatsapp_mensagens_log").insert({
         instancia_id: instancia?.id || null,

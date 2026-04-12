@@ -153,6 +153,7 @@ async function criarCobrancaEfi(
 
     if (saveErr) {
       console.error(`[cron-cobr] Erro ao salvar cobrança: ${saveErr.message}`);
+      return null;
     }
 
     // Vincular na parcela
@@ -403,6 +404,33 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // ── Juros automáticos (mesma lógica de src/app/lib/juros.ts) ──
+  const JUROS_FIXO_DIA = 100;
+  const JUROS_PERC_DIA = 0.10;
+  const JUROS_LIMIAR = 1000;
+
+  function calcularJurosAtraso(valorOriginal: number, diasAtraso: number): number {
+    if (diasAtraso <= 0 || valorOriginal <= 0) return 0;
+    if (valorOriginal < JUROS_LIMIAR) return JUROS_FIXO_DIA * diasAtraso;
+    return Math.round(valorOriginal * JUROS_PERC_DIA * diasAtraso * 100) / 100;
+  }
+
+  function valorCorrigidoParcela(parcela: any): number {
+    const valorOriginal = Number(parcela.valor_original ?? parcela.valor ?? 0);
+    const jurosManual = Number(parcela.juros ?? 0);
+    const multa = Number(parcela.multa ?? 0);
+    const desconto = Number(parcela.desconto ?? 0);
+
+    const venc = new Date(parcela.data_vencimento);
+    const hj = new Date();
+    hj.setHours(0, 0, 0, 0);
+    venc.setHours(0, 0, 0, 0);
+    const diasAtraso = Math.max(0, Math.floor((hj.getTime() - venc.getTime()) / (1000 * 60 * 60 * 24)));
+
+    const juros = jurosManual > 0 ? jurosManual : calcularJurosAtraso(valorOriginal, diasAtraso);
+    return Math.max(valorOriginal + juros + multa - desconto, 0);
+  }
+
   // ── Calcular datas ────────────────────────────────────
   const hoje = new Date();
   const fmtDate = (d: Date) => d.toISOString().split("T")[0];
@@ -424,7 +452,7 @@ Deno.serve(async (req: Request) => {
   // ── Buscar parcelas relevantes com dados do cliente ───
   const { data: parcelasAlvo, error: parcErr } = await adminClient
     .from("parcelas")
-    .select("id, emprestimo_id, cliente_id, numero, valor, data_vencimento, status, woovi_charge_id, clientes(nome, telefone, sexo, cpf)")
+    .select("id, emprestimo_id, cliente_id, numero, valor, valor_original, juros, multa, desconto, data_vencimento, status, woovi_charge_id, clientes(nome, telefone, sexo, cpf)")
     .in("data_vencimento", [em3diasStr, amanhaStr, ontemStr])
     .neq("status", "paga")
     .neq("status", "cancelada");
@@ -500,7 +528,11 @@ Deno.serve(async (req: Request) => {
 
     if (!telefone) continue;
 
-    const valorFmt = Number(parcela.valor).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    // Valor corrigido com juros automáticos
+    const valorReal = valorCorrigidoParcela(parcela);
+    const valorFmt = valorReal.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    // Valor sem "R$" para templates que já incluem "R$ {valor}"
+    const valorNum = valorReal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const dataFmt = parcela.data_vencimento.split("-").reverse().join("/");
 
     let tipo = "";
@@ -540,7 +572,7 @@ Deno.serve(async (req: Request) => {
     const empBase = empBaseMap.get(parcela.emprestimo_id);
     const vars: Record<string, string> = {
       nome: nomeCliente,
-      valor: valorFmt,
+      valor: valorNum,
       data: dataFmt,
       numeroParcela: String(parcela.numero),
       diasAtraso: tipo === "vencida_ontem" ? "1" : "0",
@@ -677,7 +709,7 @@ Deno.serve(async (req: Request) => {
   const { data: parcelasAtraso } = await adminClient
     .from("parcelas")
     .select(
-      "id, emprestimo_id, cliente_id, numero, valor, data_vencimento, status, woovi_charge_id, clientes(nome, telefone, sexo, cpf)",
+      "id, emprestimo_id, cliente_id, numero, valor, valor_original, juros, multa, desconto, data_vencimento, status, woovi_charge_id, clientes(nome, telefone, sexo, cpf)",
     )
     .in(
       "data_vencimento",
@@ -734,15 +766,14 @@ Deno.serve(async (req: Request) => {
       if (!tpl && !chargeData) continue; // Sem template e sem cobrança → pular
 
       const emp = empAtrasoMap.get(parcela.emprestimo_id);
-      const valorFmt = Number(parcela.valor).toLocaleString("pt-BR", {
-        style: "currency",
-        currency: "BRL",
-      });
+      const valorReal = valorCorrigidoParcela(parcela);
+      const valorFmt = valorReal.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+      const valorNum = valorReal.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const dataFmt = parcela.data_vencimento.split("-").reverse().join("/");
 
       const vars: Record<string, string> = {
         nome: nomeCliente,
-        valor: valorFmt,
+        valor: valorNum,
         data: dataFmt,
         numeroParcela: String(parcela.numero),
         diasAtraso: String(tier.dias),

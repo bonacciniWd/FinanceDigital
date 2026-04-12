@@ -12,6 +12,7 @@
  * @see database.types para tipagem completa
  */
 import { supabase } from '../lib/supabase';
+import { valorCorrigido } from '../lib/juros';
 import type {
   Cliente,
   ClienteInsert,
@@ -71,7 +72,7 @@ async function buildRedeFromClientes(
   const [clientesRes, emprestimosRes, parcelasRes] = await Promise.all([
     supabase.from('clientes').select('*').order('nome'),
     supabase.from('emprestimos').select('id, cliente_id, valor, status'),
-    supabase.from('parcelas').select('cliente_id, data_vencimento, status'),
+    supabase.from('parcelas').select('cliente_id, valor_original, data_vencimento, juros, multa, desconto, status'),
   ]);
 
   if (clientesRes.error) throw new Error(clientesRes.error.message);
@@ -79,7 +80,7 @@ async function buildRedeFromClientes(
   if (clientes.length === 0) return [];
 
   const emprestimos = (emprestimosRes.data ?? []) as unknown as { id: string; cliente_id: string; valor: number; status: string }[];
-  const parcelas = (parcelasRes.data ?? []) as unknown as { cliente_id: string; data_vencimento: string; status: string }[];
+  const parcelas = (parcelasRes.data ?? []) as unknown as { cliente_id: string; valor_original: number; data_vencimento: string; juros: number; multa: number; desconto: number; status: string }[];
 
   // Build loan totals per client (sum of active loans)
   const loanTotals = new Map<string, number>();
@@ -87,6 +88,14 @@ async function buildRedeFromClientes(
     if (e.status === 'ativo' || e.status === 'inadimplente') {
       loanTotals.set(e.cliente_id, (loanTotals.get(e.cliente_id) ?? 0) + e.valor);
     }
+  }
+
+  // Build corrected debt per client from open parcelas
+  const debtTotals = new Map<string, number>();
+  for (const p of parcelas) {
+    if (p.status === 'paga' || p.status === 'cancelada') continue;
+    const corrigido = valorCorrigido(p.valor_original, p.data_vencimento, p.juros, p.multa, p.desconto).total;
+    debtTotals.set(p.cliente_id, (debtTotals.get(p.cliente_id) ?? 0) + corrigido);
   }
 
   // Derive real status from parcelas: if any pendente parcela is past due → vencido; if any due within 5 days → a_vencer; else em_dia
@@ -178,7 +187,7 @@ async function buildRedeFromClientes(
           email: c.email,
           telefone: c.telefone,
           status: clientStatus.get(c.id) ?? 'em_dia',
-          valor: loanTotals.get(c.id) ?? 0,
+          valor: debtTotals.get(c.id) ?? loanTotals.get(c.id) ?? 0,
           bonus_acumulado: c.bonus_acumulado,
           score_interno: c.score_interno,
         },
