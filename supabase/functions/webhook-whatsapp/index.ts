@@ -16,6 +16,134 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 
+// ── EFI mTLS helpers (para criar cobrança PIX direto no chatbot) ──
+interface EfiCreds {
+  clientId: string; clientSecret: string; pixKey: string;
+  certPem: string; keyPem: string; sandbox: boolean; baseUrl: string;
+  multaPerc: number; jurosPerc: number;
+}
+let _efiToken: { token: string; expiresAt: number } | null = null;
+let _efiHttpClient: Deno.HttpClient | null = null;
+function getEfiHttpClient(creds: EfiCreds): Deno.HttpClient {
+  if (_efiHttpClient) return _efiHttpClient;
+  _efiHttpClient = Deno.createHttpClient({ cert: creds.certPem, key: creds.keyPem });
+  return _efiHttpClient;
+}
+async function getEfiToken(creds: EfiCreds): Promise<string> {
+  if (_efiToken && Date.now() < _efiToken.expiresAt) return _efiToken.token;
+  const credentials = btoa(`${creds.clientId}:${creds.clientSecret}`);
+  const client = getEfiHttpClient(creds);
+  const resp = await fetch(`${creds.baseUrl}/oauth/token`, {
+    method: "POST",
+    headers: { Authorization: `Basic ${credentials}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ grant_type: "client_credentials" }),
+    // @ts-ignore — Deno mTLS
+    client,
+  });
+  if (!resp.ok) throw new Error(`EFI Auth error: ${await resp.text()}`);
+  const data = await resp.json();
+  _efiToken = { token: data.access_token, expiresAt: Date.now() + (data.expires_in - 60) * 1000 };
+  return _efiToken.token;
+}
+async function efiRequest(creds: EfiCreds, method: string, path: string, body?: Record<string, unknown>) {
+  const token = await getEfiToken(creds);
+  const client = getEfiHttpClient(creds);
+  const resp = await fetch(`${creds.baseUrl}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+    // @ts-ignore — Deno mTLS
+    client,
+  });
+  const text = await resp.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!resp.ok) throw new Error(data?.mensagem || data?.message || `EFI error ${resp.status}`);
+  return data;
+}
+async function loadEfiCreds(adminClient: ReturnType<typeof createClient>): Promise<EfiCreds | null> {
+  try {
+    const { data: gw } = await adminClient.from("gateways_pagamento").select("config").eq("nome", "efi").eq("ativo", true).single();
+    if (!gw?.config) return null;
+    const cfg = gw.config as Record<string, unknown>;
+    const sandbox = cfg.sandbox === true;
+    const creds: EfiCreds = {
+      clientId: (cfg.client_id as string) || "", clientSecret: (cfg.client_secret as string) || "",
+      pixKey: (cfg.pix_key as string) || "", certPem: (cfg.cert_pem as string) || "",
+      keyPem: (cfg.key_pem as string) || "", sandbox,
+      baseUrl: sandbox ? "https://pix-h.api.efipay.com.br" : "https://pix.api.efipay.com.br",
+      multaPerc: Number(cfg.multa_perc) || 2.00, jurosPerc: Number(cfg.juros_perc) || 1.00,
+    };
+    if (!creds.clientId || !creds.certPem) return null;
+    return creds;
+  } catch { return null; }
+}
+async function criarCobrancaPix(
+  adminClient: ReturnType<typeof createClient>, creds: EfiCreds,
+  parcela: Record<string, unknown>, clienteNome: string, clienteCpf: string | null, valorOverride?: number,
+): Promise<{ txid: string; brCode: string | null; qrCodeImage: string | null } | null> {
+  try {
+    const txid = crypto.randomUUID().replace(/-/g, "").substring(0, 35);
+    const valor = valorOverride || Number(parcela.valor);
+    const payload: Record<string, unknown> = {
+      calendario: { expiracao: 86400 },
+      valor: { original: valor.toFixed(2) },
+      chave: creds.pixKey,
+      solicitacaoPagador: `Parcela ${parcela.numero} - FinanceDigital`.substring(0, 140),
+    };
+    if (clienteCpf) {
+      const cpfLimpo = String(clienteCpf).replace(/\D/g, "");
+      if (cpfLimpo.length === 11) payload.devedor = { cpf: cpfLimpo, nome: clienteNome };
+      else if (cpfLimpo.length === 14) payload.devedor = { cnpj: cpfLimpo, nome: clienteNome };
+    }
+    const cobResp = await efiRequest(creds, "PUT", `/v2/cob/${txid}`, payload);
+    let qrCodeImage: string | null = null;
+    let brCode: string | null = null;
+    try {
+      if (cobResp.loc?.id) {
+        const qr = await efiRequest(creds, "GET", `/v2/loc/${cobResp.loc.id}/qrcode`);
+        qrCodeImage = qr.imagemQrcode || null;
+        brCode = qr.qrcode || null;
+      }
+    } catch (qrErr) {
+      console.warn(`[chatbot] QR code falhou txid=${txid}:`, qrErr instanceof Error ? qrErr.message : qrErr);
+    }
+    const { error: insertErr } = await adminClient.from("woovi_charges").insert({
+      parcela_id: parcela.id || null, emprestimo_id: parcela.emprestimo_id || null,
+      cliente_id: parcela.cliente_id || null, woovi_charge_id: txid, woovi_txid: txid,
+      valor, status: "ACTIVE", br_code: brCode, qr_code_image: qrCodeImage,
+      payment_link: cobResp.location || null,
+      expiration_date: new Date(Date.now() + 86400000).toISOString(),
+      gateway: "efi",
+    });
+    if (insertErr) {
+      console.error(`[chatbot] ERRO ao salvar cobrança no banco: ${insertErr.message}`, JSON.stringify(insertErr));
+      // Tenta novamente sem parcela_id/emprestimo_id caso FK falhe
+      const { error: retryErr } = await adminClient.from("woovi_charges").insert({
+        parcela_id: null, emprestimo_id: null,
+        cliente_id: parcela.cliente_id || null, woovi_charge_id: txid, woovi_txid: txid,
+        valor, status: "ACTIVE", br_code: brCode, qr_code_image: qrCodeImage,
+        payment_link: cobResp.location || null,
+        expiration_date: new Date(Date.now() + 86400000).toISOString(),
+        gateway: "efi",
+      });
+      if (retryErr) {
+        console.error(`[chatbot] ERRO retry salvar cobrança: ${retryErr.message}`, JSON.stringify(retryErr));
+      } else {
+        console.log(`[chatbot] Cobrança salva no retry (sem FK parcela/emprestimo): txid=${txid}`);
+      }
+    }
+    if (parcela.id && !insertErr) {
+      const { error: updErr } = await adminClient.from("parcelas").update({ woovi_charge_id: txid }).eq("id", parcela.id);
+      if (updErr) console.warn(`[chatbot] Erro ao atualizar parcela com charge_id: ${updErr.message}`);
+    }
+    console.log(`[chatbot] Cobrança PIX criada: txid=${txid}, brCode=${brCode ? "SIM" : "NÃO"}, qr=${qrCodeImage ? "SIM" : "NÃO"}, dbOk=${!insertErr}`);
+    return { txid, brCode, qrCodeImage };
+  } catch (err) {
+    console.error(`[chatbot] Erro ao criar cobrança PIX:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -344,6 +472,13 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      // ── Formatar número para envio via Evolution API ─────
+      // Remover sufixo @s.whatsapp.net/@lid e manter só dígitos (igual ao send-whatsapp)
+      let formattedNumber = jidParaEnvio.replace(/@.*$/, "").replace(/\D/g, "");
+      if (formattedNumber.length >= 10 && formattedNumber.length <= 11 && !formattedNumber.startsWith("55")) {
+        formattedNumber = "55" + formattedNumber;
+      }
+
       // ── Auto-resposta: Score / Status ─────────────────────
       // Se o cliente enviar "score" ou "status", responder com os dados do cadastro
       if (tipo === "text" && conteudo) {
@@ -407,7 +542,7 @@ Deno.serve(async (req: Request) => {
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
-                  body: JSON.stringify({ number: jidParaEnvio, textMessage: { text: resposta } }),
+                  body: JSON.stringify({ number: formattedNumber, textMessage: { text: resposta }, text: resposta }),
                 }
               );
 
@@ -440,7 +575,7 @@ Deno.serve(async (req: Request) => {
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
-                  body: JSON.stringify({ number: jidParaEnvio, textMessage: { text: resposta } }),
+                  body: JSON.stringify({ number: formattedNumber, textMessage: { text: resposta }, text: resposta }),
                 }
               );
               await adminClient.from("whatsapp_mensagens_log").insert({
@@ -458,16 +593,1100 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // ── Chatbot: verificar match de palavra-chave ───────
-      if (tipo === "text" && conteudo) {
+      // ── Motor de Fluxo do Chatbot ────────────────────────
+      // 1. Verificar se há sessão ativa (resposta a etapa anterior)
+      // 2. Se não, verificar match de palavra-chave (novo fluxo)
+      // 3. Executar etapas: mensagem → condição → ação → espera → finalizar
+
+      console.log(`[chatbot] Processando: tipo=${tipo} conteudo="${(conteudo || "").slice(0, 50)}" telefone=${telefone} instancia=${instancia?.id || "null"}`);
+
+      // Helpers do motor de fluxo
+      const evoUrl = (Deno.env.get("EVOLUTION_API_URL") || instancia?.evolution_url || "").replace(/\/$/, "");
+
+      // Resolver nome do cliente para templates
+      const resolveNome = async () => {
+        if (cliente?.id) {
+          const { data: c } = await adminClient.from("clientes").select("nome").eq("id", cliente.id).maybeSingle();
+          if (c?.nome) return c.nome;
+        }
+        return message.pushName || "cliente";
+      };
+
+      // Substituir variáveis de template
+      const substituirTemplates = async (texto: string, contexto: Record<string, unknown> = {}) => {
+        const nome = await resolveNome();
+        return texto
+          .replace(/\{nome\}/gi, String(contexto.cliente_nome || nome))
+          .replace(/\{cliente_nome\}/gi, String(contexto.cliente_nome || nome))
+          .replace(/\{telefone\}/gi, telefone)
+          .replace(/\{resposta\}/gi, String(contexto.resposta || ""))
+          .replace(/\\n/g, "\n");
+      };
+
+      // Enviar texto direto (sem etapa) — para mensagens dinâmicas de ações
+      const enviarTexto = async (texto: string): Promise<boolean> => {
+        if (!instancia || !evoUrl || !instancia.instance_token) return false;
+        try {
+          const sendResp = await fetch(`${evoUrl}/message/sendText/${instancia.instance_name}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
+            body: JSON.stringify({
+              number: formattedNumber,
+              textMessage: { text: texto },
+              text: texto,
+              delay: 1500,
+            }),
+          });
+          const ok = sendResp.ok;
+          console.log(`[chatbot] enviarTexto ${ok ? "OK" : "FAIL"} → ${formattedNumber}`);
+          await adminClient.from("whatsapp_mensagens_log").insert({
+            instancia_id: instancia.id,
+            cliente_id: cliente?.id || null,
+            direcao: "saida",
+            telefone,
+            conteudo: texto,
+            tipo: "text",
+            status: ok ? "enviada" : "erro",
+            metadata: { auto_reply: true, action_message: true },
+          });
+          return ok;
+        } catch (err) {
+          console.error(`[chatbot] enviarTexto ERRO:`, err);
+          return false;
+        }
+      };
+
+      // Enviar imagem direto (base64 ou URL) — para QR codes etc
+      const enviarImagem = async (mediaBase64OrUrl: string, caption: string): Promise<boolean> => {
+        if (!instancia || !evoUrl || !instancia.instance_token) return false;
+        try {
+          const isBase64 = mediaBase64OrUrl.length > 500 || mediaBase64OrUrl.startsWith("data:");
+          const payload: Record<string, unknown> = { number: formattedNumber };
+          if (isBase64) {
+            const rawBase64 = mediaBase64OrUrl.replace(/^data:[^;]+;base64,/, "");
+            payload.mediaMessage = { mediatype: "image", media: rawBase64, caption, fileName: "qrcode-pix.png", encoding: true };
+          } else {
+            payload.mediaMessage = { mediatype: "image", media: mediaBase64OrUrl, caption, fileName: "qrcode-pix.png" };
+          }
+          const sendResp = await fetch(`${evoUrl}/message/sendMedia/${instancia.instance_name}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
+            body: JSON.stringify(payload),
+          });
+          const ok = sendResp.ok;
+          if (!ok) {
+            const errText = await sendResp.text();
+            console.warn(`[chatbot] enviarImagem FAIL ${sendResp.status}: ${errText.substring(0, 200)}`);
+          } else {
+            console.log(`[chatbot] enviarImagem OK → ${formattedNumber}`);
+          }
+          await adminClient.from("whatsapp_mensagens_log").insert({
+            instancia_id: instancia.id,
+            cliente_id: cliente?.id || null,
+            direcao: "saida",
+            telefone,
+            conteudo: caption,
+            tipo: "image",
+            status: ok ? "enviada" : "erro",
+            metadata: { auto_reply: true, action_message: true },
+          });
+          return ok;
+        } catch (err) {
+          console.error(`[chatbot] enviarImagem ERRO:`, err);
+          return false;
+        }
+      };
+
+      // Enviar uma etapa (mensagem com ou sem botões)
+      const enviarEtapa = async (etapa: Record<string, unknown>, contexto: Record<string, unknown> = {}): Promise<boolean> => {
+        if (!instancia || !evoUrl || !instancia.instance_token) return false;
+        if (!etapa.conteudo && etapa.tipo !== "acao" && etapa.tipo !== "espera") return false;
+
+        const etapaConfig = (etapa.config || {}) as Record<string, unknown>;
+        const etapaButtons = Array.isArray(etapaConfig.buttons)
+          ? (etapaConfig.buttons as Array<{ label?: string; value?: string }>).filter((b) => b.label)
+          : [];
+        const hasButtons = etapaButtons.length > 0;
+        const delayMs = (etapaConfig.delay_ms as number) || 0;
+        const textoFinal = await substituirTemplates(String(etapa.conteudo || ""), contexto);
+
+        if (!textoFinal && !hasButtons) return false;
+
+        let sendOk = false;
+        try {
+          let sendResp: Response;
+
+          if (hasButtons) {
+            // Tentar botões nativos
+            const evoButtons = etapaButtons.map((b, idx) => ({
+              type: "reply" as const,
+              displayText: b.label!,
+              id: b.value || `btn_${idx}`,
+            }));
+
+            sendResp = await fetch(`${evoUrl}/message/sendButtons/${instancia.instance_name}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
+              body: JSON.stringify({
+                number: formattedNumber,
+                title: textoFinal,
+                buttons: evoButtons,
+                ...(delayMs > 0 && { delay: delayMs }),
+              }),
+            });
+
+            if (sendResp.ok) {
+              sendOk = true;
+              console.log(`[chatbot] sendButtons OK → ${formattedNumber}`);
+            } else {
+              console.warn(`[chatbot] sendButtons falhou HTTP ${sendResp.status}, fallback texto`);
+            }
+          }
+
+          // Fallback: texto com opções numeradas
+          if (!sendOk) {
+            let textoComOpcoes = textoFinal;
+            if (hasButtons) {
+              const opcoes = etapaButtons.map((b, i) => `*${i + 1}.* ${b.label}`).join("\n");
+              textoComOpcoes = `${textoFinal}\n\n${opcoes}\n\n_Responda com o número da opção desejada._`;
+            }
+
+            sendResp = await fetch(`${evoUrl}/message/sendText/${instancia.instance_name}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
+              body: JSON.stringify({
+                number: formattedNumber,
+                textMessage: { text: textoComOpcoes },
+                text: textoComOpcoes,
+                ...(delayMs > 0 && { delay: delayMs }),
+              }),
+            });
+
+            const result = await sendResp.text();
+            sendOk = sendResp.ok;
+            console.log(`[chatbot] sendText ${sendOk ? "OK" : "FAIL"} → ${formattedNumber}: ${result.slice(0, 150)}`);
+          }
+
+          // Log no banco
+          await adminClient.from("whatsapp_mensagens_log").insert({
+            instancia_id: instancia.id,
+            cliente_id: cliente?.id || null,
+            fluxo_id: etapa.fluxo_id || null,
+            direcao: "saida",
+            telefone,
+            conteudo: textoFinal,
+            tipo: "text",
+            status: sendOk ? "enviada" : "erro",
+            metadata: { auto_reply: true, etapa_id: etapa.id, had_buttons: hasButtons },
+          });
+        } catch (err) {
+          console.error(`[chatbot] enviarEtapa ERRO:`, err);
+        }
+
+        return sendOk;
+      };
+
+      // Avaliar condição
+      const avaliarCondicao = (config: Record<string, unknown>, contexto: Record<string, unknown>): boolean => {
+        const variable = String(config.variable || "");
+        const operator = String(config.operator || "");
+        const expected = String(config.value || "").toLowerCase();
+
+        let actual = "";
+        if (variable === "horario") {
+          // Verificar se estamos dentro do horário comercial
+          const now = new Date();
+          // Ajustar para UTC-3 (Brasilia)
+          const brHour = (now.getUTCHours() - 3 + 24) % 24;
+          const brDay = now.getUTCDay(); // 0=domingo
+          const [startH, endH] = expected.split("-").map((t) => parseInt(t.split(":")[0]) || 0);
+          actual = (brDay >= 1 && brDay <= 5 && brHour >= startH && brHour < endH) ? expected : "fora_do_horario";
+        } else if (variable === "resposta") {
+          actual = String(contexto.resposta || "").toLowerCase();
+        } else if (variable === "dia_semana") {
+          const dias = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
+          actual = dias[new Date().getDay()];
+        } else {
+          actual = String(contexto[variable] || "").toLowerCase();
+        }
+
+        switch (operator) {
+          case "equals": return actual === expected;
+          case "not_equals": return actual !== expected;
+          case "contains": return actual.includes(expected);
+          case "not_contains": return !actual.includes(expected);
+          case "greater_than": return parseFloat(actual) > parseFloat(expected);
+          case "less_than": return parseFloat(actual) < parseFloat(expected);
+          case "in_list": return expected.split(",").map((s) => s.trim()).includes(actual);
+          default: return actual === expected;
+        }
+      };
+
+      // ── Cálculo de juros (replicado do src/app/lib/juros.ts) ──
+      const JUROS_FIXO_DIA = 100;
+      const JUROS_PERC_DIA = 0.10;
+      const JUROS_LIMIAR = 1_000;
+      const calcularJurosAtraso = (valorOriginal: number, diasAtraso: number): number => {
+        if (diasAtraso <= 0 || valorOriginal <= 0) return 0;
+        if (valorOriginal < JUROS_LIMIAR) return JUROS_FIXO_DIA * diasAtraso;
+        return Math.round(valorOriginal * JUROS_PERC_DIA * diasAtraso * 100) / 100;
+      };
+      const diasDeAtraso = (dataVencimento: string): number => {
+        const venc = new Date(dataVencimento + "T00:00:00");
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        venc.setHours(0, 0, 0, 0);
+        return Math.max(0, Math.floor((today.getTime() - venc.getTime()) / 86400000));
+      };
+      const valorCorrigido = (valorOriginal: number, dataVencimento: string, jurosDb = 0, multa = 0, desconto = 0) => {
+        const dias = diasDeAtraso(dataVencimento);
+        const juros = jurosDb > 0 ? jurosDb : calcularJurosAtraso(valorOriginal, dias);
+        const total = Math.max(valorOriginal + juros + multa - desconto, 0);
+        return { total, juros, dias };
+      };
+
+      // ── Handler de ações do chatbot — consultas reais ao banco de dados ──
+      const executarAcaoHandler = async (
+        actionType: string,
+        actionParam: string,
+        contexto: Record<string, unknown>,
+      ): Promise<{ success: boolean; message?: string; skipConteudo?: boolean }> => {
+        const fmt = (v: number) =>
+          new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+        const fmtDate = (d: string) => {
+          try { return new Date(d).toLocaleDateString("pt-BR"); } catch { return d; }
+        };
+
+        try {
+          switch (actionType) {
+
+            // ── Identificar cliente por CPF ──
+            case "identificar_cpf": {
+              const cpfRaw = String(contexto.resposta_raw || contexto.resposta || "").replace(/\D/g, "");
+              if (!cpfRaw || cpfRaw.length < 11) {
+                contexto.cpf_encontrado = "false";
+                return { success: false, message: "⚠️ CPF inválido. Informe os 11 dígitos sem pontos ou traços." };
+              }
+              const { data: c } = await adminClient.from("clientes")
+                .select("id, nome, status, score_interno, limite_credito, credito_utilizado, bonus_acumulado, dias_atraso")
+                .eq("cpf", cpfRaw)
+                .maybeSingle();
+              if (c) {
+                contexto.cliente_id = c.id;
+                contexto.cliente_nome = c.nome;
+                contexto.cliente_encontrado = "true";
+                contexto.cpf_encontrado = "true";
+                return { success: true, message: `✅ Identificamos! Olá, *${c.nome}*! Vou consultar suas informações...` };
+              }
+              contexto.cpf_encontrado = "false";
+              return { success: false };
+            }
+
+            // ── Consultar parcelas (com cálculo de juros corrigido) ──
+            case "consultar_parcelas": {
+              const clienteId = String(contexto.cliente_id || "");
+              if (!clienteId) return { success: false, message: "❌ Cliente não identificado." };
+              // Buscar pendentes e vencidas; filtro real via status derivado
+              const { data: parcelas } = await adminClient.from("parcelas")
+                .select("id, numero, valor, valor_original, data_vencimento, status, juros, multa, desconto")
+                .eq("cliente_id", clienteId)
+                .in("status", ["pendente", "vencida"])
+                .order("data_vencimento");
+
+              if (!parcelas || parcelas.length === 0) {
+                const label = actionParam === "vencidas" ? "vencidas" : "em aberto";
+                return { success: true, message: `✅ Não há parcelas ${label} no momento. Você está em dia! 🎉`, skipConteudo: true };
+              }
+
+              // Recalcular status real e valores corrigidos
+              const parcelasCorrigidas = parcelas.map((p: Record<string, unknown>) => {
+                const vencStr = p.data_vencimento as string;
+                let statusReal = p.status as string;
+                // Derivar: pendente com vencimento passado → vencida
+                if (statusReal === "pendente") {
+                  const venc = new Date(vencStr + "T00:00:00");
+                  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+                  if (venc < hoje) statusReal = "vencida";
+                }
+                const corr = valorCorrigido(
+                  (p.valor_original as number) || (p.valor as number) || 0,
+                  vencStr,
+                  (p.juros as number) || 0,
+                  (p.multa as number) || 0,
+                  (p.desconto as number) || 0,
+                );
+                return { ...p, statusReal, valorCorrigido: corr.total, jurosCalc: corr.juros, diasAtraso: corr.dias };
+              });
+
+              // Filtrar se pediu só vencidas
+              const filtered = actionParam === "vencidas"
+                ? parcelasCorrigidas.filter((p) => p.statusReal === "vencida")
+                : parcelasCorrigidas;
+
+              if (filtered.length === 0) {
+                return { success: true, message: `✅ Não há parcelas vencidas no momento. Você está em dia! 🎉`, skipConteudo: true };
+              }
+
+              const vencidas = filtered.filter((p) => p.statusReal === "vencida");
+              const pendentes = filtered.filter((p) => p.statusReal === "pendente");
+              const totalCorrigido = filtered.reduce((s, p) => s + p.valorCorrigido, 0);
+
+              let msg = actionParam === "vencidas"
+                ? `⚠️ *Parcelas Vencidas*\n\n`
+                : `📋 *Resumo de Cobranças*\n\n`;
+              if (actionParam !== "vencidas" && vencidas.length > 0) {
+                msg += `🔴 *${vencidas.length} vencida(s)*\n`;
+              }
+              if (pendentes.length > 0) {
+                msg += `🟡 *${pendentes.length} pendente(s)*\n`;
+              }
+              msg += `💰 Total corrigido: *${fmt(totalCorrigido)}*\n\n`;
+
+              for (const p of filtered.slice(0, 6)) {
+                const icon = p.statusReal === "vencida" ? "🔴" : "🟡";
+                const valorOrig = (p.valor_original as number) || (p.valor as number) || 0;
+                const jurosInfo = p.jurosCalc > 0 ? `\n   📈 Juros: +${fmt(p.jurosCalc)}` : "";
+                const atrasoInfo = p.diasAtraso > 0 ? ` (${p.diasAtraso}d atraso)` : "";
+                msg += `${icon} *Parcela ${p.numero}*${atrasoInfo}\n   Original: ${fmt(valorOrig)} → *${fmt(p.valorCorrigido)}*${jurosInfo}\n   Venc: ${fmtDate(p.data_vencimento as string)}\n\n`;
+              }
+              if (filtered.length > 6) {
+                msg += `_...e mais ${filtered.length - 6} parcela(s)_`;
+              }
+
+              contexto.total_parcelas = filtered.length;
+              contexto.total_vencidas = vencidas.length;
+              contexto.total_valor = totalCorrigido;
+              return { success: true, message: msg, skipConteudo: true };
+            }
+
+            // ── Consultar saldo / score ──
+            case "consultar_saldo": {
+              const clienteId = String(contexto.cliente_id || "");
+              let clienteData: Record<string, unknown> | null = null;
+              if (clienteId) {
+                const { data } = await adminClient.from("clientes")
+                  .select("id, nome, status, score_interno, limite_credito, credito_utilizado, bonus_acumulado, dias_atraso")
+                  .eq("id", clienteId)
+                  .maybeSingle();
+                clienteData = data;
+              }
+              if (!clienteData) {
+                const { data } = await adminClient.from("clientes")
+                  .select("id, nome, status, score_interno, limite_credito, credito_utilizado, bonus_acumulado, dias_atraso")
+                  .eq("telefone", telefone)
+                  .maybeSingle();
+                clienteData = data;
+                if (data?.id) {
+                  contexto.cliente_id = data.id as string;
+                  contexto.cliente_nome = data.nome as string;
+                  contexto.cliente_encontrado = "true";
+                }
+              }
+              if (!clienteData) {
+                return { success: false, message: "❌ Não encontramos seu cadastro. Fale com um atendente para regularizar." };
+              }
+
+              const score = (clienteData.score_interno as number) ?? 0;
+              const faixa = score >= 800 ? "Excelente ✅" : score >= 600 ? "Bom 👍" : score >= 400 ? "Regular ⚠️" : "Baixo ❌";
+              const disponivel = ((clienteData.limite_credito as number) || 0) - ((clienteData.credito_utilizado as number) || 0);
+
+              const statusLabel = clienteData.status === "em_dia" ? "Em dia ✅" : clienteData.status === "a_vencer" ? "A vencer ⚠️" : "Vencido 🔴";
+              let msg = `📊 *Seu Painel Financeiro*\n\n` +
+                `👤 ${clienteData.nome}\n` +
+                `📌 Status: *${statusLabel}*\n\n` +
+                `🔢 Score: *${score}/1000* — ${faixa}\n` +
+                `💰 Limite: ${fmt((clienteData.limite_credito as number) || 0)}\n` +
+                `💳 Utilizado: ${fmt((clienteData.credito_utilizado as number) || 0)}\n` +
+                `✅ Disponível: *${fmt(disponivel)}*\n` +
+                `🎁 Bônus: ${fmt((clienteData.bonus_acumulado as number) || 0)}\n`;
+              if (((clienteData.dias_atraso as number) || 0) > 0) {
+                msg += `\n⚠️ *${clienteData.dias_atraso} dia(s) em atraso*`;
+              }
+              msg += `\n\n_Atualizado em ${new Date().toLocaleDateString("pt-BR")}_`;
+              return { success: true, message: msg, skipConteudo: true };
+            }
+
+            // ── Criar ticket de atendimento ──
+            case "criar_ticket": {
+              let cId = String(contexto.cliente_id || "");
+              if (!cId) {
+                const { data: c } = await adminClient.from("clientes").select("id").eq("telefone", telefone).maybeSingle();
+                if (c) { cId = c.id; contexto.cliente_id = c.id; }
+              }
+              if (!cId) {
+                return { success: false, message: "⚠️ Não conseguimos identificar seu cadastro. Um atendente será notificado." };
+              }
+              const { data: existingTicket } = await adminClient.from("tickets_atendimento")
+                .select("id")
+                .eq("cliente_id", cId)
+                .in("status", ["aberto", "em_atendimento", "aguardando_cliente"])
+                .limit(1)
+                .maybeSingle();
+              if (existingTicket) {
+                return { success: true, message: "📋 Você já tem um atendimento em andamento. Um atendente responderá em breve!" };
+              }
+
+              const assunto = actionParam || "Solicitação via Chatbot WhatsApp";
+              const { error: ticketErr } = await adminClient.from("tickets_atendimento").insert({
+                cliente_id: cId,
+                assunto,
+                descricao: `Ticket criado pelo chatbot WhatsApp.\nTelefone: ${telefone}`,
+                canal: "whatsapp",
+                status: "aberto",
+                prioridade: "media",
+              });
+              if (ticketErr) {
+                console.error("[chatbot] Erro ao criar ticket:", JSON.stringify(ticketErr));
+                return { success: false, message: "❌ Erro ao criar ticket. Tente novamente." };
+              }
+              return { success: true, message: "🎫 *Ticket criado com sucesso!*\nUm atendente entrará em contato em breve." };
+            }
+
+            // ── Propor acordo / renegociação para parcelas vencidas ──
+            case "propor_acordo": {
+              const clienteId = String(contexto.cliente_id || "");
+              if (!clienteId) return { success: false, message: "❌ Cliente não identificado." };
+
+              const respostaAcordo = String(contexto.resposta || "").trim().toLowerCase();
+
+              // ── PASSO 2: cliente escolheu data de pagamento → gerar PIX da entrada ──
+              if (contexto.acordo_aguardando_data && respostaAcordo) {
+                // Opções: 1=dia 5, 2=dia 10, 3=dia 15, 4=dia 20, 5=dia 25
+                const diaOpcoes: Record<string, number> = { "1": 5, "2": 10, "3": 15, "4": 20, "5": 25 };
+                const diaPagamento = diaOpcoes[respostaAcordo] || parseInt(respostaAcordo);
+                if (!diaPagamento || diaPagamento < 1 || diaPagamento > 28) {
+                  return { success: true, message: `❌ Opção inválida. Escolha um dia (1-5) ou informe o dia do mês (ex: *10*).`, skipConteudo: true, waitForInput: true };
+                }
+
+                const valorEntrada = Number(contexto.acordo_valor_entrada || 0);
+                const totalDivida = Number(contexto.acordo_total_divida || 0);
+                const restante = Math.round((totalDivida - valorEntrada) * 100) / 100;
+                const parcelasIds = (contexto.acordo_parcelas_ids as string[]) || [];
+                const numParcelasRenego = Math.max(1, Math.min(parcelasIds.length, 6));
+                const valorParcelaRenego = Math.round((restante / numParcelasRenego) * 100) / 100;
+
+                // Gerar PIX da entrada
+                const efiCreds = await loadEfiCreds(adminClient);
+                const clienteData = await adminClient.from("clientes").select("nome, cpf").eq("id", clienteId).maybeSingle();
+
+                if (efiCreds && valorEntrada > 0) {
+                  const chargeData = await criarCobrancaPix(
+                    adminClient, efiCreds,
+                    { id: null, emprestimo_id: null, cliente_id: clienteId, numero: "ENTRADA", valor: valorEntrada },
+                    clienteData?.data?.nome || "Cliente",
+                    clienteData?.data?.cpf || null,
+                    valorEntrada,
+                  );
+
+                  // Calcular datas de vencimento das parcelas restantes
+                  const datasRenego: string[] = [];
+                  const hoje = new Date();
+                  let mesInicio = hoje.getMonth() + 1; // próximo mês
+                  let anoInicio = hoje.getFullYear();
+                  if (mesInicio > 11) { mesInicio = 0; anoInicio++; }
+                  for (let i = 0; i < numParcelasRenego; i++) {
+                    let mes = mesInicio + i;
+                    let ano = anoInicio;
+                    if (mes > 11) { mes -= 12; ano++; }
+                    const data = new Date(ano, mes, diaPagamento);
+                    datasRenego.push(data.toISOString().split("T")[0]);
+                  }
+
+                  let msg = `✅ *Acordo Confirmado!*\n\n` +
+                    `💰 Entrada: *${fmt(valorEntrada)}* (pague agora via PIX)\n` +
+                    `📊 Restante: *${fmt(restante)}* em *${numParcelasRenego}x* de *${fmt(valorParcelaRenego)}*\n` +
+                    `📅 Dia de pagamento: todo dia *${diaPagamento}*\n\n` +
+                    `📋 *Cronograma:*\n`;
+                  datasRenego.forEach((d, i) => {
+                    msg += `  ${i + 1}. ${d.split("-").reverse().join("/")} — ${fmt(valorParcelaRenego)}\n`;
+                  });
+                  msg += `\n⚠️ _Se não cumprir os pagamentos, o empréstimo será movido para cobrança judicial (N3)._\n\n`;
+
+                  if (chargeData?.brCode) {
+                    msg += `💳 *PIX da Entrada:*\n\nCopie o código abaixo:\n\n${chargeData.brCode}\n\n📱 Cole no app do banco → *Pix Copia e Cola*`;
+                    await enviarTexto(msg);
+                    if (chargeData.qrCodeImage) {
+                      await new Promise((r) => setTimeout(r, 2000));
+                      await enviarImagem(chargeData.qrCodeImage, `QR Code - Entrada Acordo - ${fmt(valorEntrada)}`);
+                    }
+                  } else {
+                    msg += `⚠️ Não foi possível gerar o PIX automaticamente.\nUm atendente enviará o código.`;
+                    await enviarTexto(msg);
+                  }
+
+                  // Atualizar kanban para negociação
+                  const { data: existingKanban } = await adminClient.from("kanban_cobranca")
+                    .select("id").eq("cliente_id", clienteId)
+                    .in("etapa", ["a_vencer", "vencido", "contatado", "negociacao"])
+                    .limit(1).maybeSingle();
+                  const obsTexto = `Acordo via chatbot. Entrada: ${fmt(valorEntrada)}. Restante: ${numParcelasRenego}x ${fmt(valorParcelaRenego)} todo dia ${diaPagamento}. Total: ${fmt(totalDivida)}`;
+                  if (existingKanban) {
+                    await adminClient.from("kanban_cobranca").update({
+                      etapa: "negociacao", valor_divida: totalDivida,
+                      ultimo_contato: new Date().toISOString(),
+                      observacao: obsTexto,
+                    }).eq("id", existingKanban.id);
+                  } else {
+                    await adminClient.from("kanban_cobranca").insert({
+                      cliente_id: clienteId, etapa: "negociacao", valor_divida: totalDivida,
+                      tentativas_contato: 1, ultimo_contato: new Date().toISOString(),
+                      observacao: obsTexto,
+                    });
+                  }
+
+                  // Registrar parcelas renegociadas no contexto (para possível atualização futura no sistema)
+                  contexto.acordo_concluido = true;
+                  contexto.acordo_dia_pagamento = diaPagamento;
+                  contexto.acordo_datas = datasRenego;
+                  contexto.acordo_valor_parcela = valorParcelaRenego;
+                  delete contexto.acordo_aguardando_data;
+                  delete contexto.acordo_aguardando_confirmacao;
+                  return { success: true, message: "", skipConteudo: true };
+                } else {
+                  return { success: true, message: `⚠️ Não foi possível gerar o pagamento. Um atendente entrará em contato.`, skipConteudo: true };
+                }
+              }
+
+              // ── PASSO 1: cliente respondeu "sim" à proposta → perguntar data ──
+              if (contexto.acordo_aguardando_confirmacao && respostaAcordo) {
+                if (respostaAcordo === "sim" || respostaAcordo === "1" || respostaAcordo === "aceito") {
+                  const totalDivida = Number(contexto.acordo_total_divida || 0);
+                  const valorEntrada = Number(contexto.acordo_valor_entrada || 0);
+                  const restante = Math.round((totalDivida - valorEntrada) * 100) / 100;
+
+                  let msg = `✅ Ótimo! Vamos definir as condições.\n\n` +
+                    `💰 Entrada: *${fmt(valorEntrada)}* (será gerado PIX)\n` +
+                    `📊 Restante: *${fmt(restante)}*\n\n` +
+                    `📅 *Em qual dia do mês deseja pagar as parcelas restantes?*\n\n` +
+                    `*1.* Dia 5\n` +
+                    `*2.* Dia 10\n` +
+                    `*3.* Dia 15\n` +
+                    `*4.* Dia 20\n` +
+                    `*5.* Dia 25\n\n` +
+                    `_Responda com o número da opção._`;
+
+                  delete contexto.acordo_aguardando_confirmacao;
+                  contexto.acordo_aguardando_data = true;
+                  return { success: true, message: msg, skipConteudo: true, waitForInput: true };
+                } else {
+                  // Cliente recusou
+                  delete contexto.acordo_aguardando_confirmacao;
+                  return { success: true, message: `❌ Acordo cancelado. As dívidas permanecem e continuam acumulando juros diariamente.\n\n_Quando quiser renegociar, é só voltar aqui._`, skipConteudo: true };
+                }
+              }
+
+              // ── PASSO 0: montar proposta inicial ──
+              const { data: vencidas } = await adminClient.from("parcelas")
+                .select("id, numero, valor, valor_original, data_vencimento, juros, multa, desconto, emprestimo_id, status")
+                .eq("cliente_id", clienteId)
+                .in("status", ["pendente", "vencida"])
+                .order("data_vencimento");
+
+              const vencidasReais = (vencidas || []).filter((p: Record<string, unknown>) => {
+                if (p.status === "vencida") return true;
+                const venc = new Date((p.data_vencimento as string) + "T00:00:00");
+                const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+                return venc < hoje;
+              });
+              if (vencidasReais.length === 0) {
+                return { success: true, message: "✅ Você não tem parcelas vencidas! Não é necessário acordo. 🎉", skipConteudo: true };
+              }
+
+              let totalDivida = 0;
+              let totalJuros = 0;
+              for (const p of vencidasReais) {
+                const corr = valorCorrigido(
+                  (p.valor_original as number) || (p.valor as number) || 0,
+                  p.data_vencimento as string,
+                  (p.juros as number) || 0, (p.multa as number) || 0, (p.desconto as number) || 0,
+                );
+                totalDivida += corr.total;
+                totalJuros += corr.juros;
+              }
+
+              // Entrada mínima: 30% da dívida total
+              const valorEntrada = Math.round(totalDivida * 0.30 * 100) / 100;
+
+              // Listar parcelas na mensagem
+              let msg = `🤝 *Proposta de Renegociação*\n\n` +
+                `📊 Você tem *${vencidasReais.length} parcela(s) vencida(s)*:\n\n`;
+              for (const p of vencidasReais.slice(0, 8)) {
+                const corr = valorCorrigido((p.valor_original as number) || (p.valor as number) || 0, p.data_vencimento as string, (p.juros as number) || 0, (p.multa as number) || 0, (p.desconto as number) || 0);
+                msg += `🔴 Parcela ${p.numero} — *${fmt(corr.total)}*`;
+                if (corr.juros > 0) msg += ` (+${fmt(corr.juros)} juros)`;
+                msg += `\n`;
+              }
+              msg += `\n💰 *Dívida total: ${fmt(totalDivida)}*\n`;
+              if (totalJuros > 0) msg += `📈 Juros acumulados: ${fmt(totalJuros)}\n`;
+              msg += `\n🔑 *Condições de renegociação:*\n` +
+                `• Entrada mínima: *${fmt(valorEntrada)}* (30%)\n` +
+                `• Restante pode ser parcelado\n` +
+                `• Se não cumprir, a dívida volta ao valor original + juros\n\n` +
+                `Deseja aceitar? Responda *Sim* ou *Não*`;
+
+              // Salvar contexto para próxima rodada
+              contexto.acordo_aguardando_confirmacao = true;
+              contexto.acordo_total_divida = totalDivida;
+              contexto.acordo_valor_entrada = valorEntrada;
+              contexto.acordo_parcelas_ids = vencidasReais.map((p: Record<string, unknown>) => p.id);
+
+              return { success: true, message: msg, skipConteudo: true, waitForInput: true };
+            }
+
+            // ── Buscar PIX para pagamento (multi-parcela) ──
+            case "buscar_pix": {
+              const clienteId = String(contexto.cliente_id || "");
+              if (!clienteId) return { success: false, message: "❌ Cliente não identificado." };
+
+              const { data: parcelas } = await adminClient.from("parcelas")
+                .select("id, numero, valor, valor_original, data_vencimento, status, juros, multa, desconto, woovi_charge_id, emprestimo_id, cliente_id")
+                .eq("cliente_id", clienteId)
+                .in("status", ["pendente", "vencida"])
+                .order("data_vencimento");
+
+              if (!parcelas || parcelas.length === 0) {
+                return { success: true, message: "✅ Você não tem parcelas em aberto para pagar! 🎉", skipConteudo: true };
+              }
+
+              // Recalcular e derivar status real
+              const parcelasCorr = parcelas.map((p: Record<string, unknown>) => {
+                const vencStr = p.data_vencimento as string;
+                let statusReal = p.status as string;
+                if (statusReal === "pendente") {
+                  const venc = new Date(vencStr + "T00:00:00");
+                  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+                  if (venc < hoje) statusReal = "vencida";
+                }
+                const corr = valorCorrigido((p.valor_original as number) || (p.valor as number) || 0, vencStr, (p.juros as number) || 0, (p.multa as number) || 0, (p.desconto as number) || 0);
+                return { ...p, statusReal, valorCorr: corr.total, jurosCalc: corr.juros, diasAtr: corr.dias };
+              });
+
+              // Helper: buscar ou criar cobrança PIX com valor correto
+              const obterPixParcela = async (
+                parc: typeof parcelasCorr[0],
+                efiCr: EfiCreds | null,
+                nomeCliente: string,
+                cpfCliente: string | null,
+              ): Promise<{ brCode: string | null; qrCodeImage: string | null }> => {
+                let brCode: string | null = null;
+                let qrCodeImage: string | null = null;
+                const valorEsperado = Math.round(parc.valorCorr * 100);
+
+                // Buscar cobrança existente
+                let chargeExistente: Record<string, unknown> | null = null;
+                if (parc.woovi_charge_id) {
+                  const { data } = await adminClient.from("woovi_charges")
+                    .select("woovi_charge_id, br_code, qr_code_image, status, valor")
+                    .eq("woovi_charge_id", parc.woovi_charge_id).eq("status", "ACTIVE").maybeSingle();
+                  if (data?.br_code) chargeExistente = data;
+                }
+                if (!chargeExistente) {
+                  const { data } = await adminClient.from("woovi_charges")
+                    .select("woovi_charge_id, br_code, qr_code_image, status, valor")
+                    .eq("parcela_id", parc.id).eq("status", "ACTIVE")
+                    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+                  if (data?.br_code) chargeExistente = data;
+                }
+
+                // Verificar se o valor da cobrança bate com o valor corrigido (tolerância R$0.05)
+                if (chargeExistente) {
+                  const valorCharge = Math.round(Number(chargeExistente.valor || 0) * 100);
+                  if (Math.abs(valorCharge - valorEsperado) <= 5) {
+                    // Valor correto — usar cobrança existente
+                    brCode = chargeExistente.br_code as string;
+                    qrCodeImage = (chargeExistente.qr_code_image as string) || null;
+                  } else {
+                    // Valor defasado (juros mudaram) — expirar e criar nova
+                    console.log(`[chatbot] Cobrança ${chargeExistente.woovi_charge_id} valor=${valorCharge/100} != esperado=${valorEsperado/100}, expirando`);
+                    await adminClient.from("woovi_charges")
+                      .update({ status: "EXPIRED" })
+                      .eq("woovi_charge_id", chargeExistente.woovi_charge_id);
+                    chargeExistente = null;
+                  }
+                }
+
+                // Criar nova cobrança com valor corrigido
+                if (!brCode && efiCr) {
+                  const chargeData = await criarCobrancaPix(adminClient, efiCr, parc, nomeCliente, cpfCliente, parc.valorCorr);
+                  if (chargeData) {
+                    brCode = chargeData.brCode;
+                    qrCodeImage = chargeData.qrCodeImage;
+                  }
+                }
+                return { brCode, qrCodeImage };
+              };
+
+              // Helper: enviar mensagem + QR de uma parcela
+              const enviarPixMensagem = async (parc: typeof parcelasCorr[0], brCode: string | null, qrCodeImage: string | null) => {
+                const icon = parc.statusReal === "vencida" ? "🔴" : "🟡";
+                let msg = `💳 *Pagamento via Pix*\n\n` +
+                  `${icon} Parcela ${parc.numero} — *${fmt(parc.valorCorr)}*\n` +
+                  (parc.jurosCalc > 0 ? `📈 Juros: +${fmt(parc.jurosCalc)} (${parc.diasAtr}d atraso)\n` : "") +
+                  `📅 Vencimento: ${fmtDate(parc.data_vencimento as string)}\n\n`;
+                if (brCode) {
+                  msg += `Copie o código Pix abaixo:\n\n${brCode}\n\n📱 Cole no app do banco → *Pix Copia e Cola*`;
+                } else {
+                  msg += `⚠️ Não foi possível gerar o código Pix.\nSolicite a um atendente.`;
+                }
+                await enviarTexto(msg);
+                if (qrCodeImage) {
+                  await new Promise((r) => setTimeout(r, 2000));
+                  await enviarImagem(qrCodeImage, `QR Code PIX - Parcela ${parc.numero} - ${fmt(parc.valorCorr)}`);
+                }
+              };
+
+              // Se o cliente já fez uma escolha (resposta a wait_for_input)
+              const respostaPix = String(contexto.resposta || "").trim();
+              if (contexto.pix_aguardando_escolha && respostaPix) {
+                const escolha = respostaPix.toLowerCase();
+                let selecionadas: typeof parcelasCorr = [];
+
+                if (escolha === "todas" || escolha === "tudo" || escolha === String(parcelasCorr.length + 1)) {
+                  selecionadas = parcelasCorr;
+                } else {
+                  const nums = respostaPix.replace(/[eE,\s]+/g, ",").split(",").map(n => parseInt(n.trim())).filter(n => !isNaN(n));
+                  for (const num of nums) {
+                    if (num >= 1 && num <= parcelasCorr.length) selecionadas.push(parcelasCorr[num - 1]);
+                  }
+                }
+
+                if (selecionadas.length === 0) {
+                  return { success: true, message: `❌ Opção inválida. Responda com o número da parcela (ex: *1* ou *1,2* ou *Todas*).`, skipConteudo: true, waitForInput: true };
+                }
+
+                delete contexto.pix_aguardando_escolha;
+
+                const efiCreds = await loadEfiCreds(adminClient);
+                const clienteData = await adminClient.from("clientes").select("nome, cpf").eq("id", clienteId).maybeSingle();
+
+                for (let i = 0; i < selecionadas.length; i++) {
+                  const parc = selecionadas[i];
+                  const { brCode, qrCodeImage } = await obterPixParcela(parc, efiCreds, clienteData?.data?.nome || "Cliente", clienteData?.data?.cpf || null);
+                  await enviarPixMensagem(parc, brCode, qrCodeImage);
+                  if (i < selecionadas.length - 1) await new Promise((r) => setTimeout(r, 3000));
+                }
+
+                return { success: true, message: "", skipConteudo: true };
+              }
+
+              // ── PASSO 0: Listar parcelas para o cliente escolher ──
+              if (parcelasCorr.length === 1) {
+                // Só uma parcela — pula direto pro pagamento
+                const parc = parcelasCorr[0];
+                const efiCreds = await loadEfiCreds(adminClient);
+                const clienteData = await adminClient.from("clientes").select("nome, cpf").eq("id", clienteId).maybeSingle();
+                const { brCode, qrCodeImage } = await obterPixParcela(parc, efiCreds, clienteData?.data?.nome || "Cliente", clienteData?.data?.cpf || null);
+                await enviarPixMensagem(parc, brCode, qrCodeImage);
+                return { success: true, message: "", skipConteudo: true };
+              }
+
+              // Múltiplas parcelas — mostrar lista para escolher
+              const totalGeral = parcelasCorr.reduce((s, p) => s + p.valorCorr, 0);
+              let msg = `💳 *Pagamento via Pix*\n\n` +
+                `Você tem *${parcelasCorr.length}* parcelas em aberto:\n\n`;
+              parcelasCorr.forEach((p, i) => {
+                const icon = p.statusReal === "vencida" ? "🔴" : "🟡";
+                msg += `*${i + 1}.* ${icon} Parcela ${p.numero} — *${fmt(p.valorCorr)}*`;
+                if (p.jurosCalc > 0) msg += ` (+${fmt(p.jurosCalc)} juros)`;
+                msg += ` — Venc: ${fmtDate(p.data_vencimento as string)}\n`;
+              });
+              msg += `\n*${parcelasCorr.length + 1}.* 💰 Pagar *TODAS* — ${fmt(totalGeral)}\n\n` +
+                `_Responda com o número da parcela que deseja pagar (ex: *1* ou *1,2* ou *Todas*)_`;
+
+              contexto.pix_aguardando_escolha = true;
+              return { success: true, message: msg, skipConteudo: true, waitForInput: true };
+            }
+
+            default:
+              console.warn(`[chatbot] Ação desconhecida: ${actionType}`);
+              return { success: true };
+          }
+        } catch (err) {
+          console.error(`[chatbot] Erro ao executar ação ${actionType}:`, err);
+          return { success: false, message: "❌ Ocorreu um erro. Tente novamente ou fale com um atendente." };
+        }
+      };
+
+      // Executar cadeia de etapas a partir de uma etapa (não-mensagem são executadas automaticamente)
+      const executarCadeia = async (
+        etapaInicial: Record<string, unknown>,
+        todasEtapas: Record<string, unknown>[],
+        sessaoId: string,
+        contexto: Record<string, unknown>,
+        fluxoId: string,
+      ) => {
+        let etapaAtual: Record<string, unknown> | null = etapaInicial;
+        let iteracoes = 0;
+        const MAX_ITER = 20; // proteção contra loops infinitos
+
+        while (etapaAtual && iteracoes < MAX_ITER) {
+          iteracoes++;
+          const tipoEtapa = String(etapaAtual.tipo || "");
+          const etapaConfig = (etapaAtual.config || {}) as Record<string, unknown>;
+          const etapaId = String(etapaAtual.id);
+
+          console.log(`[chatbot] Executando etapa ${etapaId} tipo=${tipoEtapa} iter=${iteracoes}`);
+
+          if (tipoEtapa === "mensagem") {
+            await enviarEtapa(etapaAtual, contexto);
+
+            // Se tem botões, pausar e aguardar resposta
+            const btns = Array.isArray(etapaConfig.buttons) ? (etapaConfig.buttons as Array<{ label?: string }>).filter((b) => b.label) : [];
+            const waitForInput = etapaConfig.wait_for_input === true;
+            if (btns.length > 0 || waitForInput) {
+              await adminClient.from("chatbot_sessoes").update({
+                etapa_atual_id: etapaId,
+                status: "aguardando_resposta",
+                contexto,
+              }).eq("id", sessaoId);
+              return; // Pausa — espera resposta do usuário
+            }
+
+            // Sem botões: pequena pausa antes da próxima etapa
+            await new Promise((r) => setTimeout(r, 1000));
+            const nextId = etapaAtual.proximo_sim || ((etapaConfig.connections as Array<{ targetId: string }>) || [])[0]?.targetId;
+            etapaAtual = nextId ? todasEtapas.find((e) => String(e.id) === String(nextId)) || null : null;
+            continue;
+          }
+
+          if (tipoEtapa === "condicao") {
+            const resultado = avaliarCondicao(etapaConfig, contexto);
+            console.log(`[chatbot] Condição: ${etapaConfig.variable} ${etapaConfig.operator} ${etapaConfig.value} → ${resultado}`);
+            const nextId = resultado ? etapaAtual.proximo_sim : etapaAtual.proximo_nao;
+            etapaAtual = nextId ? todasEtapas.find((e) => String(e.id) === String(nextId)) || null : null;
+            continue;
+          }
+
+          if (tipoEtapa === "acao") {
+            const actionType = String(etapaConfig.action_type || "");
+            const actionParam = String(etapaConfig.action_param || "");
+            console.log(`[chatbot] Ação: ${actionType} param=${actionParam}`);
+
+            const result = await executarAcaoHandler(actionType, actionParam, contexto);
+
+            // Enviar mensagem dinâmica do resultado da ação
+            if (result.message) {
+              await enviarTexto(result.message);
+            }
+            // Enviar conteúdo estático se presente (e ação não pulou)
+            if (etapaAtual.conteudo && !result.skipConteudo) {
+              await enviarEtapa(etapaAtual, contexto);
+            }
+
+            // Pausa para não atropelar a próxima mensagem
+            if (result.message || etapaAtual.conteudo) {
+              await new Promise((r) => setTimeout(r, 3000));
+            }
+
+            // Atualizar contexto da sessão
+            await adminClient.from("chatbot_sessoes").update({ contexto }).eq("id", sessaoId);
+
+            // Se a ação pediu para aguardar input do cliente (ex: escolher parcela, confirmar acordo)
+            if (result.waitForInput) {
+              await adminClient.from("chatbot_sessoes").update({
+                etapa_atual_id: etapaId,
+                status: "aguardando_resposta",
+                contexto,
+              }).eq("id", sessaoId);
+              return; // Pausa — espera resposta do usuário, ação será re-executada
+            }
+
+            // Avançar: proximo_sim para sucesso, proximo_nao para falha
+            const connections = (etapaConfig.connections as Array<{ targetId: string }>) || [];
+            const nextId = result.success
+              ? (etapaAtual.proximo_sim || connections[0]?.targetId)
+              : (etapaAtual.proximo_nao || etapaAtual.proximo_sim || connections[0]?.targetId);
+            etapaAtual = nextId ? todasEtapas.find((e) => String(e.id) === String(nextId)) || null : null;
+            continue;
+          }
+
+          if (tipoEtapa === "espera") {
+            const durationMs = (etapaConfig.duration_ms as number) || 5000;
+            const esperaAte = new Date(Date.now() + durationMs);
+
+            // Guardar próxima etapa e pausar
+            const nextId = etapaAtual.proximo_sim || ((etapaConfig.connections as Array<{ targetId: string }>) || [])[0]?.targetId;
+
+            await adminClient.from("chatbot_sessoes").update({
+              etapa_atual_id: nextId ? String(nextId) : null,
+              status: "espera",
+              espera_ate: esperaAte.toISOString(),
+              contexto,
+            }).eq("id", sessaoId);
+
+            console.log(`[chatbot] Espera ${durationMs}ms, retomar em ${esperaAte.toISOString()}`);
+            return; // Pausa — será retomado por cron ou próxima mensagem
+          }
+
+          if (tipoEtapa === "finalizar") {
+            // Enviar mensagem de encerramento
+            if (etapaAtual.conteudo) {
+              await enviarEtapa(etapaAtual, contexto);
+            }
+
+            // Finalizar sessão
+            await adminClient.from("chatbot_sessoes").update({
+              status: "finalizado",
+              etapa_atual_id: etapaId,
+              contexto,
+            }).eq("id", sessaoId);
+
+            // Incrementar conversões
+            try {
+              await adminClient.from("fluxos_chatbot")
+                .update({ conversoes: (contexto._disparos as number || 0) + 1 })
+                .eq("id", fluxoId);
+            } catch { /* ignore */ }
+
+            console.log(`[chatbot] Fluxo finalizado: ${etapaConfig.close_reason || "sem_razao"}`);
+            return;
+          }
+
+          // Tipo desconhecido — avançar
+          const nextId = etapaAtual.proximo_sim || ((etapaConfig.connections as Array<{ targetId: string }>) || [])[0]?.targetId;
+          etapaAtual = nextId ? todasEtapas.find((e) => String(e.id) === String(nextId)) || null : null;
+        }
+
+        // Se saiu do loop sem finalizar, finalizar a sessão
+        if (iteracoes >= MAX_ITER) {
+          console.warn(`[chatbot] MAX_ITER atingido, finalizando sessão ${sessaoId}`);
+        }
+        await adminClient.from("chatbot_sessoes").update({ status: "finalizado", contexto }).eq("id", sessaoId);
+      };
+
+      // ── Verificar sessão ativa existente ──────────────
+      if (tipo === "text" && conteudo && instancia) {
+        let sessaoAtiva: Record<string, unknown> | null = null;
+        try {
+          const { data: sessaoData, error: sessaoErr } = await adminClient
+            .from("chatbot_sessoes")
+            .select("id, fluxo_id, etapa_atual_id, status, contexto, espera_ate")
+            .eq("instancia_id", instancia.id)
+            .eq("telefone", telefone)
+            .in("status", ["aguardando_resposta", "espera"])
+            .maybeSingle();
+
+          if (sessaoErr) {
+            console.error(`[chatbot] Erro ao buscar sessão:`, JSON.stringify(sessaoErr));
+          } else {
+            sessaoAtiva = sessaoData;
+          }
+        } catch (sessErr) {
+          console.error(`[chatbot] Exceção ao buscar sessão:`, sessErr);
+        }
+
+        if (sessaoAtiva) {
+          console.log(`[chatbot] Sessão ativa encontrada: ${sessaoAtiva.id} status=${sessaoAtiva.status}`);
+
+          // Buscar fluxo e etapas separadamente (evitar join complexo)
+          const { data: fluxo } = await adminClient
+            .from("fluxos_chatbot")
+            .select("*")
+            .eq("id", sessaoAtiva.fluxo_id)
+            .single();
+
+          const { data: etapasData } = await adminClient
+            .from("fluxos_chatbot_etapas")
+            .select("*")
+            .eq("fluxo_id", sessaoAtiva.fluxo_id);
+
+          if (!fluxo || !etapasData) {
+            console.error(`[chatbot] Fluxo ou etapas não encontrados para sessão ${sessaoAtiva.id}`);
+            await adminClient.from("chatbot_sessoes").update({ status: "finalizado" }).eq("id", sessaoAtiva.id);
+          } else {
+            const todasEtapas = etapasData as Record<string, unknown>[];
+            const contexto = (sessaoAtiva.contexto || {}) as Record<string, unknown>;
+            const etapaAtual = todasEtapas.find((e) => String(e.id) === String(sessaoAtiva!.etapa_atual_id));
+
+          if (sessaoAtiva.status === "espera") {
+            // Se espera expirou, continuar de onde parou
+            const now = new Date();
+            const esperaAte = sessaoAtiva.espera_ate ? new Date(sessaoAtiva.espera_ate) : now;
+            if (now >= esperaAte && etapaAtual) {
+              await executarCadeia(etapaAtual, todasEtapas, sessaoAtiva.id, contexto, fluxo.id);
+            } else {
+              // Ainda em espera — ignorar mensagem do usuário ou informar
+              console.log(`[chatbot] Sessão em espera até ${esperaAte.toISOString()}, ignorando`);
+            }
+          } else if (sessaoAtiva.status === "aguardando_resposta" && etapaAtual) {
+            // Processar resposta do usuário
+            const conteudoLower = conteudo.toLowerCase().trim();
+            const etapaConfig = (etapaAtual.config || {}) as Record<string, unknown>;
+            const btns = Array.isArray(etapaConfig.buttons)
+              ? (etapaConfig.buttons as Array<{ label?: string; value?: string }>).filter((b) => b.label)
+              : [];
+
+            // Resolver resposta: por número (1, 2, 3) ou por valor do botão
+            let respostaValor = conteudoLower;
+            const numResp = parseInt(conteudoLower);
+            if (!isNaN(numResp) && numResp >= 1 && numResp <= btns.length) {
+              respostaValor = btns[numResp - 1].value || btns[numResp - 1].label || conteudoLower;
+              respostaValor = respostaValor.toLowerCase();
+            } else {
+              // Tentar match por value ou label do botão
+              const matchedBtn = btns.find(
+                (b) => b.value?.toLowerCase() === conteudoLower || b.label?.toLowerCase() === conteudoLower
+              );
+              if (matchedBtn) {
+                respostaValor = (matchedBtn.value || matchedBtn.label || "").toLowerCase();
+              }
+            }
+
+            contexto.resposta = respostaValor;
+            contexto.resposta_raw = conteudo;
+            console.log(`[chatbot] Resposta processada: "${conteudo}" → value="${respostaValor}"`);
+
+            // Incrementar respostas
+            try {
+              await adminClient.from("fluxos_chatbot")
+                .update({ respostas: (fluxo.respostas || 0) + 1 })
+                .eq("id", fluxo.id);
+            } catch { /* ignore */ }
+
+            // Se a etapa atual é uma ação (wait_for_input da ação), re-executar a mesma etapa
+            const tipoEtapaAtual = String(etapaAtual.tipo || "");
+            if (tipoEtapaAtual === "acao") {
+              console.log(`[chatbot] Re-executando ação com resposta do usuário`);
+              await executarCadeia(etapaAtual as Record<string, unknown>, todasEtapas, sessaoAtiva.id, contexto, fluxo.id);
+            } else {
+              // Avançar para próxima etapa (comportamento padrão para mensagens com botões)
+              const nextId = etapaAtual.proximo_sim || ((etapaConfig.connections as Array<{ targetId: string }>) || [])[0]?.targetId;
+              const proximaEtapa = nextId ? todasEtapas.find((e) => String(e.id) === String(nextId)) : null;
+
+              if (proximaEtapa) {
+                await executarCadeia(proximaEtapa as Record<string, unknown>, todasEtapas, sessaoAtiva.id, contexto, fluxo.id);
+              } else {
+                // Sem próxima etapa — finalizar
+                await adminClient.from("chatbot_sessoes").update({ status: "finalizado", contexto }).eq("id", sessaoAtiva.id);
+                console.log(`[chatbot] Sem próxima etapa, sessão finalizada`);
+              }
+            }
+          }
+          } // fecha else (fluxo && etapasData) + fecha if(aguardando/espera)
+
+          // Já processou sessão ativa — retornar
+          return new Response(
+            JSON.stringify({ ok: true, event: "chatbot_session_continued" }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        } // fecha if(sessaoAtiva)
+      } // fecha if(tipo==text && sessão)
+
+      // ── Chatbot: verificar match de palavra-chave (novo fluxo) ───────
+      if (tipo === "text" && conteudo && instancia) {
         const conteudoLower = conteudo.toLowerCase().trim();
 
-        const { data: fluxos } = await adminClient
+        try {
+        const { data: fluxos, error: fluxosErr } = await adminClient
           .from("fluxos_chatbot")
           .select("*, fluxos_chatbot_etapas(*)")
           .eq("status", "ativo")
           .eq("gatilho", "palavra_chave")
           .not("palavra_chave", "is", null);
+
+        if (fluxosErr) {
+          console.error(`[chatbot] Erro ao buscar fluxos:`, JSON.stringify(fluxosErr));
+        }
 
         if (fluxos && fluxos.length > 0) {
           for (const fluxo of fluxos) {
@@ -480,69 +1699,64 @@ Deno.serve(async (req: Request) => {
               (kw: string) => kw && conteudoLower.includes(kw)
             );
 
-            if (matched && instancia) {
+            if (matched) {
               console.log(`[chatbot] Fluxo "${fluxo.nome}" matched keyword`);
 
-              // Buscar primeira etapa do fluxo (ordem = 0 ou menor)
-              const etapas = (fluxo.fluxos_chatbot_etapas || []).sort(
-                (a: { ordem: number }, b: { ordem: number }) => a.ordem - b.ordem
+              const todasEtapas = ((fluxo.fluxos_chatbot_etapas || []) as Record<string, unknown>[]).sort(
+                (a, b) => (a.ordem as number) - (b.ordem as number)
               );
 
-              if (etapas.length > 0) {
-                const primeiraEtapa = etapas[0];
+              if (todasEtapas.length > 0) {
+                const primeiraEtapa = todasEtapas[0];
 
-                // Enviar resposta automática (instancia já tem os campos necessários)
-                const evoUrl = (Deno.env.get("EVOLUTION_API_URL") || instancia.evolution_url || "").replace(/\/$/, "");
+                // Finalizar sessões antigas deste telefone nesta instância
+                await adminClient.from("chatbot_sessoes")
+                  .update({ status: "finalizado" })
+                  .eq("instancia_id", instancia.id)
+                  .eq("telefone", telefone)
+                  .in("status", ["ativo", "aguardando_resposta", "espera"]);
 
-                if (evoUrl && instancia.instance_token) {
-                  await fetch(
-                    `${evoUrl}/message/sendText/${instancia.instance_name}`,
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        apikey: instancia.instance_token,
-                      },
-                      body: JSON.stringify({
-                        number: jidParaEnvio,
-                        textMessage: { text: primeiraEtapa.conteudo },
-                      }),
+                // Criar nova sessão
+                const { data: novaSessao, error: sessaoInsertErr } = await adminClient.from("chatbot_sessoes").insert({
+                  instancia_id: instancia.id,
+                  fluxo_id: fluxo.id,
+                  etapa_atual_id: primeiraEtapa.id,
+                  telefone,
+                  status: "ativo",
+                  contexto: { resposta: "", push_name: message.pushName || "", cliente_id: cliente?.id || "", cliente_encontrado: cliente?.id ? "true" : "false" },
+                }).select("id").single();
+
+                if (sessaoInsertErr) {
+                  console.error(`[chatbot] Erro ao criar sessão:`, JSON.stringify(sessaoInsertErr));
+                }
+
+                if (novaSessao) {
+                  console.log(`[chatbot] Sessão criada: ${novaSessao.id} para fluxo "${fluxo.nome}"`);
+                  // Incrementar disparos
+                  try {
+                    const { error: rpcErr } = await adminClient.rpc("increment_fluxo_contador", {
+                      p_fluxo_id: fluxo.id,
+                      p_campo: "disparos",
+                    });
+                    if (rpcErr) {
+                      await adminClient.from("fluxos_chatbot")
+                        .update({ disparos: (fluxo.disparos || 0) + 1 })
+                        .eq("id", fluxo.id);
                     }
-                  );
-
-                  // Log da resposta automática
-                  const { error: autoReplyErr } = await adminClient.from("whatsapp_mensagens_log").insert({
-                    instancia_id: instancia.id,
-                    cliente_id: cliente?.id || null,
-                    fluxo_id: fluxo.id,
-                    direcao: "saida",
-                    telefone,
-                    conteudo: primeiraEtapa.conteudo,
-                    tipo: "text",
-                    status: "enviada",
-                    metadata: {
-                      auto_reply: true,
-                      etapa_id: primeiraEtapa.id,
-                      fluxo_nome: fluxo.nome,
-                    },
-                  });
-
-                  if (autoReplyErr) {
-                    console.error("[webhook-whatsapp] Erro ao inserir auto-reply:", JSON.stringify(autoReplyErr));
-                  }
-
-                  // Incrementar contadores do fluxo
-                  await adminClient.rpc("increment_fluxo_contador", {
-                    p_fluxo_id: fluxo.id,
-                    p_campo: "disparos",
-                  }).then(() => {
-                    // Se não existir a RPC, faz update direto
-                  }).catch(async () => {
-                    await adminClient
-                      .from("fluxos_chatbot")
+                  } catch {
+                    await adminClient.from("fluxos_chatbot")
                       .update({ disparos: (fluxo.disparos || 0) + 1 })
                       .eq("id", fluxo.id);
-                  });
+                  }
+
+                  // Executar cadeia de etapas a partir da primeira
+                  await executarCadeia(
+                    primeiraEtapa,
+                    todasEtapas,
+                    novaSessao.id,
+                    { resposta: "", push_name: message.pushName || "", cliente_id: cliente?.id || "", cliente_encontrado: cliente?.id ? "true" : "false" },
+                    fluxo.id,
+                  );
                 }
               }
 
@@ -550,6 +1764,9 @@ Deno.serve(async (req: Request) => {
               break;
             }
           }
+        }
+        } catch (flowErr) {
+          console.error(`[chatbot] Exceção no motor de fluxo:`, flowErr);
         }
       }
 

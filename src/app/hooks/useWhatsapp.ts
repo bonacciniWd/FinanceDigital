@@ -23,8 +23,8 @@ const STATS_KEY = 'whatsapp-stats';
 // ── Instâncias ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════
 
-/** Listar todas as instâncias WhatsApp */
-export function useInstancias() {
+/** Listar instâncias WhatsApp. Se userId fornecido, filtra por created_by. */
+export function useInstancias(userId?: string) {
   const queryClient = useQueryClient();
 
   // Realtime: atualizar quando status muda
@@ -36,8 +36,10 @@ export function useInstancias() {
   }, [queryClient]);
 
   return useQuery({
-    queryKey: [INSTANCIAS_KEY],
-    queryFn: whatsappService.getInstancias,
+    queryKey: userId ? [INSTANCIAS_KEY, userId] : [INSTANCIAS_KEY],
+    queryFn: () => userId
+      ? whatsappService.getInstanciasByUser(userId)
+      : whatsappService.getInstancias(),
     refetchInterval: 30000, // Polling a cada 30s como backup
   });
 }

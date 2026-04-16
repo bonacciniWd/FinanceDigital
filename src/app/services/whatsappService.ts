@@ -78,6 +78,18 @@ export async function getInstancias(): Promise<WhatsappInstancia[]> {
   return data ?? [];
 }
 
+/** Listar instâncias do usuário (created_by = userId) */
+export async function getInstanciasByUser(userId: string): Promise<WhatsappInstancia[]> {
+  const { data, error } = await supabase
+    .from('whatsapp_instancias')
+    .select('*')
+    .eq('created_by', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 /** Buscar instância por ID */
 export async function getInstanciaById(id: string): Promise<WhatsappInstancia> {
   const { data, error } = await supabase

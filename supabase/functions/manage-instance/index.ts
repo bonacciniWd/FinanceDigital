@@ -123,6 +123,7 @@ Deno.serve(async (req: Request) => {
     // Permitir service_role key como autenticação (para chamadas de manutenção/CLI)
     // Verificar pelo payload do JWT se é service_role
     let isServiceRole = false;
+    let callerId: string | null = null;
     try {
       const payloadB64 = jwt.split(".")[1] || "";
       const payload = JSON.parse(atob(payloadB64));
@@ -137,6 +138,7 @@ Deno.serve(async (req: Request) => {
           { status: 401, headers: jsonHeaders }
         );
       }
+      callerId = caller.id;
     }
 
     const body = await req.json();
@@ -345,6 +347,7 @@ Deno.serve(async (req: Request) => {
             status: qrCode ? "qr_pendente" : "desconectado",
             qr_code: qrCode,
             webhook_url: webhookUrl,
+            created_by: callerId,
           },
           { onConflict: "instance_name", ignoreDuplicates: false }
         )

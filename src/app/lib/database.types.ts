@@ -737,6 +737,7 @@ export interface Database {
           qr_code: string | null;
           webhook_url: string | null;
           is_system: boolean;
+          created_by: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -751,6 +752,7 @@ export interface Database {
           qr_code?: string | null;
           webhook_url?: string | null;
           is_system?: boolean;
+          created_by?: string | null;
         };
         Update: {
           departamento?: string;
@@ -762,6 +764,7 @@ export interface Database {
           qr_code?: string | null;
           webhook_url?: string | null;
           is_system?: boolean;
+          created_by?: string | null;
           updated_at?: string;
         };
         Relationships: [];

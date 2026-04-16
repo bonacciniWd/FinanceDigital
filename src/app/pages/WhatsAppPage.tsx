@@ -59,6 +59,7 @@ import {
   useDesvincularCliente,
 } from '../hooks/useEtiquetas';
 import { useCreateTicket, useTicketsByCliente } from '../hooks/useTickets';
+import { useAuth } from '../contexts/AuthContext';
 
 // ── Conversor áudio → WAV 16 kHz mono (via Web Audio API) ─────────────
 // Funciona com QUALQUER formato que o browser grave (WebM/Opus, OGG/Opus, MP4/AAC).
@@ -442,7 +443,12 @@ export default function WhatsAppPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Hooks ──────────────────────────────────────────────
-  const { data: instancias = [], isLoading: loadingInstancias } = useInstancias();
+  const { user } = useAuth();
+  const isAdminOrGerencia = user?.role === 'admin' || user?.role === 'gerencia';
+  // Admin/gerência vê todas as instâncias; demais veem só as próprias
+  const { data: instancias = [], isLoading: loadingInstancias } = useInstancias(
+    isAdminOrGerencia ? undefined : user?.id
+  );
   const criarInstancia = useCriarInstancia();
   const conectar = useConectarInstancia();
   const desconectar = useDesconectarInstancia();
@@ -925,21 +931,23 @@ export default function WhatsAppPage() {
           <p className="text-muted-foreground mt-1">Gerenciar instâncias e conversas do WhatsApp</p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => syncInstancias.mutate(undefined, {
-              onSuccess: (res) => {
-                toast.success(`Sincronizadas: ${res.synced}/${res.total} instâncias com webhook configurado.`);
-              },
-              onError: (err) => toast.error(`Erro ao sincronizar: ${err instanceof Error ? err.message : String(err)}`),
-            })}
-            disabled={syncInstancias.isPending}
-          >
-            {syncInstancias.isPending
-              ? <span className="w-4 h-4 mr-2 animate-spin border-2 border-current border-t-transparent rounded-full inline-block" />
-              : <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>}
-            Sincronizar
-          </Button>
+          {isAdminOrGerencia && (
+            <Button
+              variant="outline"
+              onClick={() => syncInstancias.mutate(undefined, {
+                onSuccess: (res) => {
+                  toast.success(`Sincronizadas: ${res.synced}/${res.total} instâncias com webhook configurado.`);
+                },
+                onError: (err) => toast.error(`Erro ao sincronizar: ${err instanceof Error ? err.message : String(err)}`),
+              })}
+              disabled={syncInstancias.isPending}
+            >
+              {syncInstancias.isPending
+                ? <span className="w-4 h-4 mr-2 animate-spin border-2 border-current border-t-transparent rounded-full inline-block" />
+                : <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>}
+              Sincronizar
+            </Button>
+          )}
           <Dialog open={showNewInstance} onOpenChange={setShowNewInstance}>
           <DialogTrigger asChild>
             <Button><Plus className="w-4 h-4 mr-2" />Nova Instância</Button>
@@ -1150,7 +1158,10 @@ export default function WhatsAppPage() {
               <CardContent className="p-3">
                 <div className="flex items-start justify-between mb-2">
                   <div>
-                    <h4 className="font-semibold text-sm">{inst.instance_name}</h4>
+                    <h4 className="font-semibold text-sm flex items-center gap-1.5">
+                      {inst.instance_name}
+                      {inst.is_system && <Badge variant="outline" className="text-[9px] px-1 py-0 border-blue-400 text-blue-500">Sistema</Badge>}
+                    </h4>
                     <p className="text-xs text-muted-foreground">{inst.departamento}</p>
                   </div>
                   {getStatusBadge(inst.status)}
@@ -1191,22 +1202,24 @@ export default function WhatsAppPage() {
                       <QrCode className="w-3 h-3 mr-1" />Ver QR
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-xs text-destructive"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm('Deletar instância?')) {
-                        deletar.mutate(inst.id, {
-                          onSuccess: () => toast.success('Instância deletada'),
-                          onError: (err) => toast.error(`Erro ao deletar: ${(err as Error).message}`),
-                        });
-                      }
-                    }}
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
+                  {isAdminOrGerencia && !inst.is_system && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-xs text-destructive"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Deletar instância?')) {
+                          deletar.mutate(inst.id, {
+                            onSuccess: () => toast.success('Instância deletada'),
+                            onError: (err) => toast.error(`Erro ao deletar: ${(err as Error).message}`),
+                          });
+                        }
+                      }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -674,6 +674,7 @@ CREATE TABLE whatsapp_instancias (
   evolution_url   TEXT,
   qr_code         TEXT,
   webhook_url     TEXT,
+  created_by      UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -762,8 +763,9 @@ ALTER TABLE fluxos_chatbot         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fluxos_chatbot_etapas  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whatsapp_mensagens_log ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "wpp_inst_select" ON whatsapp_instancias FOR SELECT USING (auth.uid() IS NOT NULL);
-CREATE POLICY "wpp_inst_all" ON whatsapp_instancias FOR ALL USING (auth_role() = 'admin');
+CREATE POLICY "wpp_inst_admin_all" ON whatsapp_instancias FOR ALL USING (auth_role() IN ('admin', 'gerencia'));
+CREATE POLICY "wpp_inst_own_select" ON whatsapp_instancias FOR SELECT USING (auth.uid() IS NOT NULL AND created_by = auth.uid());
+CREATE POLICY "wpp_inst_own_modify" ON whatsapp_instancias FOR ALL USING (auth.uid() IS NOT NULL AND created_by = auth.uid());
 
 CREATE POLICY "fluxo_select" ON fluxos_chatbot FOR SELECT USING (auth.uid() IS NOT NULL);
 CREATE POLICY "fluxo_insert" ON fluxos_chatbot FOR INSERT WITH CHECK (auth_role() IN ('admin', 'gerencia'));

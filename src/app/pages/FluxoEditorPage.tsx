@@ -113,6 +113,7 @@ interface CondicaoConfig {
 interface AcaoConfig {
   position: NodePosition;
   action_type: string;
+  action_param?: string;
   params: Record<string, string>;
 }
 
@@ -256,17 +257,33 @@ function AcaoNode({ data, selected }: NodeProps) {
   const d = data as Record<string, unknown>;
   const colors = nodeColors.acao;
   const config = (d.config || {}) as Partial<AcaoConfig>;
+  const actionLabels: Record<string, string> = {
+    transferir_atendente: '🧑‍💼 Transferir',
+    transferir_departamento: '🏢 Dept.',
+    adicionar_tag: '🏷️ Tag',
+    remover_tag: '❌ Tag',
+    enviar_cobranca: '💰 Cobrança',
+    webhook: '🔗 Webhook',
+    atualizar_status: '📊 Status',
+    criar_tarefa: '📋 Tarefa',
+    enviar_email: '📧 E-mail',
+  };
   return (
-    <div className={`rounded-xl border-2 ${selected ? 'border-primary ring-2 ring-primary/20' : colors.border} ${colors.bg} p-4 min-w-[220px] shadow-md`}>
+    <div className={`rounded-xl border-2 ${selected ? 'border-primary ring-2 ring-primary/20' : colors.border} ${colors.bg} p-4 min-w-[220px] max-w-[280px] shadow-md`}>
       <Handle type="target" position={Position.Top} className="!w-3 !h-3 !bg-purple-500 !border-2 !border-white" />
       <div className="flex items-center gap-2 mb-2">
         <div className={`${colors.icon}`}>{nodeIcons.acao}</div>
         <span className="font-semibold text-sm">Ação</span>
         {config.action_type && (
-          <Badge variant="outline" className="text-[9px] ml-auto">{config.action_type}</Badge>
+          <Badge variant="outline" className="text-[9px] ml-auto">
+            {actionLabels[config.action_type] || config.action_type}
+          </Badge>
         )}
       </div>
       <p className="text-xs text-foreground/80">{String(d.conteudo || '(sem ação configurada)')}</p>
+      {config.action_param && (
+        <p className="text-[10px] text-muted-foreground mt-1">→ {config.action_param}</p>
+      )}
       <Handle type="source" position={Position.Bottom} className="!w-3 !h-3 !bg-purple-500 !border-2 !border-white" />
     </div>
   );
@@ -350,6 +367,7 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
   const [operator, setOperator] = useState(String(config.operator || 'equals'));
   const [condValue, setCondValue] = useState(String(config.value || ''));
   const [actionType, setActionType] = useState(String(config.action_type || ''));
+  const [actionParam, setActionParam] = useState(String(config.action_param || ''));
   const [durationMs, setDurationMs] = useState(Number(config.duration_ms || 0));
   const [durationLabel, setDurationLabel] = useState(String(config.duration_label || ''));
   const [closeReason, setCloseReason] = useState(String(config.close_reason || ''));
@@ -366,6 +384,7 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
     setOperator(String(cfg.operator || 'equals'));
     setCondValue(String(cfg.value || ''));
     setActionType(String(cfg.action_type || ''));
+    setActionParam(String(cfg.action_param || ''));
     setDurationMs(Number(cfg.duration_ms || 0));
     setDurationLabel(String(cfg.duration_label || ''));
     setCloseReason(String(cfg.close_reason || ''));
@@ -384,7 +403,7 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
     } else if (tipo === 'condicao') {
       Object.assign(baseConfig, { variable, operator, value: condValue });
     } else if (tipo === 'acao') {
-      Object.assign(baseConfig, { action_type: actionType });
+      Object.assign(baseConfig, { action_type: actionType, action_param: actionParam || undefined });
     } else if (tipo === 'espera') {
       Object.assign(baseConfig, { duration_ms: durationMs, duration_label: durationLabel });
     } else if (tipo === 'finalizar') {
@@ -407,6 +426,37 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
     updated[idx] = { ...updated[idx], [field]: val };
     setButtons(updated);
   };
+
+  // Helpers para espera
+  const durationPresets = [
+    { label: '30s', ms: 30_000 },
+    { label: '1 min', ms: 60_000 },
+    { label: '5 min', ms: 300_000 },
+    { label: '30 min', ms: 1_800_000 },
+    { label: '1h', ms: 3_600_000 },
+    { label: '24h', ms: 86_400_000 },
+  ];
+
+  const formatDuration = (ms: number) => {
+    if (ms < 60_000) return `${(ms / 1000).toFixed(0)}s`;
+    if (ms < 3_600_000) return `${(ms / 60_000).toFixed(0)} min`;
+    return `${(ms / 3_600_000).toFixed(1)}h`;
+  };
+
+  // Label do campo de parâmetro da ação
+  const actionParamLabel: Record<string, string> = {
+    transferir_atendente: 'Departamento do atendente',
+    transferir_departamento: 'Departamento destino',
+    adicionar_tag: 'Nome da etiqueta',
+    remover_tag: 'Nome da etiqueta',
+    webhook: 'URL do webhook',
+    atualizar_status: 'Novo status',
+    criar_tarefa: 'Título da tarefa',
+    enviar_email: 'E-mail destino',
+    enviar_cobranca: 'Tipo de cobrança',
+  };
+
+  const needsParam = actionType && actionType !== '';
 
   return (
     <div className="w-[360px] border-l bg-card h-full overflow-y-auto">
@@ -434,9 +484,16 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
           <Textarea
             value={conteudo}
             onChange={(e) => setConteudo(e.target.value)}
-            placeholder="Digite o conteúdo..."
+            placeholder={tipo === 'mensagem'
+              ? 'Use {nome} para nome do cliente, {valor} para valor...'
+              : 'Digite o conteúdo...'}
             rows={tipo === 'mensagem' ? 4 : 2}
           />
+          {tipo === 'mensagem' && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Variáveis: {'{'}<span>nome</span>{'}'}, {'{'}<span>telefone</span>{'}'}, {'{'}<span>valor</span>{'}'}, {'{'}<span>vencimento</span>{'}'}
+            </p>
+          )}
         </div>
 
         {/* ── Campos específicos de Mensagem ── */}
@@ -453,13 +510,13 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
               {buttons.map((btn, idx) => (
                 <div key={idx} className="flex gap-2 mb-2">
                   <Input
-                    placeholder="Rótulo"
+                    placeholder="Rótulo (ex: Sim)"
                     value={btn.label}
                     onChange={(e) => updateButton(idx, 'label', e.target.value)}
                     className="flex-1"
                   />
                   <Input
-                    placeholder="Valor"
+                    placeholder="Valor (ex: sim)"
                     value={btn.value}
                     onChange={(e) => updateButton(idx, 'value', e.target.value)}
                     className="flex-1"
@@ -498,18 +555,20 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
 
             {/* Delay */}
             <div>
-              <label className="text-sm font-medium mb-1 block">Delay antes de enviar (ms)</label>
-              <Input
-                type="number"
-                min={0}
-                step={500}
-                value={delayMs}
-                onChange={(e) => setDelayMs(Number(e.target.value))}
-                placeholder="0"
-              />
-              <p className="text-[10px] text-muted-foreground mt-1">
-                {delayMs > 0 ? `${(delayMs / 1000).toFixed(1)}s` : 'Sem delay'}
-              </p>
+              <label className="text-sm font-medium mb-1 block">Delay antes de enviar</label>
+              <div className="flex gap-1 mb-2 flex-wrap">
+                {[0, 1000, 2000, 3000, 5000].map((ms) => (
+                  <Button
+                    key={ms}
+                    variant={delayMs === ms ? 'default' : 'outline'}
+                    size="sm"
+                    className="text-xs h-7 px-2"
+                    onClick={() => setDelayMs(ms)}
+                  >
+                    {ms === 0 ? 'Sem' : `${ms / 1000}s`}
+                  </Button>
+                ))}
+              </div>
             </div>
           </>
         )}
@@ -524,9 +583,12 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
                 <SelectContent>
                   <SelectItem value="resposta">Resposta do Cliente</SelectItem>
                   <SelectItem value="horario">Horário Atual</SelectItem>
+                  <SelectItem value="dia_semana">Dia da Semana</SelectItem>
                   <SelectItem value="departamento">Departamento</SelectItem>
                   <SelectItem value="status_cliente">Status do Cliente</SelectItem>
                   <SelectItem value="parcelas_atrasadas">Parcelas Atrasadas</SelectItem>
+                  <SelectItem value="valor_divida">Valor da Dívida</SelectItem>
+                  <SelectItem value="tentativas">Tentativas de Contato</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -541,60 +603,116 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
                   <SelectItem value="greater_than">Maior que</SelectItem>
                   <SelectItem value="less_than">Menor que</SelectItem>
                   <SelectItem value="starts_with">Começa com</SelectItem>
+                  <SelectItem value="in">Está na lista</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div>
               <label className="text-sm font-medium mb-1 block">Valor</label>
               <Input
-                placeholder="Valor esperado"
+                placeholder={variable === 'horario' ? 'ex: 08:00-18:00' :
+                  variable === 'dia_semana' ? 'ex: seg,ter,qua,qui,sex' :
+                  'Valor esperado'}
                 value={condValue}
                 onChange={(e) => setCondValue(e.target.value)}
               />
+              {variable === 'horario' && (
+                <p className="text-[10px] text-muted-foreground mt-1">Formato: HH:MM-HH:MM (horário comercial)</p>
+              )}
             </div>
           </>
         )}
 
         {/* ── Campos específicos de Ação ── */}
         {tipo === 'acao' && (
-          <div>
-            <label className="text-sm font-medium mb-1 block">Tipo de Ação</label>
-            <Select value={actionType} onValueChange={setActionType}>
-              <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="transferir_atendente">Transferir p/ Atendente</SelectItem>
-                <SelectItem value="transferir_departamento">Transferir p/ Departamento</SelectItem>
-                <SelectItem value="adicionar_tag">Adicionar Tag</SelectItem>
-                <SelectItem value="remover_tag">Remover Tag</SelectItem>
-                <SelectItem value="webhook">Chamar Webhook</SelectItem>
-                <SelectItem value="atualizar_status">Atualizar Status</SelectItem>
-                <SelectItem value="criar_tarefa">Criar Tarefa</SelectItem>
-                <SelectItem value="enviar_email">Enviar E-mail</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Tipo de Ação</label>
+              <Select value={actionType} onValueChange={(v) => { setActionType(v); setActionParam(''); }}>
+                <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="transferir_atendente">🧑‍💼 Transferir p/ Atendente</SelectItem>
+                  <SelectItem value="transferir_departamento">🏢 Transferir p/ Departamento</SelectItem>
+                  <SelectItem value="adicionar_tag">🏷️ Adicionar Tag</SelectItem>
+                  <SelectItem value="remover_tag">❌ Remover Tag</SelectItem>
+                  <SelectItem value="enviar_cobranca">💰 Enviar Cobrança PIX</SelectItem>
+                  <SelectItem value="webhook">🔗 Chamar Webhook</SelectItem>
+                  <SelectItem value="atualizar_status">📊 Atualizar Status</SelectItem>
+                  <SelectItem value="criar_tarefa">📋 Criar Tarefa</SelectItem>
+                  <SelectItem value="enviar_email">📧 Enviar E-mail</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {needsParam && (
+              <div>
+                <label className="text-sm font-medium mb-1 block">
+                  {actionParamLabel[actionType] || 'Parâmetro'}
+                </label>
+                {(actionType === 'transferir_atendente' || actionType === 'transferir_departamento') ? (
+                  <Select value={actionParam} onValueChange={setActionParam}>
+                    <SelectTrigger><SelectValue placeholder="Selecione departamento" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cobranca">Cobrança</SelectItem>
+                      <SelectItem value="comercial">Comercial</SelectItem>
+                      <SelectItem value="atendimento">Atendimento</SelectItem>
+                      <SelectItem value="geral">Geral</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    placeholder={actionType === 'webhook' ? 'https://...' :
+                      actionType === 'enviar_email' ? 'email@exemplo.com' :
+                      actionType === 'enviar_cobranca' ? 'cob ou cobv' : '...'}
+                    value={actionParam}
+                    onChange={(e) => setActionParam(e.target.value)}
+                  />
+                )}
+                {actionType === 'transferir_atendente' && (
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    A conversa será redirecionada p/ um atendente conectado a uma instância desse departamento
+                  </p>
+                )}
+              </div>
+            )}
+          </>
         )}
 
         {/* ── Campos específicos de Espera ── */}
         {tipo === 'espera' && (
           <>
             <div>
-              <label className="text-sm font-medium mb-1 block">Duração (milissegundos)</label>
+              <label className="text-sm font-medium mb-1 block">Duração</label>
+              <div className="grid grid-cols-3 gap-1.5 mb-2">
+                {durationPresets.map((p) => (
+                  <Button
+                    key={p.ms}
+                    variant={durationMs === p.ms ? 'default' : 'outline'}
+                    size="sm"
+                    className="text-xs h-8"
+                    onClick={() => {
+                      setDurationMs(p.ms);
+                      setDurationLabel(`Aguardar ${p.label}`);
+                    }}
+                  >
+                    {p.label}
+                  </Button>
+                ))}
+              </div>
               <Input
                 type="number"
                 min={0}
                 step={1000}
                 value={durationMs}
-                onChange={(e) => setDurationMs(Number(e.target.value))}
+                onChange={(e) => {
+                  const ms = Number(e.target.value);
+                  setDurationMs(ms);
+                  setDurationLabel(`Aguardar ${formatDuration(ms)}`);
+                }}
+                placeholder="Milissegundos personalizados"
               />
-            </div>
-            <div>
-              <label className="text-sm font-medium mb-1 block">Rótulo</label>
-              <Input
-                placeholder="ex: Aguardar 5 minutos"
-                value={durationLabel}
-                onChange={(e) => setDurationLabel(e.target.value)}
-              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {durationMs > 0 ? formatDuration(durationMs) : 'Sem espera'}
+              </p>
             </div>
           </>
         )}
@@ -603,11 +721,16 @@ function EditPanel({ node, onUpdate, onDelete, onClose }: EditPanelProps) {
         {tipo === 'finalizar' && (
           <div>
             <label className="text-sm font-medium mb-1 block">Motivo do Encerramento</label>
-            <Input
-              placeholder="ex: Atendimento concluído"
-              value={closeReason}
-              onChange={(e) => setCloseReason(e.target.value)}
-            />
+            <Select value={closeReason} onValueChange={setCloseReason}>
+              <SelectTrigger><SelectValue placeholder="Selecione" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="atendimento_concluido">Atendimento concluído</SelectItem>
+                <SelectItem value="sem_resposta">Sem resposta do cliente</SelectItem>
+                <SelectItem value="cobranca_enviada">Cobrança enviada</SelectItem>
+                <SelectItem value="transferido">Transferido para atendente</SelectItem>
+                <SelectItem value="cancelado">Cancelado</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         )}
 
@@ -679,9 +802,14 @@ function FluxoEditorContent() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+  const hasChangesRef = useRef(false);
+  const initialLoadDoneRef = useRef(false);
   const nodeCounterRef = useRef(0);
+
+  const markChanges = (v: boolean) => { setHasChanges(v); hasChangesRef.current = v; };
 
   // ── Buscar fluxo com etapas ──
   const { data: fluxo, isLoading, error } = useQuery({
@@ -693,6 +821,8 @@ function FluxoEditorContent() {
   // ── Converter etapas → nós + edges do ReactFlow ──
   useEffect(() => {
     if (!fluxo) return;
+    // Só reconstruir do banco no load inicial ou após save bem-sucedido
+    if (initialLoadDoneRef.current && hasChangesRef.current) return;
 
     const etapas = fluxo.fluxos_chatbot_etapas || [];
 
@@ -806,7 +936,8 @@ function FluxoEditorContent() {
     nodeCounterRef.current = etapas.length;
     setNodes([triggerNode, ...etapaNodes]);
     setEdges(etapaEdges);
-    setHasChanges(false);
+    markChanges(false);
+    initialLoadDoneRef.current = true;
   }, [fluxo, setNodes, setEdges]);
 
   // ── Handlers ReactFlow ──
@@ -834,7 +965,7 @@ function FluxoEditorContent() {
       };
 
       setEdges((eds) => [...eds, newEdge]);
-      setHasChanges(true);
+      markChanges(true);
     },
     [nodes, setEdges]
   );
@@ -845,10 +976,41 @@ function FluxoEditorContent() {
 
   const onPaneClick = useCallback(() => {
     setSelectedNode(null);
+    setSelectedEdgeId(null);
   }, []);
 
+  // Clicar em edge: selecionar (realce visual)
+  const onEdgeClick = useCallback((_: React.MouseEvent, edge: Edge) => {
+    setSelectedEdgeId((prev) => (prev === edge.id ? null : edge.id));
+    setSelectedNode(null);
+  }, []);
+
+  // Deletar edge selecionada (Backspace/Delete ou botão)
+  const handleDeleteSelectedEdge = useCallback(() => {
+    if (!selectedEdgeId) return;
+    setEdges((eds) => eds.filter((e) => e.id !== selectedEdgeId));
+    setSelectedEdgeId(null);
+    markChanges(true);
+  }, [selectedEdgeId, setEdges]);
+
+  // Keyboard: Delete/Backspace deleta edge selecionada
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!selectedEdgeId) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Não interceptar se estiver digitando em input/textarea
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        e.preventDefault();
+        handleDeleteSelectedEdge();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selectedEdgeId, handleDeleteSelectedEdge]);
+
   const onNodeDragStop = useCallback(() => {
-    setHasChanges(true);
+    markChanges(true);
   }, []);
 
   // ── Adicionar novo nó ──
@@ -873,7 +1035,7 @@ function FluxoEditorContent() {
 
       setNodes((nds) => [...nds, newNode]);
       setSelectedNode(newNode);
-      setHasChanges(true);
+      markChanges(true);
     },
     [nodes, setNodes]
   );
@@ -890,7 +1052,7 @@ function FluxoEditorContent() {
       setSelectedNode((prev) =>
         prev && prev.id === nodeId ? { ...prev, data: { ...prev.data, ...updates } } : prev
       );
-      setHasChanges(true);
+      markChanges(true);
     },
     [setNodes]
   );
@@ -901,7 +1063,7 @@ function FluxoEditorContent() {
       setNodes((nds) => nds.filter((n) => n.id !== nodeId));
       setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
       setSelectedNode(null);
-      setHasChanges(true);
+      markChanges(true);
     },
     [setNodes, setEdges]
   );
@@ -913,6 +1075,17 @@ function FluxoEditorContent() {
     setIsSaving(true);
     try {
       const etapaNodes = nodes.filter((n) => n.type !== 'trigger');
+
+      // Garantir que o target do trigger fique com ordem 0
+      const triggerEdge = edges.find((e) => e.source === 'trigger');
+      if (triggerEdge) {
+        const targetIdx = etapaNodes.findIndex((n) => n.id === triggerEdge.target);
+        if (targetIdx > 0) {
+          const [targetNode] = etapaNodes.splice(targetIdx, 1);
+          etapaNodes.unshift(targetNode);
+        }
+      }
+
       const existingIds = (fluxo.fluxos_chatbot_etapas || []).map((e) => e.id);
 
       // Separar nós novos vs existentes
@@ -922,7 +1095,7 @@ function FluxoEditorContent() {
       // Mapear edges por source para construir connections
       const edgesBySource: Record<string, Array<{ targetId: string; label?: string; sourceHandle?: string }>> = {};
       edges.forEach((edge) => {
-        if (edge.source === 'trigger') return; // Trigger edges derivam da ordem
+        if (edge.source === 'trigger') return; // Trigger edge persiste via ordem
         if (!edgesBySource[edge.source]) edgesBySource[edge.source] = [];
         edgesBySource[edge.source].push({
           targetId: edge.target,
@@ -1003,15 +1176,9 @@ function FluxoEditorContent() {
         await fluxosChatbotService.criarEtapasBatch(toCreate);
       }
 
-      // Atualizar edge do trigger → primeira etapa
-      const triggerEdge = edges.find((e) => e.source === 'trigger');
-      if (triggerEdge) {
-        // Salvar referência para o trigger no fluxo config se necessário
-      }
-
       queryClient.invalidateQueries({ queryKey: ['fluxo-editor', id] });
       queryClient.invalidateQueries({ queryKey: ['fluxos-com-etapas'] });
-      setHasChanges(false);
+      markChanges(false);
     } catch (err) {
       console.error('Erro ao salvar fluxo:', err);
       alert('Erro ao salvar. Tente novamente.');
@@ -1084,15 +1251,20 @@ function FluxoEditorContent() {
         <div className="flex-1 relative">
           <ReactFlow
             nodes={nodes}
-            edges={edges}
+            edges={edges.map((e) => e.id === selectedEdgeId ? {
+              ...e,
+              style: { ...e.style, strokeWidth: 4, stroke: '#ef4444' },
+              animated: false,
+            } : e)}
             onNodesChange={onNodesChange}
             onEdgesChange={(changes) => {
               onEdgesChange(changes);
-              setHasChanges(true);
+              markChanges(true);
             }}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onPaneClick={onPaneClick}
+            onEdgeClick={onEdgeClick}
             onNodeDragStop={onNodeDragStop}
             nodeTypes={customNodeTypes}
             fitView
@@ -1101,14 +1273,15 @@ function FluxoEditorContent() {
               type: 'smoothstep',
               animated: true,
               markerEnd: { type: MarkerType.ArrowClosed },
-              style: { strokeWidth: 2 },
+              style: { strokeWidth: 2, cursor: 'pointer' },
+              interactionWidth: 20,
             }}
-            deleteKeyCode={['Backspace', 'Delete']}
+            deleteKeyCode={null}
             snapToGrid
             snapGrid={[15, 15]}
           >
             <Background gap={15} size={1} />
-            <Controls />
+            <Controls style={{ top: 10, left: 10 , color: '#000' }} />
             <MiniMap
               nodeColor={(node) => {
                 const colors: Record<string, string> = {
@@ -1127,6 +1300,30 @@ function FluxoEditorContent() {
             <Panel position="top-center">
               <AddNodeToolbar onAdd={handleAddNode} />
             </Panel>
+            {selectedEdgeId && (
+              <Panel position="bottom-center">
+                <div className="flex items-center gap-2 bg-destructive/90 text-destructive-foreground px-4 py-2 rounded-lg shadow-lg">
+                  <span className="text-sm font-medium">Conexão selecionada</span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handleDeleteSelectedEdge}
+                    className="h-7"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1" />
+                    Remover
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedEdgeId(null)}
+                    className="h-7 text-destructive-foreground hover:text-destructive-foreground/80"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </Panel>
+            )}
           </ReactFlow>
         </div>
 

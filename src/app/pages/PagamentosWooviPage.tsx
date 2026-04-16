@@ -15,6 +15,8 @@ import {
   Landmark,
   Send,
   Loader2,
+  FileText,
+  CalendarIcon,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -41,12 +43,22 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { Label } from '../components/ui/label';
+import { Calendar } from '../components/ui/calendar';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '../components/ui/popover';
+import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 import { PixQRCode } from '../components/PixQRCode';
 import {
   useCobrancasWoovi,
   useTransacoesWoovi,
   useSaldoEfi,
   useCriarCobrancaEfi,
+  useListarPixRecebidosEfi,
+  useListarPixEnviadosEfi,
 } from '../hooks/useWoovi';
 import { useParcelas } from '../hooks/useParcelas';
 import { useClientes } from '../hooks/useClientes';
@@ -144,6 +156,145 @@ export default function PagamentosWooviPage() {
   const criarCobrancaEfi = useCriarCobrancaEfi();
   const { data: efiBalanceData } = useSaldoEfi();
 
+  // ── Filtro de período global ────────────────────────────
+  const [dateFrom, setDateFrom] = useState<Date>(subDays(new Date(), 30));
+  const [dateTo, setDateTo] = useState<Date>(new Date());
+  const [extratoTipoFilter, setExtratoTipoFilter] = useState<string>('TODAS');
+
+  // ISO strings for hooks (start of day → end of day)
+  const periodoInicio = startOfDay(dateFrom);
+  const periodoFim = endOfDay(dateTo);
+  const extratoInicio = format(periodoInicio, "yyyy-MM-dd'T'HH:mm:ss'Z'");
+  const extratoFim = format(periodoFim, "yyyy-MM-dd'T'HH:mm:ss'Z'");
+
+  const { data: pixRecebidos, isLoading: loadingRecebidos, refetch: refetchRecebidos } =
+    useListarPixRecebidosEfi(extratoInicio, extratoFim);
+  const { data: pixEnviados, isLoading: loadingEnviados, refetch: refetchEnviados } =
+    useListarPixEnviadosEfi(extratoInicio, extratoFim);
+
+  const loadingExtrato = loadingRecebidos || loadingEnviados;
+
+  // Merge received + sent Pix into a single sorted timeline
+  type ExtratoItem = {
+    id: string;
+    direction: 'entrada' | 'saida';
+    valor: number;
+    horario: string;
+    e2eId: string;
+    nome: string;
+    descricao: string;
+    status: string;
+  };
+
+  const extratoItems = useMemo<ExtratoItem[]>(() => {
+    const items: ExtratoItem[] = [];
+
+    // EFI returns `horario` as an object { solicitacao, liquidacao } for both received and sent Pix
+    const extractDate = (h: any): string => {
+      if (typeof h === 'string') return h;
+      if (h && typeof h === 'object') return h.solicitacao || h.liquidacao || '';
+      return '';
+    };
+
+    // Received Pix (from GET /v2/pix response)
+    const recebidosList = pixRecebidos?.pix || [];
+    if (Array.isArray(recebidosList)) {
+      for (const p of recebidosList) {
+        items.push({
+          id: p.endToEndId || p.txid || crypto.randomUUID(),
+          direction: 'entrada',
+          valor: parseFloat(p.valor || '0'),
+          horario: extractDate(p.horario) || p.criacao || '',
+          e2eId: p.endToEndId || '',
+          nome: p.pagador?.nome || p.pagador?.identificacao?.nome || p.infoPagador || '',
+          descricao: p.txid || '',
+          status: p.status || 'CONFIRMED',
+        });
+      }
+    }
+
+    // Sent Pix (from GET /v2/gn/pix/enviados response)
+    const enviadosList = pixEnviados?.pix || [];
+    if (Array.isArray(enviadosList)) {
+      for (const p of enviadosList) {
+        items.push({
+          id: p.endToEndId || p.idEnvio || crypto.randomUUID(),
+          direction: 'saida',
+          valor: parseFloat(p.valor || '0'),
+          horario: extractDate(p.horario) || p.solicitacao || '',
+          e2eId: p.endToEndId || '',
+          nome: p.favorecido?.identificacao?.nome || p.favorecido?.nome || '',
+          descricao: p.favorecido?.chave || '',
+          status: p.status || 'REALIZADO',
+        });
+      }
+    }
+
+    // Sort newest first
+    items.sort((a, b) => new Date(b.horario).getTime() - new Date(a.horario).getTime());
+    return items;
+  }, [pixRecebidos, pixEnviados]);
+
+  // Merge COMPLETED EFI charges from DB (bot + manual) into extrato, deduplicating
+  const extratoItemsMerged = useMemo<ExtratoItem[]>(() => {
+    const items = [...extratoItems];
+
+    // Build a set of known txids/e2eIds to avoid duplicates
+    const knownIds = new Set<string>();
+    for (const item of items) {
+      if (item.e2eId) knownIds.add(item.e2eId);
+      if (item.descricao) knownIds.add(item.descricao); // txid is stored in descricao
+      if (item.id) knownIds.add(item.id);
+    }
+
+    // Add COMPLETED EFI charges from DB that aren't already in the EFI API response
+    const completedCharges = cobrancas.filter(
+      (c) => c.gateway === 'efi' && c.status === 'COMPLETED'
+    );
+
+    const fromDate = periodoInicio.getTime();
+    const toDate = periodoFim.getTime();
+
+    for (const charge of completedCharges) {
+      const chargeDate = new Date(charge.paidAt || charge.createdAt).getTime();
+      // Only include if within the selected date range
+      if (chargeDate < fromDate || chargeDate > toDate) continue;
+
+      // Skip if already present (by txid match)
+      const txid = charge.wooviTxid || charge.wooviChargeId || '';
+      if (txid && knownIds.has(txid)) continue;
+
+      items.push({
+        id: charge.id,
+        direction: 'entrada',
+        valor: charge.valor,
+        horario: charge.paidAt || charge.createdAt,
+        e2eId: txid,
+        nome: charge.clienteNome || '',
+        descricao: `Cobrança PIX${charge.clienteNome ? ` — ${charge.clienteNome}` : ''}`,
+        status: 'CONFIRMED',
+      });
+      knownIds.add(txid);
+    }
+
+    items.sort((a, b) => new Date(b.horario).getTime() - new Date(a.horario).getTime());
+    return items;
+  }, [extratoItems, cobrancas, dateFrom, dateTo]);
+
+  // Filtered extrato
+  const extratoFiltered = useMemo(() => {
+    if (extratoTipoFilter === 'ENTRADAS') return extratoItemsMerged.filter(i => i.direction === 'entrada');
+    if (extratoTipoFilter === 'SAIDAS') return extratoItemsMerged.filter(i => i.direction === 'saida');
+    return extratoItemsMerged;
+  }, [extratoItemsMerged, extratoTipoFilter]);
+
+  // Period totals
+  const extratoTotals = useMemo(() => {
+    const entradas = extratoItemsMerged.filter(i => i.direction === 'entrada').reduce((s, i) => s + i.valor, 0);
+    const saidas = extratoItemsMerged.filter(i => i.direction === 'saida').reduce((s, i) => s + i.valor, 0);
+    return { entradas, saidas, saldo: entradas - saidas };
+  }, [extratoItemsMerged]);
+
   // Parcelas pendentes/vencidas do cliente selecionado
   const parcelasDoCliente = useMemo(() => {
     if (!novaCobrancaClienteId) return [];
@@ -178,42 +329,49 @@ export default function PagamentosWooviPage() {
     return map;
   }, [cobrancas]);
 
-  // Show only EFI charges
+  // Show only EFI charges (filtered by date range + busca)
   const filteredCharges = useMemo(() => {
+    const from = periodoInicio.getTime();
+    const to = periodoFim.getTime();
     return cobrancas.filter((c) => {
       const isEfi = c.gateway === 'efi';
       const matchBusca = c.clienteNome.toLowerCase().includes(busca.toLowerCase()) ||
         c.wooviChargeId.toLowerCase().includes(busca.toLowerCase());
-      return isEfi && matchBusca;
+      const chargeDate = new Date(c.createdAt).getTime();
+      const matchDate = chargeDate >= from && chargeDate <= to;
+      return isEfi && matchBusca && matchDate;
     });
-  }, [cobrancas, busca]);
+  }, [cobrancas, busca, periodoInicio, periodoFim]);
 
-  // Show only EFI transactions
+  // Show only EFI transactions (filtered by date range + busca)
   const filteredTx = useMemo(() => {
+    const from = periodoInicio.getTime();
+    const to = periodoFim.getTime();
     return transacoes.filter((t) => {
       const isEfi = t.gateway === 'efi';
       const matchBusca = (t.descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
         (t.destinatarioNome || '').toLowerCase().includes(busca.toLowerCase());
-      return isEfi && matchBusca;
+      const txDate = new Date(t.createdAt).getTime();
+      const matchDate = txDate >= from && txDate <= to;
+      return isEfi && matchBusca && matchDate;
     });
-  }, [transacoes, busca]);
+  }, [transacoes, busca, periodoInicio, periodoFim]);
 
-  // KPIs — only EFI
+  // KPIs — only EFI, filtered by date range
   const kpis = useMemo(() => {
-    const efiCharges = cobrancas.filter(c => c.gateway === 'efi');
-    const efiTx = transacoes.filter(t => t.gateway === 'efi');
-    const totalRecebido = efiCharges.filter(c => c.status === 'COMPLETED').reduce((s, c) => s + c.valor, 0);
-    const totalEnviado = efiTx.filter(t => t.tipo === 'PAYMENT' && t.status === 'CONFIRMED').reduce((s, t) => s + t.valor, 0);
+    const from = periodoInicio.getTime();
+    const to = periodoFim.getTime();
+    const inRange = (d: string) => { const t = new Date(d).getTime(); return t >= from && t <= to; };
+    const efiCharges = cobrancas.filter(c => c.gateway === 'efi' && inRange(c.createdAt));
+    const efiTx = transacoes.filter(t => t.gateway === 'efi' && inRange(t.createdAt));
     return {
       total: efiCharges.length,
       ativas: efiCharges.filter(c => c.status === 'ACTIVE').length,
       pagas: efiCharges.filter(c => c.status === 'COMPLETED').length,
       expiradas: efiCharges.filter(c => c.status === 'EXPIRED').length,
-      totalRecebido,
-      totalEnviado,
       totalTx: efiTx.length,
     };
-  }, [cobrancas, transacoes]);
+  }, [cobrancas, transacoes, periodoInicio, periodoFim]);
 
   const resetNovaCobForm = () => {
     setNovaCobrancaClienteId('');
@@ -305,6 +463,79 @@ export default function PagamentosWooviPage() {
         </div>
       </div>
 
+      {/* Filtro de período global + Busca */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
+              <div className="space-y-1 ">
+                <Label className="text-xs text-muted-foreground">Início</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full sm:w-[170px] justify-start text-left font-normal h-9 text-xs">
+                      <CalendarIcon className="mr-1.5 h-3.5 w-3.5" />
+                      {format(dateFrom, 'dd/MM/yyyy', { locale: ptBR })}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={dateFrom}
+                      onSelect={(d) => d && setDateFrom(d)}
+                      locale={ptBR}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Fim</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" size="sm" className="w-full sm:w-[170px] justify-start text-left font-normal h-9 text-xs">
+                      <CalendarIcon className="mr-1.5 h-3.5 w-3.5" />
+                      {format(dateTo, 'dd/MM/yyyy', { locale: ptBR })}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={dateTo}
+                      onSelect={(d) => d && setDateTo(d)}
+                      locale={ptBR}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-9"
+              onClick={() => { refetchRecebidos(); refetchEnviados(); }}
+              disabled={loadingExtrato}
+            >
+              {loadingExtrato ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Atualizar
+            </Button>
+            <div className="relative flex-1 min-w-[180px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Buscar por cliente, ID..."
+                value={busca}
+                onChange={(e) => setBusca(e.target.value)}
+                className="pl-8 h-9 text-xs"
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Saldo + KPIs */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* EFI Saldo Card */}
@@ -340,10 +571,10 @@ export default function PagamentosWooviPage() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-              {formatCurrency(kpis.totalRecebido)}
+              {formatCurrency(extratoTotals.entradas)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              {kpis.pagas} cobranças pagas
+              {extratoItemsMerged.filter(i => i.direction === 'entrada').length} recebimento(s) no período
             </p>
           </CardContent>
         </Card>
@@ -358,10 +589,10 @@ export default function PagamentosWooviPage() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-              {formatCurrency(kpis.totalEnviado)}
+              {formatCurrency(extratoTotals.saidas)}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Pagamentos enviados
+              {extratoItemsMerged.filter(i => i.direction === 'saida').length} envio(s) no período
             </p>
           </CardContent>
         </Card>
@@ -391,19 +622,6 @@ export default function PagamentosWooviPage() {
         </Card>
       </div>
 
-      {/* Busca */}
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por cliente, ID da cobrança..."
-            value={busca}
-            onChange={(e) => setBusca(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-      </div>
-
       {/* Tabs */}
       <Tabs defaultValue="cobrancas">
         <TabsList>
@@ -417,13 +635,18 @@ export default function PagamentosWooviPage() {
             Transações
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{filteredTx.length}</Badge>
           </TabsTrigger>
+          <TabsTrigger value="extratos" className="flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Extratos
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Tab: Cobranças ────────────────────────────── */}
         <TabsContent value="cobrancas" className="space-y-4">
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground whitespace-nowrap">Status:</Label>
             <Select value={chargeStatusFilter || 'ALL'} onValueChange={(v) => setChargeStatusFilter(v === 'ALL' ? '' : v)}>
-              <SelectTrigger className="w-[180px]">
+              <SelectTrigger className="w-[140px] h-9 text-xs">
                 <SelectValue placeholder="Todas" />
               </SelectTrigger>
               <SelectContent>
@@ -540,6 +763,139 @@ export default function PagamentosWooviPage() {
                           {isIncoming ? '+' : '-'} {formatCurrency(tx.valor)}
                         </p>
                         <Badge className={txCfg.className}>{txCfg.label}</Badge>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ── Tab: Extratos ─────────────────────────────── */}
+        <TabsContent value="extratos" className="space-y-4">
+          {/* Filtro tipo */}
+          <div className="flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground whitespace-nowrap">Tipo:</Label>
+            <Select value={extratoTipoFilter} onValueChange={setExtratoTipoFilter}>
+              <SelectTrigger className="w-[130px] h-9 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="TODAS">Todas</SelectItem>
+                <SelectItem value="ENTRADAS">Entradas</SelectItem>
+                <SelectItem value="SAIDAS">Saídas</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Resumo do período */}
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card>
+              <CardContent className="pt-4 pb-3">
+                <p className="text-xs text-muted-foreground mb-1">Entradas no período</p>
+                <p className="text-xl font-bold text-green-600 dark:text-green-400">
+                  {formatCurrency(extratoTotals.entradas)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {extratoItemsMerged.filter(i => i.direction === 'entrada').length} recebimento(s)
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4 pb-3">
+                <p className="text-xs text-muted-foreground mb-1">Saídas no período</p>
+                <p className="text-xl font-bold text-red-600 dark:text-red-400">
+                  {formatCurrency(extratoTotals.saidas)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {extratoItemsMerged.filter(i => i.direction === 'saida').length} envio(s)
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4 pb-3">
+                <p className="text-xs text-muted-foreground mb-1">Saldo do período</p>
+                <p className={`text-xl font-bold ${extratoTotals.saldo >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {extratoTotals.saldo >= 0 ? '+' : ''}{formatCurrency(extratoTotals.saldo)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {format(dateFrom, 'dd/MM', { locale: ptBR })} — {format(dateTo, 'dd/MM', { locale: ptBR })}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Lista de lançamentos */}
+          {loadingExtrato ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Consultando extratos EFI...</span>
+            </div>
+          ) : extratoFiltered.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12">
+                <FileText className="h-12 w-12 text-muted-foreground/50 mb-4" />
+                <p className="text-muted-foreground">Nenhum lançamento no período selecionado</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Ajuste as datas e clique em Consultar
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-2">
+              {extratoFiltered.map((item) => {
+                const isEntrada = item.direction === 'entrada';
+                return (
+                  <Card key={item.id} className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div
+                          className={`flex h-10 w-10 items-center justify-center rounded-lg ${
+                            isEntrada
+                              ? 'bg-green-50 dark:bg-green-900/20'
+                              : 'bg-red-50 dark:bg-red-900/20'
+                          }`}
+                        >
+                          {isEntrada ? (
+                            <ArrowDownLeft className="h-5 w-5 text-green-600 dark:text-green-400" />
+                          ) : (
+                            <ArrowUpRight className="h-5 w-5 text-red-600 dark:text-red-400" />
+                          )}
+                        </div>
+                        <div>
+                          <p className="font-medium text-sm">
+                            {isEntrada ? 'Pix Recebido' : 'Pix Enviado'}
+                            {item.nome ? ` — ${item.nome}` : ''}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {item.horario ? formatDate(item.horario) : '—'}
+                            {item.e2eId ? ` · ${item.e2eId.slice(0, 20)}...` : ''}
+                          </p>
+                          {item.descricao && (
+                            <p className="text-xs text-muted-foreground mt-0.5">{item.descricao}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p
+                          className={`font-semibold ${
+                            isEntrada
+                              ? 'text-green-600 dark:text-green-400'
+                              : 'text-red-600 dark:text-red-400'
+                          }`}
+                        >
+                          {isEntrada ? '+' : '-'} {formatCurrency(item.valor)}
+                        </p>
+                        <Badge
+                          className={
+                            isEntrada
+                              ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                              : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                          }
+                        >
+                          {isEntrada ? 'Entrada' : 'Saída'}
+                        </Badge>
                       </div>
                     </div>
                   </Card>
