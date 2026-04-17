@@ -10,7 +10,7 @@ import { Label } from '../components/ui/label';
 import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { Skeleton } from '../components/ui/skeleton';
-import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle, Calculator } from 'lucide-react';
+import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle, Calculator, Handshake } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfigSistema, useUpdateConfig } from '../hooks/useConfigSistema';
 import { JUROS_FIXO_DIA, JUROS_PERC_DIA, JUROS_LIMIAR } from '../lib/juros';
@@ -167,6 +167,62 @@ export default function ConfigSistemaPage() {
                 onBlur={(e) => handleNumber('juros_percentual', e.target.value)}
               />
               <p className="text-xs text-muted-foreground">Juros mensais aplicados pela EFI após o vencimento.</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Parâmetros de Acordo / Renegociação */}
+      <Card className="border-green-200 dark:border-green-900/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Handshake className="w-5 h-5 text-green-600" />
+            Parâmetros de Acordo / Renegociação
+          </CardTitle>
+          <CardDescription>
+            Configurações padrão para criação de acordos (bot e manual).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <Label htmlFor="acordo_entrada_percentual">Entrada mínima (%)</Label>
+              <Input
+                id="acordo_entrada_percentual"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                defaultValue={config?.acordo_entrada_percentual ?? 30}
+                onBlur={(e) => handleNumber('acordo_entrada_percentual', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">% do valor total exigido como entrada</p>
+            </div>
+            <div>
+              <Label htmlFor="acordo_max_parcelas">Máximo de parcelas</Label>
+              <Input
+                id="acordo_max_parcelas"
+                type="number"
+                min={1}
+                max={48}
+                step={1}
+                defaultValue={config?.acordo_max_parcelas ?? 12}
+                onBlur={(e) => handleNumber('acordo_max_parcelas', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">Limite de parcelas para renegociação</p>
+            </div>
+            <div>
+              <Label htmlFor="acordo_desconto_juros_percentual">Desconto sobre juros (%)</Label>
+              <Input
+                id="acordo_desconto_juros_percentual"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                defaultValue={config?.acordo_desconto_juros_percentual ?? 0}
+                onBlur={(e) => handleNumber('acordo_desconto_juros_percentual', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground mt-1">Desconto aplicado nos juros acumulados (0 = sem desconto)</p>
             </div>
           </div>
         </CardContent>

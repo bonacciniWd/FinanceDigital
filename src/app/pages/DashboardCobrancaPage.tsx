@@ -19,6 +19,7 @@ import { useClientes } from '../hooks/useClientes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useParcelas } from '../hooks/useParcelas';
 import { useCardsCobranca } from '../hooks/useKanbanCobranca';
+import { useAcordos } from '../hooks/useAcordos';
 import { valorCorrigido } from '../lib/juros';
 
 export default function DashboardCobrancaPage() {
@@ -27,6 +28,7 @@ export default function DashboardCobrancaPage() {
   const { data: emprestimos = [] } = useEmprestimos();
   const { data: allParcelas = [] } = useParcelas();
   const { data: cardsCobranca = [] } = useCardsCobranca();
+  const { data: acordos = [] } = useAcordos();
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -99,13 +101,23 @@ export default function DashboardCobrancaPage() {
     const emNegociacao = cardsCobranca.filter(c => c.etapa === 'negociacao');
     const emAcordo = cardsCobranca.filter(c => c.etapa === 'acordo');
     const pagos = cardsCobranca.filter(c => c.etapa === 'pago');
-    const negociacoesAtivas = emNegociacao.length + emAcordo.length;
+    const negociacoesAtivas = emNegociacao.length;
     const valorNegociacao = emNegociacao.reduce((s, c) => s + c.valorDivida, 0);
-    const valorAcordos = emAcordo.reduce((s, c) => s + c.valorDivida, 0);
     const valorRecuperado = pagos.reduce((s, c) => s + c.valorDivida, 0);
     const taxaRecuperacao = (valorTotalAtraso + valorRecuperado) > 0
       ? Math.round((valorRecuperado / (valorTotalAtraso + valorRecuperado)) * 100)
       : 0;
+
+    // Acordos formais (separado de pagamento limpo)
+    const acordosAtivos = acordos.filter(a => a.status === 'ativo');
+    const acordosQuitados = acordos.filter(a => a.status === 'quitado');
+    const valorTotalAcordos = acordosAtivos.reduce((s, a) => s + Number(a.valor_divida_original), 0);
+    const valorEntradasPagas = acordosAtivos.filter(a => a.entrada_paga).reduce((s, a) => s + Number(a.valor_entrada), 0);
+    const valorRecuperadoAcordos = acordosQuitados.reduce((s, a) => s + Number(a.valor_divida_original), 0);
+
+    // Pagamento limpo = valor recuperado (pago) que NÃO veio de acordo
+    // Para simplificar: valor total recuperado - valor quitado via acordos
+    const valorRecuperadoLimpo = Math.max(0, valorRecuperado - valorRecuperadoAcordos);
 
     return {
       totalInadimplentes: clientesDados.length,
@@ -115,12 +127,16 @@ export default function DashboardCobrancaPage() {
       mediaDiasAtraso,
       negociacoesAtivas,
       valorNegociacao,
-      valorAcordos,
       valorRecuperado,
       taxaRecuperacao,
       clientesDados,
+      acordosAtivos: acordosAtivos.length,
+      valorTotalAcordos,
+      valorEntradasPagas,
+      valorRecuperadoAcordos,
+      valorRecuperadoLimpo,
     };
-  }, [allClientes, emprestimos, allParcelas, cardsCobranca]);
+  }, [allClientes, emprestimos, allParcelas, cardsCobranca, acordos]);
 
   return (
     <div className="space-y-6">
@@ -164,7 +180,7 @@ export default function DashboardCobrancaPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">{dados.negociacoesAtivas}</div>
-            <p className="text-xs text-muted-foreground mt-1">{formatCurrency(dados.valorNegociacao + dados.valorAcordos)}</p>
+            <p className="text-xs text-muted-foreground mt-1">{formatCurrency(dados.valorNegociacao)} em negociação</p>
           </CardContent>
         </Card>
 
@@ -175,6 +191,39 @@ export default function DashboardCobrancaPage() {
           <CardContent>
             <div className="text-2xl font-bold text-green-600 dark:text-green-400">{dados.taxaRecuperacao}%</div>
             <p className="text-xs text-muted-foreground mt-1">recuperado: {formatCurrency(dados.valorRecuperado)}</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Separação: Pagamento Limpo vs Acordos */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="border-green-200 dark:border-green-900/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-green-700 dark:text-green-400">Pagamento Limpo</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{formatCurrency(dados.valorRecuperadoLimpo)}</div>
+            <p className="text-xs text-muted-foreground mt-1">pago diretamente sem renegociação</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-orange-200 dark:border-orange-900/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-orange-700 dark:text-orange-400">Acordos Ativos</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-600 dark:text-orange-400">{dados.acordosAtivos}</div>
+            <p className="text-xs text-muted-foreground mt-1">dívida: {formatCurrency(dados.valorTotalAcordos)} · entradas pagas: {formatCurrency(dados.valorEntradasPagas)}</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-blue-200 dark:border-blue-900/50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-blue-700 dark:text-blue-400">Recuperado via Acordos</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{formatCurrency(dados.valorRecuperadoAcordos)}</div>
+            <p className="text-xs text-muted-foreground mt-1">acordos quitados integralmente</p>
           </CardContent>
         </Card>
       </div>

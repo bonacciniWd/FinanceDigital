@@ -95,7 +95,12 @@ export default function LoginPage() {
 
       <Card className="w-full max-w-xl shadow-2xl relative z-10">
         <CardHeader className="space-y-4 text-center">
-          <img src={logo} alt="Logo" className="w-80 h-auto mx-auto" />
+          {/* Logo */}
+        <div className="p-5 border-b border-sidebar-border/50 flex items-center justify-between">
+          <div className="mx-auto items-center">
+            <span className="animated-logo ml-2 flex flex-col leading-tight"><span className="font-bold">FINTECH</span></span>
+          </div>
+        </div>
           <div>
             <CardDescription className="mt-2">
               Plataforma de Gestão de Crédito

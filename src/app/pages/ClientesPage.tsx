@@ -42,6 +42,7 @@ type ClienteFormData = {
   cpf: string;
   sexo: Sexo;
   profissao: string;
+  renda_mensal: string;
   rua: string;
   numero: string;
   bairro: string;
@@ -55,7 +56,7 @@ type ClienteFormData = {
 
 const EMPTY_FORM: ClienteFormData = {
   nome: '', email: '', telefone: '', cpf: '', sexo: 'masculino',
-  profissao: '', rua: '', numero: '', bairro: '', estado: '', cidade: '', cep: '',
+  profissao: '', renda_mensal: '', rua: '', numero: '', bairro: '', estado: '', cidade: '', cep: '',
   pix_key: '', pix_key_type: 'cpf',
   contatos_referencia: [
     { nome: '', telefone: '', parentesco: '' },
@@ -119,6 +120,83 @@ export default function ClientesPage() {
     const digits = v.replace(/\D/g, '').slice(0, 8);
     return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits;
   };
+
+  const formatCpf = (v: string) => {
+    const digits = v.replace(/\D/g, '').slice(0, 11);
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+    if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+  };
+
+  /** Converte "5.500,00" → 5500.00 */
+  const parseBRL = (v: string): number => {
+    const cleaned = v.replace(/\./g, '').replace(',', '.');
+    return parseFloat(cleaned) || 0;
+  };
+
+  /** Formata número para "5.500,00" */
+  const formatBRLValue = (n: number): string => {
+    if (!n) return '';
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  /** Score automático baseado na completude do cadastro (0-1000) */
+  const calcularScoreInicial = (f: ClienteFormData, hasDocs: { front: boolean; back: boolean; comprovante: boolean }) => {
+    let score = 0;
+    // Dados obrigatórios (base)
+    if (f.nome.trim()) score += 50;
+    if (f.email.trim()) score += 50;
+    if (f.telefone.trim()) score += 50;
+    // CPF
+    if (f.cpf.replace(/\D/g, '').length === 11) score += 100;
+    // Profissão
+    if (f.profissao.trim()) score += 80;
+    // Endereço completo
+    if (f.cep.replace(/\D/g, '').length === 8) score += 60;
+    if (f.rua.trim()) score += 40;
+    if (f.numero.trim()) score += 20;
+    if (f.bairro.trim()) score += 40;
+    if (f.estado) score += 30;
+    if (f.cidade) score += 30;
+    // Contatos de referência (até 150)
+    const refsValidas = f.contatos_referencia.filter(c => c.nome.trim() && c.telefone.trim());
+    score += Math.min(refsValidas.length, 3) * 50;
+    // Documentos (até 200)
+    if (hasDocs.front) score += 80;
+    if (hasDocs.back) score += 60;
+    if (hasDocs.comprovante) score += 60;
+    // PIX
+    if (f.pix_key.trim()) score += 40;
+    // Renda informada
+    const renda = parseBRL(f.renda_mensal);
+    if (renda > 0) score += 60;
+    return Math.min(score, 1000);
+  };
+
+  // ViaCEP auto-fill
+  const [cepLoading, setCepLoading] = useState(false);
+  useEffect(() => {
+    const digits = form.cep.replace(/\D/g, '');
+    if (digits.length !== 8) return;
+    let cancelled = false;
+    setCepLoading(true);
+    fetch(`https://viacep.com.br/ws/${digits}/json/`)
+      .then(r => r.json())
+      .then((data: { erro?: boolean; logradouro?: string; bairro?: string; localidade?: string; uf?: string }) => {
+        if (cancelled || data.erro) return;
+        setForm(p => ({
+          ...p,
+          rua: data.logradouro || p.rua,
+          bairro: data.bairro || p.bairro,
+          cidade: data.localidade || p.cidade,
+          estado: data.uf || p.estado,
+        }));
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setCepLoading(false); });
+    return () => { cancelled = true; };
+  }, [form.cep]);
 
   // Document upload state
   const [docFrontPreview, setDocFrontPreview] = useState<string | null>(null);
@@ -252,6 +330,7 @@ export default function ClientesPage() {
       cpf: c.cpf || '',
       sexo: c.sexo,
       profissao: c.profissao || '',
+      renda_mensal: c.rendaMensal ? formatBRLValue(c.rendaMensal) : '',
       rua: c.rua || '',
       numero: c.numero || '',
       bairro: c.bairro || '',
@@ -302,6 +381,7 @@ export default function ClientesPage() {
         if (docBackFile) docBackUrl = await uploadDocToStorage(editingId, docBackFile, 'doc-verso');
         if (comprovanteFile) comprovanteUrl = await uploadDocToStorage(editingId, comprovanteFile, 'comprovante-endereco');
 
+        const scoreAtualizado = calcularScoreInicial(form, { front: !!docFrontFile || !!docFrontPreview, back: !!docBackFile || !!docBackPreview, comprovante: !!comprovanteFile || !!comprovantePreview });
         const updates: ClienteUpdate = {
           nome: form.nome,
           email: form.email,
@@ -309,6 +389,7 @@ export default function ClientesPage() {
           cpf: form.cpf || null,
           sexo: form.sexo,
           profissao: form.profissao || null,
+          renda_mensal: form.renda_mensal ? parseBRL(form.renda_mensal) : undefined,
           rua: form.rua || null,
           numero: form.numero || null,
           bairro: form.bairro || null,
@@ -318,6 +399,7 @@ export default function ClientesPage() {
           pix_key: form.pix_key || null,
           pix_key_type: form.pix_key_type || null,
           contatos_referencia: contatosValidos.length > 0 ? contatosValidos : null,
+          score_interno: scoreAtualizado,
           ...(docFrontUrl && { documento_frente_url: docFrontUrl }),
           ...(docBackUrl && { documento_verso_url: docBackUrl }),
           ...(comprovanteUrl && { comprovante_endereco_url: comprovanteUrl }),
@@ -335,6 +417,7 @@ export default function ClientesPage() {
         setUploadingDocs(false);
       }
     } else {
+      const scoreInicial = calcularScoreInicial(form, { front: !!docFrontFile, back: !!docBackFile, comprovante: !!comprovanteFile });
       const payload: ClienteInsert = {
         nome: form.nome,
         email: form.email,
@@ -342,6 +425,7 @@ export default function ClientesPage() {
         cpf: form.cpf || null,
         sexo: form.sexo,
         profissao: form.profissao || null,
+        renda_mensal: form.renda_mensal ? parseBRL(form.renda_mensal) : 0,
         vencimento: new Date().toISOString().slice(0, 10),
         rua: form.rua || null,
         numero: form.numero || null,
@@ -352,6 +436,7 @@ export default function ClientesPage() {
         pix_key: form.pix_key || null,
         pix_key_type: form.pix_key_type || null,
         contatos_referencia: contatosValidos.length > 0 ? contatosValidos : null,
+        score_interno: scoreInicial,
       };
       createCliente.mutate(payload, {
         onSuccess: async (data) => {
@@ -822,12 +907,31 @@ export default function ClientesPage() {
               </div>
               <div>
                 <Label>CPF</Label>
-                <Input value={form.cpf} onChange={(e) => setForm(p => ({ ...p, cpf: e.target.value }))} placeholder="000.000.000-00" />
+                <Input value={form.cpf} onChange={(e) => setForm(p => ({ ...p, cpf: formatCpf(e.target.value) }))} placeholder="000.000.000-00" />
               </div>
             </div>
-            <div>
-              <Label>Profissão</Label>
-              <Input value={form.profissao} onChange={(e) => setForm(p => ({ ...p, profissao: e.target.value }))} placeholder="Ex: Engenheiro, Médico, Autônomo..." />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Profissão</Label>
+                <Input value={form.profissao} onChange={(e) => setForm(p => ({ ...p, profissao: e.target.value }))} placeholder="Ex: Engenheiro, Médico, Autônomo..." />
+              </div>
+              <div>
+                <Label>Renda Mensal</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                  <Input
+                    className="pl-10"
+                    placeholder="5.500,00"
+                    value={form.renda_mensal}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/[^\d]/g, '');
+                      if (!raw) { setForm(p => ({ ...p, renda_mensal: '' })); return; }
+                      const num = parseInt(raw, 10) / 100;
+                      setForm(p => ({ ...p, renda_mensal: num.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }));
+                    }}
+                  />
+                </div>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div>
@@ -840,6 +944,27 @@ export default function ClientesPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div>
+                <Label>CEP</Label>
+                <Input value={form.cep} onChange={(e) => setForm(p => ({ ...p, cep: formatCep(e.target.value) }))} placeholder="00000-000" />
+                {cepLoading && <span className="text-xs text-muted-foreground">Buscando...</span>}
+              </div>
+              <div>
+                <Label>Número</Label>
+                <Input value={form.numero} onChange={(e) => setForm(p => ({ ...p, numero: e.target.value }))} placeholder="Nº" />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="col-span-2">
+                <Label>Rua</Label>
+                <Input value={form.rua} onChange={(e) => setForm(p => ({ ...p, rua: e.target.value }))} placeholder="Nome da rua" />
+              </div>
+              <div>
+                <Label>Bairro</Label>
+                <Input value={form.bairro} onChange={(e) => setForm(p => ({ ...p, bairro: e.target.value }))} placeholder="Bairro" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Estado</Label>
                 <Select value={form.estado} onValueChange={(v) => { setEstadoUserChanged(true); setForm(p => ({ ...p, estado: v })); }}>
@@ -880,26 +1005,6 @@ export default function ClientesPage() {
               </div>
             </div>
             <div className="grid grid-cols-3 gap-4">
-              <div className="col-span-2">
-                <Label>Rua</Label>
-                <Input value={form.rua} onChange={(e) => setForm(p => ({ ...p, rua: e.target.value }))} placeholder="Nome da rua" />
-              </div>
-              <div>
-                <Label>Número</Label>
-                <Input value={form.numero} onChange={(e) => setForm(p => ({ ...p, numero: e.target.value }))} placeholder="Nº" />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label>Bairro</Label>
-                <Input value={form.bairro} onChange={(e) => setForm(p => ({ ...p, bairro: e.target.value }))} placeholder="Bairro" />
-              </div>
-              <div>
-                <Label>CEP</Label>
-                <Input value={form.cep} onChange={(e) => setForm(p => ({ ...p, cep: formatCep(e.target.value) }))} placeholder="00000-000" />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
               <div>
                 <Label>Tipo Chave PIX</Label>
                 <Select value={form.pix_key_type} onValueChange={(v) => setForm(p => ({ ...p, pix_key_type: v }))}>
@@ -914,7 +1019,7 @@ export default function ClientesPage() {
                 </Select>
               </div>
               <div className="col-span-2">
-                <Label>Chave PIX</Label>
+                <Label>Chave PIX <span className="text-muted-foreground text-xs">(opcional)</span></Label>
                 <Input value={form.pix_key} onChange={(e) => setForm(p => ({ ...p, pix_key: e.target.value }))} placeholder="Informe a chave PIX" />
               </div>
             </div>

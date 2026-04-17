@@ -54,7 +54,10 @@ import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useCriarCobrancaWoovi, useCriarCobvEfi } from '../hooks/useWoovi';
 import { useRegistrarPagamento } from '../hooks/useParcelas';
+import { useCriarAcordo } from '../hooks/useAcordos';
+import { useConfigSistema } from '../hooks/useConfigSistema';
 import { supabase } from '../lib/supabase';
+import { valorCorrigido } from '../lib/juros';
 import { useAuth } from '../contexts/AuthContext';
 import type { ParcelaUpdate } from '../lib/database.types';
 import type { KanbanCobrancaView, Emprestimo } from '../lib/view-types';
@@ -112,6 +115,11 @@ export default function KanbanCobrancaPage() {
     correlationID?: string;
   } | null>(null);
 
+  // Acordo form state (dentro do modal de negociação)
+  const [acordoNumParcelas, setAcordoNumParcelas] = useState('3');
+  const [acordoDiaPagamento, setAcordoDiaPagamento] = useState('10');
+  const [acordoEntradaPct, setAcordoEntradaPct] = useState('30');
+
   // Quitar modal state
   const [showQuitarModal, setShowQuitarModal] = useState(false);
   const [quitarEmpId, setQuitarEmpId] = useState<string | null>(null);
@@ -139,6 +147,8 @@ export default function KanbanCobrancaPage() {
   const criarCobrancaWoovi = useCriarCobrancaWoovi();
   const criarCobvEfi = useCriarCobvEfi();
   const registrarPagamento = useRegistrarPagamento();
+  const criarAcordo = useCriarAcordo();
+  const { data: configSistema } = useConfigSistema();
 
   const instanciasConectadas = useMemo(
     () => instancias.filter((i) => i.status === 'conectado'),
@@ -354,6 +364,9 @@ export default function KanbanCobrancaPage() {
     setNegInstanciaId(instanciasConectadas[0]?.id || '');
     setNegValorAcordado(String(card.valorDivida));
     setNegCobrancaCriada(null);
+    setAcordoEntradaPct(String(configSistema?.acordo_entrada_percentual ?? 30));
+    setAcordoNumParcelas('3');
+    setAcordoDiaPagamento('10');
     setShowNegociacao(true);
   };
 
@@ -473,9 +486,71 @@ export default function KanbanCobrancaPage() {
           enviarWhatsapp.mutate(
             { instancia_id: negInstanciaId, telefone: normalizePhoneBR(card.clienteTelefone), conteudo: mensagemFinal },
             {
-              onSuccess: () => {
+              onSuccess: async () => {
                 const inst = instancias.find((i) => i.id === negInstanciaId);
-                const obs = `Acordo fechado: ${formatCurrency(valor)} · Pix enviado via ${inst?.instance_name || 'WhatsApp'} por ${user?.name || 'Sistema'}`;
+                const nParcelas = Number(acordoNumParcelas) || 3;
+                const diaPag = Number(acordoDiaPagamento) || 10;
+                const pctEntrada = Number(acordoEntradaPct) || 30;
+                const valorEntradaCalc = Math.round(valor * (pctEntrada / 100) * 100) / 100;
+                const restante = Math.round((valor - valorEntradaCalc) * 100) / 100;
+                const valorParcAcordo = Math.round((restante / nParcelas) * 100) / 100;
+
+                // Buscar parcelas vencidas do cliente para congelar
+                const { data: parcelasCliente } = await supabase
+                  .from('parcelas')
+                  .select('id, emprestimo_id, valor, valor_original, data_vencimento, status')
+                  .eq('cliente_id', card.clienteId)
+                  .in('status', ['pendente', 'vencida'])
+                  .eq('congelada', false) as { data: Array<{ id: string; emprestimo_id: string; valor: number; valor_original: number; data_vencimento: string; status: string }> | null };
+
+                const vencidasIds = (parcelasCliente ?? []).map((p) => p.id);
+                const empId = (parcelasCliente ?? []).find((p) => p.emprestimo_id)?.emprestimo_id;
+
+                // Gerar datas das parcelas do acordo
+                const datasAcordo: string[] = [];
+                const agora = new Date();
+                let mesInicio = agora.getMonth() + 1;
+                let anoInicio = agora.getFullYear();
+                if (mesInicio > 11) { mesInicio = 0; anoInicio++; }
+                for (let i = 0; i < nParcelas; i++) {
+                  let mes = mesInicio + i;
+                  let ano = anoInicio;
+                  if (mes > 11) { mes -= 12; ano++; }
+                  datasAcordo.push(new Date(ano, mes, Math.min(diaPag, 28)).toISOString().split('T')[0]);
+                }
+
+                const obs = `Acordo fechado: ${formatCurrency(valor)} · Entrada: ${formatCurrency(valorEntradaCalc)} (${pctEntrada}%) · ${nParcelas}x ${formatCurrency(valorParcAcordo)} dia ${diaPag} · via ${inst?.instance_name || 'WhatsApp'} por ${user?.name || 'Sistema'}`;
+
+                // Criar acordo formal no banco
+                if (empId && vencidasIds.length > 0) {
+                  criarAcordo.mutate({
+                    acordo: {
+                      cliente_id: card.clienteId,
+                      kanban_card_id: card.id,
+                      criado_por: user?.id || null,
+                      origem: 'manual',
+                      valor_divida_original: valor,
+                      valor_entrada: valorEntradaCalc,
+                      entrada_percentual: pctEntrada,
+                      valor_restante: restante,
+                      num_parcelas: nParcelas,
+                      valor_parcela: valorParcAcordo,
+                      dia_pagamento: diaPag,
+                      data_primeira_parcela: datasAcordo[0] || null,
+                      parcelas_originais_ids: vencidasIds,
+                      observacao: obs,
+                    },
+                    parcelasAcordo: datasAcordo.map((d, i) => ({
+                      emprestimo_id: empId,
+                      cliente_id: card.clienteId,
+                      numero: i + 1,
+                      valor: valorParcAcordo,
+                      valor_original: valorParcAcordo,
+                      data_vencimento: d,
+                    })),
+                  });
+                }
+
                 // Mover card para "acordo"
                 updateCard.mutate({ id: card.id, updates: {
                   etapa: 'acordo',
@@ -1131,6 +1206,42 @@ export default function KanbanCobrancaPage() {
                 <p className="text-[10px] text-muted-foreground">
                   Gera cobrança Pix via Woovi com expiração de 24h. Ao pagar, o sistema atualiza automaticamente.
                 </p>
+              </div>
+
+              {/* ── Parâmetros do Acordo ── */}
+              <div className="space-y-2 rounded-lg border border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20 p-3">
+                <p className="text-sm font-medium flex items-center gap-2">
+                  <HandshakeIcon className="w-4 h-4 text-green-600" />
+                  Parâmetros do Acordo
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-xs text-muted-foreground">Entrada (%)</label>
+                    <Input type="number" min="0" max="100" step="1"
+                      value={acordoEntradaPct}
+                      onChange={(e) => setAcordoEntradaPct(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Parcelas</label>
+                    <Input type="number" min="1" max="48" step="1"
+                      value={acordoNumParcelas}
+                      onChange={(e) => setAcordoNumParcelas(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground">Dia pgto</label>
+                    <Input type="number" min="1" max="28" step="1"
+                      value={acordoDiaPagamento}
+                      onChange={(e) => setAcordoDiaPagamento(e.target.value)}
+                    />
+                  </div>
+                </div>
+                {negValorAcordado && Number(negValorAcordado) > 0 && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Entrada: <strong>{formatCurrency(Number(negValorAcordado) * Number(acordoEntradaPct) / 100)}</strong> · Restante: <strong>{(Number(acordoNumParcelas) || 1)}x {formatCurrency((Number(negValorAcordado) - Number(negValorAcordado) * Number(acordoEntradaPct) / 100) / (Number(acordoNumParcelas) || 1))}</strong> todo dia <strong>{acordoDiaPagamento}</strong>
+                  </div>
+                )}
               </div>
 
               {/* ── Cobrança Pix Gerada ────────────────────── */}

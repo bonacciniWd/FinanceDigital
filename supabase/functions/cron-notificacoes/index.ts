@@ -455,7 +455,8 @@ Deno.serve(async (req: Request) => {
     .select("id, emprestimo_id, cliente_id, numero, valor, valor_original, juros, multa, desconto, data_vencimento, status, woovi_charge_id, clientes(nome, telefone, sexo, cpf)")
     .in("data_vencimento", [em3diasStr, amanhaStr, ontemStr])
     .neq("status", "paga")
-    .neq("status", "cancelada");
+    .neq("status", "cancelada")
+    .eq("congelada", false);
 
   if (parcErr) {
     console.error("Erro ao buscar parcelas:", parcErr);
@@ -716,7 +717,8 @@ Deno.serve(async (req: Request) => {
       datasAtraso.map((d) => d.data),
     )
     .neq("status", "paga")
-    .neq("status", "cancelada");
+    .neq("status", "cancelada")
+    .eq("congelada", false);
 
   if (parcelasAtraso && parcelasAtraso.length > 0) {
     // Empréstimo data para variáveis extras
@@ -748,6 +750,16 @@ Deno.serve(async (req: Request) => {
 
       const chave = `${parcela.id}:${tier.tipo}`;
       if (enviados.has(chave)) continue;
+
+      // ── Reduzir score do cliente por atraso ────────────
+      try {
+        const delta = -Math.min(tier.dias * 3, 90); // -9, -21, -45, -90
+        await adminClient.rpc("ajustar_score_cliente", {
+          p_cliente_id: parcela.cliente_id,
+          p_delta: delta,
+          p_motivo: `atraso_${tier.dias}d`,
+        });
+      } catch { /* não bloqueia notificação */ }
 
       // Buscar/criar cobrança PIX para parcelas em atraso
       let chargeData: { txid: string; brCode: string | null; qrCodeImage: string | null } | null = null;

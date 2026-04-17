@@ -6,6 +6,60 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.1.0] — 2026-04-17
+
+### Adicionado — Score Dinâmico + Desembolso + Renda Mensal + Acordos + Formatação R$
+
+**Score dinâmico automático (webhook-efi, webhook-woovi, cron-notificacoes)**
+- Função SQL `ajustar_score_cliente(p_cliente_id, p_delta, p_motivo)` com limites 0–1000
+- Pagamento antecipado: +25 pontos | No dia: +15 | Atrasado: -5/dia (máx -100)
+- Cron de atraso: -9 (3d), -21 (7d), -45 (15d), -90 (30d)
+- Motivo registrado para auditoria (ex: `pagamento_parcela:antecipado`)
+
+**Controle de desembolso (AnaliseCreditoPage + approve-credit)**
+- Novos campos `desembolsado`, `desembolsado_em`, `desembolsado_por` na tabela `emprestimos`
+- Card "Controle de Desembolso" visível apenas para admin/gerência
+- Botão "Marcar Enviado" para empréstimos aprovados sem PIX automático
+- `approve-credit` marca `desembolsado=true` automaticamente quando PIX é enviado com sucesso
+
+**Renda mensal no cadastro de clientes (ClientesPage)**
+- Campo `renda_mensal` migrado para tabela `clientes` (antes era apenas na análise)
+- Input com formatação R$ x.xxx,xx e helpers `parseBRL`/`formatBRLValue`
+- +60 pontos no score inicial quando renda é preenchida
+- Auto-preenchimento na análise de crédito ao selecionar cliente
+
+**CPF e formatação monetária (AnaliseCreditoPage)**
+- CPF auto-formatado (000.000.000-00) ao digitar e ao selecionar cliente
+- Valor solicitado e renda mensal com prefixo R$ e formatação pt-BR
+- Score preenchido automaticamente do `scoreInterno` do cliente (Score Serasa removido)
+
+**RPCs tipadas (database.types.ts)**
+- `verificar_pendencias_cliente`, `verificar_pendencias_cliente_id`, `ajustar_score_cliente`
+- Eliminação de erros TS em AnaliseCreditoPage e MainLayout
+
+**Migration 041: renda_mensal + desembolso + score dinâmico**
+- `ALTER TABLE clientes ADD renda_mensal NUMERIC(12,2) DEFAULT 0`
+- `ALTER TABLE emprestimos ADD desembolsado BOOLEAN DEFAULT false, desembolsado_em TIMESTAMPTZ, desembolsado_por UUID`
+- `CREATE FUNCTION ajustar_score_cliente(UUID, INTEGER, TEXT) RETURNS INTEGER`
+
+### Arquivos criados/modificados
+
+| Arquivo | Tipo | Alteração |
+|---------|------|-----------|
+| `supabase/migrations/041_renda_mensal_desembolso.sql` | Novo | renda_mensal, desembolsado, ajustar_score_cliente |
+| `supabase/functions/webhook-efi/index.ts` | Modificado | Score adjustment on payment |
+| `supabase/functions/webhook-woovi/index.ts` | Modificado | Score adjustment on payment |
+| `supabase/functions/cron-notificacoes/index.ts` | Modificado | Score reduction on overdue |
+| `supabase/functions/approve-credit/index.ts` | Modificado | desembolsado tracking |
+| `src/app/lib/database.types.ts` | Modificado | RPC types + renda_mensal + desembolsado fields |
+| `src/app/lib/view-types.ts` | Modificado | rendaMensal, desembolsado, desembolsadoEm |
+| `src/app/lib/adapters.ts` | Modificado | Mapping renda + desembolsado |
+| `src/app/pages/ClientesPage.tsx` | Modificado | Renda mensal R$ formatting, score calc |
+| `src/app/pages/AnaliseCreditoPage.tsx` | Modificado | CPF format, R$ format, auto-fill, desembolso UI |
+| `src/app/pages/DownloadPage.tsx` | Modificado | Version 1.1.0, changelog update |
+
+---
+
 ## [8.5.0] — 2026-03-31
 
 ### Adicionado — PIX EFI (Cobranças + Desembolso) + Comprovantes + Configurações do Sistema

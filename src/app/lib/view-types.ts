@@ -104,6 +104,7 @@ export interface Cliente {
   documentoVersoUrl?: string;
   comprovanteEnderecoUrl?: string;
   contatosReferencia?: Array<{nome: string; telefone: string; parentesco: string}>;
+  rendaMensal?: number;
 }
 
 /**
@@ -131,6 +132,8 @@ export interface Emprestimo {
   aprovadoEm?: string | null;
   analiseId?: string | null;
   gateway?: string | null;
+  desembolsado?: boolean;
+  desembolsadoEm?: string | null;
 }
 
 /**

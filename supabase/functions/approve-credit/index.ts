@@ -598,11 +598,18 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      // Atualizar gateway utilizado no empréstimo
-      await adminClient.from("emprestimos").update({ gateway: usedGateway }).eq("id", emprestimo!.id);
+      // Atualizar gateway utilizado no empréstimo + marcar desembolso
+      await adminClient.from("emprestimos").update({
+        gateway: usedGateway,
+        desembolsado: true,
+        desembolsado_em: new Date().toISOString(),
+        desembolsado_por: caller.id,
+      }).eq("id", emprestimo!.id);
       console.log(`[approve-credit] Pagamento ${usedGateway} concluído:`, JSON.stringify(paymentResult));
     } catch (pixErr) {
       console.error(`[approve-credit] ${usedGateway} payment error:`, pixErr instanceof Error ? pixErr.message : pixErr);
+      // PIX falhou — empréstimo criado mas NÃO desembolsado (desembolsado=false por padrão)
+      console.log(`[approve-credit] Empréstimo ${emprestimo!.id} criado mas aguardando desembolso manual.`);
     }
 
     // ── Atualizar análise para aprovado ─────────────────

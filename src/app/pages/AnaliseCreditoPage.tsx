@@ -25,11 +25,12 @@ import { Calendar } from '../components/ui/calendar';
 import { ptBR } from 'date-fns/locale/pt-BR';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Skeleton } from '../components/ui/skeleton';
-import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus, Shield, Send, CalendarDays, X } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus, Shield, Send, CalendarDays, X, Banknote, DollarSign } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { useAnalises, useCreateAnalise, useUpdateAnalise } from '../hooks/useAnaliseCredito';
 import { useClientes } from '../hooks/useClientes';
+import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import AnaliseDetalhadaModal from '../components/AnaliseDetalhadaModal';
@@ -51,7 +52,7 @@ export default function AnaliseCreditoPage() {
     cpf: '',
     valorSolicitado: '',
     rendaMensal: '',
-    scoreSerasa: '',
+    scoreSerasa: '0',
     numeroParcelas: '',
     periodicidade: 'mensal',
     diaPagamento: '',
@@ -69,7 +70,28 @@ export default function AnaliseCreditoPage() {
   const createMutation = useCreateAnalise();
   const updateMutation = useUpdateAnalise();
   const { data: clientes } = useClientes();
+  const { data: emprestimos = [] } = useEmprestimos();
   const { user } = useAuth();
+
+  const formatCpf = (v: string) => {
+    const digits = v.replace(/\D/g, '').slice(0, 11);
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+    if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+  };
+
+  const formatBRL = (v: string) => {
+    const num = v.replace(/\D/g, '');
+    if (!num) return '';
+    const cents = parseInt(num);
+    return (cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const parseBRL = (v: string) => {
+    const num = v.replace(/\./g, '').replace(',', '.');
+    return parseFloat(num) || 0;
+  };
 
   // ── Verificar pendências do cliente ──────────────────────
   const verificarPendencias = useCallback(async (clienteId?: string, cpf?: string) => {
@@ -227,8 +249,42 @@ export default function AnaliseCreditoPage() {
     );
   };
 
+  // ── Desembolso manual ────────────────────────────────────
+  const [markingDesembolso, setMarkingDesembolso] = useState<string | null>(null);
+  const isAdminGerencia = user?.role === 'admin' || user?.role === 'gerencia';
+
+  const handleMarcarDesembolsado = async (emprestimoId: string) => {
+    setMarkingDesembolso(emprestimoId);
+    try {
+      const { error } = await (supabase.from('emprestimos') as any)
+        .update({ desembolsado: true, desembolsado_em: new Date().toISOString(), desembolsado_por: user?.id })
+        .eq('id', emprestimoId);
+      if (error) throw error;
+      toast.success('Empréstimo marcado como desembolsado!');
+    } catch (err: any) {
+      toast.error(`Erro: ${err.message}`);
+    } finally {
+      setMarkingDesembolso(null);
+    }
+  };
+
+  // Empréstimos de análises aprovadas que aguardam desembolso
+  const emprestimosAprovados = useMemo(() => {
+    if (!analises || !emprestimos.length) return [];
+    const analisesAprovadas = new Set(analises.filter(a => a.status === 'aprovado').map(a => a.id));
+    return emprestimos
+      .filter(e => e.analiseId && analisesAprovadas.has(e.analiseId))
+      .map(e => {
+        const analise = analises.find(a => a.id === e.analiseId);
+        return { ...e, clienteNome: analise?.clienteNome ?? e.clienteNome ?? '' };
+      });
+  }, [analises, emprestimos]);
+
+  const aguardandoEnvio = emprestimosAprovados.filter(e => !e.desembolsado);
+  const jaEnviados = emprestimosAprovados.filter(e => e.desembolsado);
+
   const handleNovaAnalise = () => {
-    if (!formNova.clienteNome || !formNova.cpf || !formNova.valorSolicitado || !formNova.rendaMensal || !formNova.scoreSerasa) {
+    if (!formNova.clienteNome || !formNova.cpf || !formNova.valorSolicitado) {
       toast.error('Preencha todos os campos obrigatórios.');
       return;
     }
@@ -240,8 +296,8 @@ export default function AnaliseCreditoPage() {
         cliente_id: formNova.clienteId || null,
         cliente_nome: formNova.clienteNome,
         cpf: formNova.cpf,
-        valor_solicitado: parseFloat(formNova.valorSolicitado),
-        renda_mensal: parseFloat(formNova.rendaMensal),
+        valor_solicitado: parseBRL(formNova.valorSolicitado),
+        renda_mensal: formNova.rendaMensal ? parseBRL(formNova.rendaMensal) : 0,
         score_serasa: parseInt(formNova.scoreSerasa),
         numero_parcelas: formNova.numeroParcelas ? parseInt(formNova.numeroParcelas) : null,
         periodicidade: formNova.periodicidade || 'mensal',
@@ -256,7 +312,7 @@ export default function AnaliseCreditoPage() {
         onSuccess: () => {
           toast.success('Análise criada com sucesso!');
           setShowNovaAnalise(false);
-          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', rendaMensal: '', scoreSerasa: '', numeroParcelas: '', periodicidade: 'mensal', diaPagamento: '', intervaloDias: '', diaUtil: false, datasPersonalizadas: [] });
+          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', rendaMensal: '', scoreSerasa: '0', numeroParcelas: '', periodicidade: 'mensal', diaPagamento: '', intervaloDias: '', diaUtil: false, datasPersonalizadas: [] });
           setPendenciaCliente(null);
           setBuscaCliente('');
         },
@@ -378,7 +434,7 @@ export default function AnaliseCreditoPage() {
                   <th className="text-left py-3 font-medium text-muted-foreground">CPF</th>
                   <th className="text-right py-3 font-medium text-muted-foreground">Valor Solicitado</th>
                   <th className="text-right py-3 font-medium text-muted-foreground">Renda</th>
-                  <th className="text-center py-3 font-medium text-muted-foreground">Score Serasa</th>
+                  <th className="text-center py-3 font-medium text-muted-foreground">Score</th>
                   <th className="text-center py-3 font-medium text-muted-foreground">Status</th>
                   <th className="text-center py-3 font-medium text-muted-foreground">Data</th>
                   <th className="text-center py-3 font-medium text-muted-foreground">Ações</th>
@@ -451,6 +507,62 @@ export default function AnaliseCreditoPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Controle de Desembolso — admin/gerência */}
+      {isAdminGerencia && emprestimosAprovados.length > 0 && (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Banknote className="w-5 h-5 text-primary" />
+              <h3 className="font-semibold">Controle de Desembolso</h3>
+              <Badge variant="outline" className="ml-auto">{aguardandoEnvio.length} aguardando</Badge>
+              <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">{jaEnviados.length} enviados</Badge>
+            </div>
+
+            {aguardandoEnvio.length > 0 && (
+              <div className="mb-4">
+                <p className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">⏳ Aguardando Envio do Dinheiro</p>
+                <div className="space-y-2">
+                  {aguardandoEnvio.map(e => (
+                    <div key={e.id} className="flex items-center justify-between p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                      <div>
+                        <span className="font-medium">{e.clienteNome}</span>
+                        <span className="text-muted-foreground text-sm ml-2">{formatCurrency(e.valor)}</span>
+                        <span className="text-muted-foreground text-xs ml-2">{new Date(e.dataContrato).toLocaleDateString('pt-BR')}</span>
+                      </div>
+                      <Button
+                        size="sm"
+                        className="bg-green-600 hover:bg-green-700 text-white"
+                        onClick={() => handleMarcarDesembolsado(e.id)}
+                        disabled={markingDesembolso === e.id}
+                      >
+                        <DollarSign className="w-4 h-4 mr-1" />
+                        {markingDesembolso === e.id ? 'Marcando...' : 'Marcar Enviado'}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {jaEnviados.length > 0 && (
+              <details className="group">
+                <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                  ✅ Já enviados ({jaEnviados.length})
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {jaEnviados.map(e => (
+                    <div key={e.id} className="flex items-center justify-between p-2 rounded bg-green-500/5 text-sm">
+                      <span>{e.clienteNome} — {formatCurrency(e.valor)}</span>
+                      <span className="text-xs text-muted-foreground">{e.desembolsadoEm ? new Date(e.desembolsadoEm).toLocaleDateString('pt-BR') : '—'}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Modal Detalhes (com verificação de identidade) */}
       <AnaliseDetalhadaModal
@@ -525,7 +637,9 @@ export default function AnaliseCreditoPage() {
                       type="button"
                       className="w-full text-left px-3 py-2 text-sm hover:bg-accent flex items-center justify-between"
                       onClick={() => {
-                        setFormNova({ ...formNova, clienteId: c.id, clienteNome: c.nome, cpf: c.cpf ?? '' });
+                        const cpfFormatted = c.cpf ? formatCpf(c.cpf) : '';
+                        const rendaStr = c.rendaMensal ? (c.rendaMensal).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
+                        setFormNova({ ...formNova, clienteId: c.id, clienteNome: c.nome, cpf: cpfFormatted, rendaMensal: rendaStr, scoreSerasa: String(c.scoreInterno ?? '') });
                         setBuscaCliente('');
                         setShowClienteResults(false);
                         verificarPendencias(c.id);
@@ -559,44 +673,39 @@ export default function AnaliseCreditoPage() {
                 id="cpfNovo"
                 placeholder="000.000.000-00"
                 value={formNova.cpf}
-                onChange={(e) => { setFormNova({ ...formNova, cpf: e.target.value }); setPendenciaCliente(null); }}
+                onChange={(e) => { setFormNova({ ...formNova, cpf: formatCpf(e.target.value) }); setPendenciaCliente(null); }}
                 onBlur={() => { if (formNova.cpf.replace(/\D/g, '').length >= 11 && !formNova.clienteId) verificarPendencias(undefined, formNova.cpf); }}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="valor">Valor Solicitado *</Label>
-                <Input
-                  id="valor"
-                  type="number"
-                  placeholder="10000"
-                  value={formNova.valorSolicitado}
-                  onChange={(e) => setFormNova({ ...formNova, valorSolicitado: e.target.value })}
-                />
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2  text-sm">R$</span>
+                  <Input
+                    id="valor"
+                    className="pl-10"
+                    placeholder="10.000,00"
+                    value={formNova.valorSolicitado}
+                    onChange={(e) => setFormNova({ ...formNova, valorSolicitado: formatBRL(e.target.value) })}
+                  />
+                </div>
               </div>
               <div>
-                <Label htmlFor="renda">Renda Mensal *</Label>
-                <Input
-                  id="renda"
-                  type="number"
-                  placeholder="5500"
-                  value={formNova.rendaMensal}
-                  onChange={(e) => setFormNova({ ...formNova, rendaMensal: e.target.value })}
-                />
+                <Label htmlFor="renda">Renda Mensal</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm">R$</span>
+                  <Input
+                    id="renda"
+                    className="pl-10"
+                    placeholder="5.500,00"
+                    value={formNova.rendaMensal}
+                    onChange={(e) => setFormNova({ ...formNova, rendaMensal: formatBRL(e.target.value) })}
+                  />
+                </div>
               </div>
             </div>
-            <div>
-              <Label htmlFor="score">Score Serasa *</Label>
-              <Input
-                id="score"
-                type="number"
-                placeholder="0 a 1000"
-                min={0}
-                max={1000}
-                value={formNova.scoreSerasa}
-                onChange={(e) => setFormNova({ ...formNova, scoreSerasa: e.target.value })}
-              />
-            </div>
+
 
             {/* ── Alerta de pendências ──────────────── */}
             {verificandoPendencia && (

@@ -161,9 +161,11 @@ export default function PagamentosWooviPage() {
   const [dateTo, setDateTo] = useState<Date>(new Date());
   const [extratoTipoFilter, setExtratoTipoFilter] = useState<string>('TODAS');
 
-  // ISO strings for hooks (start of day → end of day)
+  // Computed period boundaries (reused across all filters)
   const periodoInicio = startOfDay(dateFrom);
   const periodoFim = endOfDay(dateTo);
+
+  // ISO strings for EFI API hooks
   const extratoInicio = format(periodoInicio, "yyyy-MM-dd'T'HH:mm:ss'Z'");
   const extratoFim = format(periodoFim, "yyyy-MM-dd'T'HH:mm:ss'Z'");
 
@@ -279,7 +281,7 @@ export default function PagamentosWooviPage() {
 
     items.sort((a, b) => new Date(b.horario).getTime() - new Date(a.horario).getTime());
     return items;
-  }, [extratoItems, cobrancas, dateFrom, dateTo]);
+  }, [extratoItems, cobrancas, dateFrom, dateTo, periodoInicio, periodoFim]);
 
   // Filtered extrato
   const extratoFiltered = useMemo(() => {
@@ -337,9 +339,8 @@ export default function PagamentosWooviPage() {
       const isEfi = c.gateway === 'efi';
       const matchBusca = c.clienteNome.toLowerCase().includes(busca.toLowerCase()) ||
         c.wooviChargeId.toLowerCase().includes(busca.toLowerCase());
-      const chargeDate = new Date(c.createdAt).getTime();
-      const matchDate = chargeDate >= from && chargeDate <= to;
-      return isEfi && matchBusca && matchDate;
+      const d = new Date(c.createdAt).getTime();
+      return isEfi && matchBusca && d >= from && d <= to;
     });
   }, [cobrancas, busca, periodoInicio, periodoFim]);
 
@@ -351,9 +352,8 @@ export default function PagamentosWooviPage() {
       const isEfi = t.gateway === 'efi';
       const matchBusca = (t.descricao || '').toLowerCase().includes(busca.toLowerCase()) ||
         (t.destinatarioNome || '').toLowerCase().includes(busca.toLowerCase());
-      const txDate = new Date(t.createdAt).getTime();
-      const matchDate = txDate >= from && txDate <= to;
-      return isEfi && matchBusca && matchDate;
+      const d = new Date(t.createdAt).getTime();
+      return isEfi && matchBusca && d >= from && d <= to;
     });
   }, [transacoes, busca, periodoInicio, periodoFim]);
 
@@ -361,7 +361,7 @@ export default function PagamentosWooviPage() {
   const kpis = useMemo(() => {
     const from = periodoInicio.getTime();
     const to = periodoFim.getTime();
-    const inRange = (d: string) => { const t = new Date(d).getTime(); return t >= from && t <= to; };
+    const inRange = (dt: string) => { const t = new Date(dt).getTime(); return t >= from && t <= to; };
     const efiCharges = cobrancas.filter(c => c.gateway === 'efi' && inRange(c.createdAt));
     const efiTx = transacoes.filter(t => t.gateway === 'efi' && inRange(t.createdAt));
     return {
@@ -463,78 +463,61 @@ export default function PagamentosWooviPage() {
         </div>
       </div>
 
-      {/* Filtro de período global + Busca */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-            <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
-              <div className="space-y-1 ">
-                <Label className="text-xs text-muted-foreground">Início</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full sm:w-[170px] justify-start text-left font-normal h-9 text-xs">
-                      <CalendarIcon className="mr-1.5 h-3.5 w-3.5" />
-                      {format(dateFrom, 'dd/MM/yyyy', { locale: ptBR })}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={dateFrom}
-                      onSelect={(d) => d && setDateFrom(d)}
-                      locale={ptBR}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Fim</Label>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button variant="outline" size="sm" className="w-full sm:w-[170px] justify-start text-left font-normal h-9 text-xs">
-                      <CalendarIcon className="mr-1.5 h-3.5 w-3.5" />
-                      {format(dateTo, 'dd/MM/yyyy', { locale: ptBR })}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={dateTo}
-                      onSelect={(d) => d && setDateTo(d)}
-                      locale={ptBR}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
-              </div>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9"
-              onClick={() => { refetchRecebidos(); refetchEnviados(); }}
-              disabled={loadingExtrato}
-            >
-              {loadingExtrato ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Atualizar
-            </Button>
-            <div className="relative flex-1 min-w-[180px]">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-              <Input
-                placeholder="Buscar por cliente, ID..."
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-                className="pl-8 h-9 text-xs"
+      {/* Filtro de período global */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs">Início</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-[178px] justify-start text-left font-normal">
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {format(dateFrom, 'dd/MM/yyyy', { locale: ptBR })}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="single"
+                selected={dateFrom}
+                onSelect={(d) => d && setDateFrom(d)}
+                locale={ptBR}
+                initialFocus
               />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            </PopoverContent>
+          </Popover>
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Fim</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-[178px] justify-start text-left font-normal">
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {format(dateTo, 'dd/MM/yyyy', { locale: ptBR })}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar
+                mode="single"
+                selected={dateTo}
+                onSelect={(d) => d && setDateTo(d)}
+                locale={ptBR}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
+        </div>
+        <Button
+          variant="outline"
+          onClick={() => { refetchRecebidos(); refetchEnviados(); }}
+          disabled={loadingExtrato}
+        >
+          {loadingExtrato ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          )}
+          Atualizar
+        </Button>
+      </div>
 
       {/* Saldo + KPIs */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -622,6 +605,19 @@ export default function PagamentosWooviPage() {
         </Card>
       </div>
 
+      {/* Busca */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Buscar por cliente, ID da cobrança..."
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+      </div>
+
       {/* Tabs */}
       <Tabs defaultValue="cobrancas">
         <TabsList>
@@ -643,10 +639,9 @@ export default function PagamentosWooviPage() {
 
         {/* ── Tab: Cobranças ────────────────────────────── */}
         <TabsContent value="cobrancas" className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Label className="text-xs text-muted-foreground whitespace-nowrap">Status:</Label>
+          <div className="flex gap-2">
             <Select value={chargeStatusFilter || 'ALL'} onValueChange={(v) => setChargeStatusFilter(v === 'ALL' ? '' : v)}>
-              <SelectTrigger className="w-[140px] h-9 text-xs">
+              <SelectTrigger className="w-[180px]">
                 <SelectValue placeholder="Todas" />
               </SelectTrigger>
               <SelectContent>
@@ -775,18 +770,20 @@ export default function PagamentosWooviPage() {
         {/* ── Tab: Extratos ─────────────────────────────── */}
         <TabsContent value="extratos" className="space-y-4">
           {/* Filtro tipo */}
-          <div className="flex items-center gap-2">
-            <Label className="text-xs text-muted-foreground whitespace-nowrap">Tipo:</Label>
-            <Select value={extratoTipoFilter} onValueChange={setExtratoTipoFilter}>
-              <SelectTrigger className="w-[130px] h-9 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="TODAS">Todas</SelectItem>
-                <SelectItem value="ENTRADAS">Entradas</SelectItem>
-                <SelectItem value="SAIDAS">Saídas</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Tipo</Label>
+              <Select value={extratoTipoFilter} onValueChange={setExtratoTipoFilter}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="TODAS">Todas</SelectItem>
+                  <SelectItem value="ENTRADAS">Entradas</SelectItem>
+                  <SelectItem value="SAIDAS">Saídas</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           {/* Resumo do período */}

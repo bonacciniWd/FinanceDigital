@@ -105,6 +105,7 @@ export function dbClienteToView(
     documentoVersoUrl: c.documento_verso_url ?? undefined,
     comprovanteEnderecoUrl: c.comprovante_endereco_url ?? undefined,
     contatosReferencia: (c.contatos_referencia as any[]) ?? undefined,
+    rendaMensal: (c as any).renda_mensal ?? undefined,
     indicadoPor: c.indicado_por ?? undefined,
     indicou: indicou ?? [],
   };
@@ -138,6 +139,8 @@ export function dbEmprestimoToView(e: EmprestimoComCliente): Emprestimo {
     aprovadoEm: e.aprovado_em,
     analiseId: e.analise_id,
     gateway: e.gateway,
+    desembolsado: (e as any).desembolsado ?? false,
+    desembolsadoEm: (e as any).desembolsado_em ?? undefined,
   };
 }
 

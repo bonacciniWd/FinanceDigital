@@ -197,14 +197,15 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
   let parcelasVencidas: Array<{
     id: string; emprestimo_id: string; cliente_id: string;
     valor: number; valor_original: number; juros: number; multa: number; desconto: number;
-    data_vencimento: string; status: string;
+    data_vencimento: string; status: string; congelada: boolean;
   }> = [];
   if (empIds.length > 0) {
     const { data: parcelas, error: parErr } = await supabase
       .from('parcelas')
-      .select('id, emprestimo_id, cliente_id, valor, valor_original, juros, multa, desconto, data_vencimento, status')
+      .select('id, emprestimo_id, cliente_id, valor, valor_original, juros, multa, desconto, data_vencimento, status, congelada')
       .in('emprestimo_id', empIds)
       .in('status', ['pendente', 'vencida'])
+      .eq('congelada', false)
       .order('data_vencimento');
     if (parErr) throw new Error(parErr.message);
     parcelasVencidas = (parcelas ?? []) as typeof parcelasVencidas;
@@ -301,6 +302,11 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
     if (existing) {
       // Não sobrescrever etapas avançadas (contatado, negociacao, acordo)
       const etapaPreservada = ['contatado', 'negociacao', 'acordo', 'pago'].includes(existing.etapa);
+      // Se card está em "acordo", não atualizar valores — acordo tem valores próprios
+      if (existing.etapa === 'acordo') {
+        existingByCliente.delete(clienteId);
+        continue;
+      }
       const { error } = await supabase
         .from('kanban_cobranca')
         .update({

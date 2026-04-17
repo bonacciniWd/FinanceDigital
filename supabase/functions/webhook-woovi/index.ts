@@ -144,13 +144,43 @@ Deno.serve(async (req: Request) => {
         if (dbCharge) {
           // ── Atualizar parcela como paga ──────────────────
           if (dbCharge.parcela_id) {
+            const hoje = new Date().toISOString().split("T")[0];
             await adminClient
               .from("parcelas")
               .update({
                 status: "paga",
-                data_pagamento: new Date().toISOString().split("T")[0],
+                data_pagamento: hoje,
               })
               .eq("id", dbCharge.parcela_id);
+
+            // ── Ajustar score do cliente ─────────────────────
+            try {
+              const { data: parcelaInfo } = await adminClient
+                .from("parcelas")
+                .select("cliente_id, data_vencimento")
+                .eq("id", dbCharge.parcela_id)
+                .single();
+
+              if (parcelaInfo?.cliente_id) {
+                const venc = new Date(parcelaInfo.data_vencimento + "T00:00:00");
+                const pagamento = new Date(hoje + "T00:00:00");
+                const diffDias = Math.floor((pagamento.getTime() - venc.getTime()) / (1000 * 60 * 60 * 24));
+
+                let delta = 0;
+                if (diffDias < 0) delta = 25;       // antecipado
+                else if (diffDias === 0) delta = 15; // no dia
+                else delta = -Math.min(diffDias * 5, 100); // atrasado: -5/dia, máx -100
+
+                await adminClient.rpc("ajustar_score_cliente", {
+                  p_cliente_id: parcelaInfo.cliente_id,
+                  p_delta: delta,
+                  p_motivo: `pagamento_parcela:${diffDias < 0 ? "antecipado" : diffDias === 0 ? "no_dia" : "atrasado_" + diffDias + "d"}`,
+                });
+                console.log(`[webhook-woovi] Score ajustado: cliente=${parcelaInfo.cliente_id} delta=${delta}`);
+              }
+            } catch (scoreErr) {
+              console.error("[webhook-woovi] Erro ao ajustar score:", scoreErr);
+            }
 
             // Incrementar parcelas_pagas no empréstimo
             if (dbCharge.emprestimo_id) {

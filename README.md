@@ -1,6 +1,6 @@
 # FinanceDigital — Documentação Técnica Completa
 
-> **Atualizado:** 6 de abril de 2026  
+> **Atualizado:** 17 de abril de 2026  
 > **Stack:** React 18 · TypeScript 5 · Vite 6 · Tailwind CSS v4 · Supabase · React Query (TanStack)
 
 ---
@@ -2754,14 +2754,29 @@ Mutations: `useCriarCobrancaWoovi`, `useCancelarCobrancaWoovi`, `useLiberarEmpre
 
 Rota: `/pagamentos` (sidebar: PAGAMENTOS → Pagamentos Pix)
 
+**Filtro de período global** — date pickers (Início / Fim) acima dos KPI cards. O período selecionado filtra **todas** as abas e os cards de métricas simultaneamente. Default: últimos 30 dias.
+
+KPI Cards (topo):
+| Card | Fonte | Descrição |
+|------|-------|-----------|
+| Conta EFI Bank | `useSaldoEfi()` | Saldo disponível na conta EFI |
+| Entradas | API EFI (`/v2/pix`) + DB charges COMPLETED | Total recebido no período |
+| Saídas | API EFI (`/v2/gn/pix/enviados`) | Total enviado no período |
+| Cobranças | DB `woovi_charges` (gateway=efi) | Total / ativas / pagas / expiradas no período |
+
 Tabs:
-- **Cobranças** — lista com filtro por status (ACTIVE/COMPLETED/EXPIRED), busca, ações (ver QR Code, cancelar)
-- **Transações** — recebimentos, pagamentos, splits, saques com ícones e cores diferenciadas
-- **Subcontas** — subcontas de indicadores com saldo e total recebido
+- **Cobranças** — lista com filtro por status (ACTIVE/COMPLETED/EXPIRED), busca, filtrada pelo período global
+- **Transações** — recebimentos, pagamentos, splits, saques, filtrada pelo período global
+- **Extratos** — timeline unificada de Pix recebidos + enviados via API EFI, com merge de cobranças pagas do DB (deduplicação por txid/e2eId). Filtro adicional por tipo (Todas / Entradas / Saídas). Cards de resumo: entradas, saídas e saldo do período
+
+Hooks utilizados para extratos:
+- `useListarPixRecebidosEfi(inicio, fim)` → `GET /v2/pix`
+- `useListarPixEnviadosEfi(inicio, fim)` → `GET /v2/gn/pix/enviados`
+
+> **Nota:** O campo `horario` retornado pela EFI é um **objeto** `{ solicitacao, liquidacao }`, não uma string ISO. O helper `extractDate()` trata ambos os formatos.
 
 Modais:
-- Nova Cobrança (selecionar cliente, valor, descrição)
-- Nova Subconta (selecionar cliente indicador, nome, CPF, chave Pix)
+- Nova Cobrança (selecionar cliente → parcela pendente/vencida → valor com juros calculado → ajuste manual opcional → envio automático via WhatsApp)
 - Visualizar QR Code (exibe `PixQRCode` da cobrança ativa)
 
 ### 22.6 Ambientes — Sandbox vs Produção

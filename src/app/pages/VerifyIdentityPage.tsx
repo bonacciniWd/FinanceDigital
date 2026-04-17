@@ -553,6 +553,10 @@ export default function VerifyIdentityPage() {
   }, [residenceVideoUrl, uploadToStorage]);
 
   const stopResidenceRecording = useCallback(() => {
+    if (residenceTimerRef.current) {
+      clearInterval(residenceTimerRef.current);
+      residenceTimerRef.current = null;
+    }
     if (residenceMediaRecorderRef.current?.state === 'recording') {
       residenceMediaRecorderRef.current.stop();
     }

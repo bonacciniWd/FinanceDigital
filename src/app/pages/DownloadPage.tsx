@@ -46,7 +46,7 @@ const PLATFORM_LOGOS: Record<string, string> = {
   linux: linuxLogo,
 };
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const GITHUB_REPO = 'https://github.com/bonacciniWd/FinanceDigital';
 const GITHUB_RELEASE = `${GITHUB_REPO}/releases/download/v${APP_VERSION}`;
 
@@ -123,7 +123,17 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.0.0', date: '11 Abr 2026', isLatest: true, items: [
+  { version: '1.1.0', date: '17 Abr 2026', isLatest: true, items: [
+    'Score dinâmico automático — ajusta por pagamento antecipado/atrasado',
+    'Controle de desembolso (admin/gerência) com rastreamento PIX',
+    'Renda mensal no cadastro de clientes com formatação R$',
+    'CPF auto-formatado na análise de crédito',
+    'Auto-preenchimento de score e renda do cliente na análise',
+    'Formatação monetária R$ x.xxx,xx em todos os campos de valor',
+    'Acordos de renegociação com entrada configurável e parcelas',
+    'RPCs tipadas para verificação de pendências',
+  ]},
+  { version: '1.0.0', date: '11 Abr 2026', isLatest: false, items: [
     'Documentos do cliente (RG/CNH, comprovante) no cadastro',
     'Atribuição de documentos via chat WhatsApp',
     'Verificação de identidade simplificada (vídeo + residência)',

@@ -1062,7 +1062,9 @@ Deno.serve(async (req: Request) => {
                 const totalDivida = Number(contexto.acordo_total_divida || 0);
                 const restante = Math.round((totalDivida - valorEntrada) * 100) / 100;
                 const parcelasIds = (contexto.acordo_parcelas_ids as string[]) || [];
-                const numParcelasRenego = Math.max(1, Math.min(parcelasIds.length, 6));
+                const empIds = (contexto.acordo_emprestimo_ids as string[]) || [];
+                const cfgMax = Number(contexto.acordo_max_parcelas || 12);
+                const numParcelasRenego = Math.max(1, Math.min(parcelasIds.length, cfgMax));
                 const valorParcelaRenego = Math.round((restante / numParcelasRenego) * 100) / 100;
 
                 // Gerar PIX da entrada
@@ -1114,31 +1116,85 @@ Deno.serve(async (req: Request) => {
                     await enviarTexto(msg);
                   }
 
-                  // Atualizar kanban para negociação
+                  // ── Criar registro formal do acordo ──
+                  const entradaPctVal = Number(contexto.acordo_entrada_pct || 0.30);
+                  const totalJuros = Number(contexto.acordo_total_juros || 0);
+
+                  // Atualizar/criar kanban card
                   const { data: existingKanban } = await adminClient.from("kanban_cobranca")
                     .select("id").eq("cliente_id", clienteId)
                     .in("etapa", ["a_vencer", "vencido", "contatado", "negociacao"])
                     .limit(1).maybeSingle();
                   const obsTexto = `Acordo via chatbot. Entrada: ${fmt(valorEntrada)}. Restante: ${numParcelasRenego}x ${fmt(valorParcelaRenego)} todo dia ${diaPagamento}. Total: ${fmt(totalDivida)}`;
+                  let kanbanCardId: string | null = null;
                   if (existingKanban) {
+                    kanbanCardId = existingKanban.id;
                     await adminClient.from("kanban_cobranca").update({
-                      etapa: "negociacao", valor_divida: totalDivida,
+                      etapa: "acordo", valor_divida: totalDivida,
                       ultimo_contato: new Date().toISOString(),
                       observacao: obsTexto,
                     }).eq("id", existingKanban.id);
                   } else {
-                    await adminClient.from("kanban_cobranca").insert({
-                      cliente_id: clienteId, etapa: "negociacao", valor_divida: totalDivida,
+                    const { data: newKanban } = await adminClient.from("kanban_cobranca").insert({
+                      cliente_id: clienteId, etapa: "acordo", valor_divida: totalDivida,
                       tentativas_contato: 1, ultimo_contato: new Date().toISOString(),
                       observacao: obsTexto,
-                    });
+                    }).select("id").single();
+                    kanbanCardId = newKanban?.id || null;
                   }
 
-                  // Registrar parcelas renegociadas no contexto (para possível atualização futura no sistema)
+                  // Inserir acordo na tabela
+                  const { data: novoAcordo, error: errAcordo } = await adminClient.from("acordos").insert({
+                    cliente_id: clienteId,
+                    kanban_card_id: kanbanCardId,
+                    origem: "bot",
+                    valor_divida_original: totalDivida,
+                    valor_entrada: valorEntrada,
+                    entrada_percentual: Math.round(entradaPctVal * 100),
+                    valor_restante: restante,
+                    num_parcelas: numParcelasRenego,
+                    valor_parcela: valorParcelaRenego,
+                    dia_pagamento: diaPagamento,
+                    data_primeira_parcela: datasRenego[0] || null,
+                    entrada_charge_id: chargeData?.txid ? null : null, // será linkado depois se necessário
+                    parcelas_originais_ids: parcelasIds,
+                    status: "ativo",
+                    observacao: obsTexto,
+                  }).select("id").single();
+
+                  if (errAcordo) {
+                    console.error("[chatbot] Erro ao criar acordo:", errAcordo.message);
+                  }
+
+                  const acordoId = novoAcordo?.id || null;
+
+                  // Congelar parcelas originais (param juros e notificações)
+                  if (parcelasIds.length > 0) {
+                    const { error: errFreeze } = await adminClient.from("parcelas")
+                      .update({ congelada: true })
+                      .in("id", parcelasIds);
+                    if (errFreeze) console.error("[chatbot] Erro ao congelar parcelas:", errFreeze.message);
+                  }
+
+                  // Criar parcelas do acordo no banco
+                  if (acordoId && datasRenego.length > 0 && empIds.length > 0) {
+                    const parcelasAcordoRows = datasRenego.map((d: string, i: number) => ({
+                      emprestimo_id: empIds[0],
+                      cliente_id: clienteId,
+                      numero: i + 1,
+                      valor: valorParcelaRenego,
+                      valor_original: valorParcelaRenego,
+                      data_vencimento: d,
+                      status: "pendente",
+                      acordo_id: acordoId,
+                    }));
+                    const { error: errParc } = await adminClient.from("parcelas").insert(parcelasAcordoRows);
+                    if (errParc) console.error("[chatbot] Erro ao criar parcelas do acordo:", errParc.message);
+                  }
+
+                  // Limpar contexto
                   contexto.acordo_concluido = true;
-                  contexto.acordo_dia_pagamento = diaPagamento;
-                  contexto.acordo_datas = datasRenego;
-                  contexto.acordo_valor_parcela = valorParcelaRenego;
+                  contexto.acordo_id = acordoId;
                   delete contexto.acordo_aguardando_data;
                   delete contexto.acordo_aguardando_confirmacao;
                   return { success: true, message: "", skipConteudo: true };
@@ -1176,10 +1232,18 @@ Deno.serve(async (req: Request) => {
               }
 
               // ── PASSO 0: montar proposta inicial ──
+              // Ler config de entrada mínima
+              const { data: cfgEntrada } = await adminClient.from("configuracoes_sistema").select("valor").eq("chave", "acordo_entrada_percentual").maybeSingle();
+              const entradaPct = Number(cfgEntrada?.valor ?? 30) / 100; // 0.30 default
+
+              const { data: cfgMaxParc } = await adminClient.from("configuracoes_sistema").select("valor").eq("chave", "acordo_max_parcelas").maybeSingle();
+              const maxParcelas = Number(cfgMaxParc?.valor ?? 12);
+
               const { data: vencidas } = await adminClient.from("parcelas")
                 .select("id, numero, valor, valor_original, data_vencimento, juros, multa, desconto, emprestimo_id, status")
                 .eq("cliente_id", clienteId)
                 .in("status", ["pendente", "vencida"])
+                .eq("congelada", false)
                 .order("data_vencimento");
 
               const vencidasReais = (vencidas || []).filter((p: Record<string, unknown>) => {
@@ -1204,8 +1268,9 @@ Deno.serve(async (req: Request) => {
                 totalJuros += corr.juros;
               }
 
-              // Entrada mínima: 30% da dívida total
-              const valorEntrada = Math.round(totalDivida * 0.30 * 100) / 100;
+              // Entrada mínima: config (padrão 30%)
+              const valorEntrada = Math.round(totalDivida * entradaPct * 100) / 100;
+              const entradaPctDisplay = Math.round(entradaPct * 100);
 
               // Listar parcelas na mensagem
               let msg = `🤝 *Proposta de Renegociação*\n\n` +
@@ -1219,7 +1284,7 @@ Deno.serve(async (req: Request) => {
               msg += `\n💰 *Dívida total: ${fmt(totalDivida)}*\n`;
               if (totalJuros > 0) msg += `📈 Juros acumulados: ${fmt(totalJuros)}\n`;
               msg += `\n🔑 *Condições de renegociação:*\n` +
-                `• Entrada mínima: *${fmt(valorEntrada)}* (30%)\n` +
+                `• Entrada mínima: *${fmt(valorEntrada)}* (${entradaPctDisplay}%)\n` +
                 `• Restante pode ser parcelado\n` +
                 `• Se não cumprir, a dívida volta ao valor original + juros\n\n` +
                 `Deseja aceitar? Responda *Sim* ou *Não*`;
@@ -1227,8 +1292,12 @@ Deno.serve(async (req: Request) => {
               // Salvar contexto para próxima rodada
               contexto.acordo_aguardando_confirmacao = true;
               contexto.acordo_total_divida = totalDivida;
+              contexto.acordo_total_juros = totalJuros;
               contexto.acordo_valor_entrada = valorEntrada;
+              contexto.acordo_entrada_pct = entradaPct;
+              contexto.acordo_max_parcelas = maxParcelas;
               contexto.acordo_parcelas_ids = vencidasReais.map((p: Record<string, unknown>) => p.id);
+              contexto.acordo_emprestimo_ids = [...new Set(vencidasReais.map((p: Record<string, unknown>) => p.emprestimo_id).filter(Boolean))];
 
               return { success: true, message: msg, skipConteudo: true, waitForInput: true };
             }

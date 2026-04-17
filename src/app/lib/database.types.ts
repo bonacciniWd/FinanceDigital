@@ -30,6 +30,7 @@ export type TicketStatus = 'aberto' | 'em_atendimento' | 'aguardando_cliente' | 
 export type TicketCanal = 'whatsapp' | 'chat' | 'telefone' | 'email' | 'presencial';
 export type TicketPrioridade = 'baixa' | 'media' | 'alta' | 'urgente';
 export type KanbanCobrancaEtapa = 'a_vencer' | 'vencido' | 'contatado' | 'negociacao' | 'acordo' | 'pago' | 'perdido';
+export type AcordoStatus = 'ativo' | 'quitado' | 'quebrado' | 'cancelado';
 export type WhatsappInstanceStatus = 'conectado' | 'desconectado' | 'qr_pendente';
 export type FluxoStatus = 'ativo' | 'pausado' | 'rascunho';
 export type FluxoEtapaTipo = 'mensagem' | 'condicao' | 'acao' | 'espera' | 'finalizar';
@@ -135,6 +136,7 @@ export interface Database {
           documento_verso_url: string | null;
           comprovante_endereco_url: string | null;
           contatos_referencia: unknown;
+          renda_mensal: number;
           created_at: string;
           updated_at: string;
         };
@@ -171,6 +173,7 @@ export interface Database {
           documento_verso_url?: string | null;
           comprovante_endereco_url?: string | null;
           contatos_referencia?: unknown;
+          renda_mensal?: number;
         };
         Update: {
           nome?: string;
@@ -204,6 +207,7 @@ export interface Database {
           documento_verso_url?: string | null;
           comprovante_endereco_url?: string | null;
           contatos_referencia?: unknown;
+          renda_mensal?: number;
           updated_at?: string;
         };
       };
@@ -227,6 +231,9 @@ export interface Database {
           aprovado_em: string | null;
           analise_id: string | null;
           gateway: string | null;
+          desembolsado: boolean;
+          desembolsado_em: string | null;
+          desembolsado_por: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -248,6 +255,9 @@ export interface Database {
           aprovado_em?: string | null;
           analise_id?: string | null;
           gateway?: string | null;
+          desembolsado?: boolean;
+          desembolsado_em?: string | null;
+          desembolsado_por?: string | null;
         };
         Update: {
           cliente_id?: string;
@@ -266,6 +276,9 @@ export interface Database {
           aprovado_em?: string | null;
           analise_id?: string | null;
           gateway?: string | null;
+          desembolsado?: boolean;
+          desembolsado_em?: string | null;
+          desembolsado_por?: string | null;
           updated_at?: string;
         };
       };
@@ -291,6 +304,8 @@ export interface Database {
           confirmado_por: string | null;
           confirmado_em: string | null;
           woovi_charge_id: string | null;
+          acordo_id: string | null;
+          congelada: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -314,6 +329,8 @@ export interface Database {
           confirmado_por?: string | null;
           confirmado_em?: string | null;
           woovi_charge_id?: string | null;
+          acordo_id?: string | null;
+          congelada?: boolean;
         };
         Update: {
           emprestimo_id?: string;
@@ -334,6 +351,8 @@ export interface Database {
           confirmado_por?: string | null;
           confirmado_em?: string | null;
           woovi_charge_id?: string | null;
+          acordo_id?: string | null;
+          congelada?: boolean;
           updated_at?: string;
         };
       };
@@ -646,6 +665,59 @@ export interface Database {
           dias_atraso?: number;
           tentativas_contato?: number;
           ultimo_contato?: string | null;
+          observacao?: string | null;
+          updated_at?: string;
+        };
+      };
+
+      acordos: {
+        Row: {
+          id: string;
+          cliente_id: string;
+          kanban_card_id: string | null;
+          criado_por: string | null;
+          origem: string;
+          valor_divida_original: number;
+          valor_entrada: number;
+          entrada_percentual: number;
+          valor_restante: number;
+          num_parcelas: number;
+          valor_parcela: number;
+          dia_pagamento: number;
+          data_acordo: string;
+          data_primeira_parcela: string | null;
+          entrada_charge_id: string | null;
+          entrada_paga: boolean;
+          parcelas_originais_ids: string[];
+          status: AcordoStatus;
+          observacao: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          cliente_id: string;
+          kanban_card_id?: string | null;
+          criado_por?: string | null;
+          origem?: string;
+          valor_divida_original: number;
+          valor_entrada: number;
+          entrada_percentual?: number;
+          valor_restante: number;
+          num_parcelas: number;
+          valor_parcela: number;
+          dia_pagamento: number;
+          data_primeira_parcela?: string | null;
+          entrada_charge_id?: string | null;
+          entrada_paga?: boolean;
+          parcelas_originais_ids: string[];
+          status?: AcordoStatus;
+          observacao?: string | null;
+        };
+        Update: {
+          status?: AcordoStatus;
+          entrada_paga?: boolean;
+          entrada_charge_id?: string | null;
           observacao?: string | null;
           updated_at?: string;
         };
@@ -1338,6 +1410,18 @@ export interface Database {
           webhooks_com_erro: number;
         };
       };
+      verificar_pendencias_cliente: {
+        Args: { p_cpf: string };
+        Returns: Json;
+      };
+      verificar_pendencias_cliente_id: {
+        Args: { p_cliente_id: string };
+        Returns: Json;
+      };
+      ajustar_score_cliente: {
+        Args: { p_cliente_id: string; p_delta: number; p_motivo?: string };
+        Returns: number;
+      };
     };
 
     Enums: {
@@ -1442,6 +1526,16 @@ export type TicketAtendimentoUpdate = Database['public']['Tables']['tickets_aten
 export type KanbanCobranca = Database['public']['Tables']['kanban_cobranca']['Row'];
 export type KanbanCobrancaInsert = Database['public']['Tables']['kanban_cobranca']['Insert'];
 export type KanbanCobrancaUpdate = Database['public']['Tables']['kanban_cobranca']['Update'];
+
+/** Linha da tabela acordos */
+export type Acordo = Database['public']['Tables']['acordos']['Row'];
+export type AcordoInsert = Database['public']['Tables']['acordos']['Insert'];
+export type AcordoUpdate = Database['public']['Tables']['acordos']['Update'];
+
+/** Acordo com dados do cliente (JOIN) */
+export type AcordoComCliente = Acordo & {
+  clientes: { nome: string; telefone: string } | null;
+};
 
 /** Linha da tabela chat_interno */
 export type ChatInterno = Database['public']['Tables']['chat_interno']['Row'];
