@@ -10,7 +10,7 @@ import { Label } from '../components/ui/label';
 import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { Skeleton } from '../components/ui/skeleton';
-import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle, Calculator, Handshake } from 'lucide-react';
+import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle, Calculator, Handshake, Banknote } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfigSistema, useUpdateConfig } from '../hooks/useConfigSistema';
 import { JUROS_FIXO_DIA, JUROS_PERC_DIA, JUROS_LIMIAR } from '../lib/juros';
@@ -95,6 +95,61 @@ export default function ConfigSistemaPage() {
             <Switch
               checked={config.mensagens_automaticas_ativas}
               onCheckedChange={(checked) => handleToggle('mensagens_automaticas_ativas', checked)}
+              disabled={updateConfig.isPending}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-emerald-200 dark:border-emerald-900/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Banknote className="w-5 h-5 text-emerald-600" />
+            Aprovação e Desembolso
+          </CardTitle>
+          <CardDescription>
+            Controla o comportamento do crédito aprovado: painel manual de desembolso, envio automático do PIX e mensagens de aprovação.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Controle de desembolso ativo</Label>
+              <p className="text-xs text-muted-foreground">
+                Exibe o painel de acompanhamento do que foi pago manualmente e do que ainda está pendente de envio.
+              </p>
+            </div>
+            <Switch
+              checked={config.controle_desembolso_ativo}
+              onCheckedChange={(checked) => handleToggle('controle_desembolso_ativo', checked)}
+              disabled={updateConfig.isPending}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Desembolso automático via PIX</Label>
+              <p className="text-xs text-muted-foreground">
+                Quando desligado, a aprovação cria o empréstimo, mas o envio do dinheiro fica pendente para controle manual.
+              </p>
+            </div>
+            <Switch
+              checked={config.desembolso_automatico_ativo}
+              onCheckedChange={(checked) => handleToggle('desembolso_automatico_ativo', checked)}
+              disabled={updateConfig.isPending}
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Mensagem automática de aprovação</Label>
+              <p className="text-xs text-muted-foreground">
+                Envia WhatsApp ao cliente ao aprovar o crédito. Se o desembolso automático estiver desligado, a mensagem informa que o pagamento será manual.
+              </p>
+            </div>
+            <Switch
+              checked={config.notificacoes_aprovacao_ativas}
+              onCheckedChange={(checked) => handleToggle('notificacoes_aprovacao_ativas', checked)}
               disabled={updateConfig.isPending}
             />
           </div>

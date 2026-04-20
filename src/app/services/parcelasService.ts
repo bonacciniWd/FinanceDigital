@@ -52,9 +52,25 @@ export async function getParcelasByCliente(clienteId: string): Promise<ParcelaCo
   return (data ?? []) as ParcelaComCliente[];
 }
 
-/** Buscar parcelas vencidas (para Kanban de cobrança) */
+/**
+ * Buscar parcelas vencidas (para Kanban de cobrança).
+ *
+ * Inclui tanto parcelas marcadas `status='vencida'` no banco quanto
+ * parcelas `status='pendente'` cujo `data_vencimento` já passou —
+ * resolve o caso em que o job diário `mark_parcelas_vencidas()` ainda
+ * não rodou (ver migration 045).
+ */
 export async function getParcelasVencidas(): Promise<ParcelaComCliente[]> {
-  return getParcelas('vencida');
+  const hojeIso = new Date().toISOString().slice(0, 10);
+
+  const { data, error } = await supabase
+    .from('parcelas')
+    .select('*, clientes(nome)')
+    .or(`status.eq.vencida,and(status.eq.pendente,data_vencimento.lt.${hojeIso})`)
+    .order('data_vencimento');
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ParcelaComCliente[];
 }
 
 // ── Mutations ──────────────────────────────────────────────

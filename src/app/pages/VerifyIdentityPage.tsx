@@ -36,6 +36,7 @@ import {
   RefreshCw,
   ExternalLink,
   Home,
+  MapPin,
   ChevronRight,
   ChevronLeft,
 } from 'lucide-react';
@@ -45,7 +46,7 @@ import animSelfie from '../assets/animations/id.json';
 import animData from '../assets/animations/docs.json';
 import animSent from '../assets/animations/sent.json';
 import animWelcome from '../assets/animations/init.json';
-import type { IdentityVerificationRow } from '../lib/database.types';
+import type { IdentityVerificationRow, VerificationLogInsert } from '../lib/database.types';
 
 const MIN_VIDEO_DURATION = 5;
 const MAX_VIDEO_DURATION = 30;
@@ -78,6 +79,13 @@ const INTRO_SLIDES = [
 ] as const;
 
 type Step = 'loading' | 'intro' | 'video' | 'residence_video' | 'review' | 'submitted' | 'error' | 'expired';
+
+interface ResidenceLocation {
+  latitude: number;
+  longitude: number;
+  accuracy: number | null;
+  capturedAt: string;
+}
 
 // Detectar navegador in-app (WhatsApp, Instagram, Facebook, etc.)
 function isInAppBrowser(): boolean {
@@ -145,6 +153,9 @@ export default function VerifyIdentityPage() {
   const [residenceCountdown, setResidenceCountdown] = useState<number | null>(null);
   const [residenceCameraFailed, setResidenceCameraFailed] = useState(false);
   const [residenceCameraError, setResidenceCameraError] = useState('');
+  const [residenceLocation, setResidenceLocation] = useState<ResidenceLocation | null>(null);
+  const [capturingLocation, setCapturingLocation] = useState(false);
+  const [residenceLocationError, setResidenceLocationError] = useState('');
   const residenceVideoRef = useRef<HTMLVideoElement>(null);
   const residencePreviewRef = useRef<HTMLVideoElement>(null);
   const residenceMediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -177,13 +188,13 @@ export default function VerifyIdentityPage() {
         console.log('[VerifyIdentity] Carregando verificação para analise_id:', analiseId);
         // Página pública: cliente acessa via link do WhatsApp, sem sessão Supabase.
         // O analise_id (UUID) no link é o fator de autenticação.
-        const { data, error: fetchError } = await supabase
-          .from('identity_verifications')
+        const { data, error: fetchError }: { data: IdentityVerificationRow | null; error: { message?: string } | null } = await ((supabase
+          .from('identity_verifications' as any)
           .select('*')
           .eq('analise_id', analiseId)
           .order('created_at', { ascending: false })
           .limit(1)
-          .single();
+          .single() as unknown) as Promise<{ data: IdentityVerificationRow | null; error: { message?: string } | null }>);
 
         if (fetchError || !data) {
           console.error('[VerifyIdentity] Erro ao buscar verificação:', fetchError);
@@ -569,11 +580,62 @@ export default function VerifyIdentityPage() {
     setResidenceDuration(0);
     setResidenceCameraFailed(false);
     setResidenceCameraError('');
+    setResidenceLocation(null);
+    setResidenceLocationError('');
     if (residenceStreamRef.current) {
       residenceStreamRef.current.getTracks().forEach((t) => t.stop());
       residenceStreamRef.current = null;
     }
   }, [residenceVideoUrl]);
+
+  const captureResidenceLocation = useCallback(async (): Promise<ResidenceLocation | null> => {
+    if (residenceLocation) return residenceLocation;
+
+    if (!('geolocation' in navigator)) {
+      const msg = 'Seu navegador não disponibiliza geolocalização. O analista fará a conferência apenas pelo vídeo e endereço cadastrado.';
+      setResidenceLocationError(msg);
+      return null;
+    }
+
+    setCapturingLocation(true);
+    setResidenceLocationError('');
+
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const captured: ResidenceLocation = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : null,
+            capturedAt: new Date().toISOString(),
+          };
+          setResidenceLocation(captured);
+          setCapturingLocation(false);
+          resolve(captured);
+        },
+        (geoError) => {
+          const msg = geoError.code === geoError.PERMISSION_DENIED
+            ? 'Permissão de localização negada. O envio continua, mas sem esse dado adicional para conferência do endereço.'
+            : geoError.code === geoError.POSITION_UNAVAILABLE
+              ? 'A localização não pôde ser determinada neste momento.'
+              : 'A captura da localização expirou. Você pode tentar novamente na revisão.';
+          setResidenceLocationError(msg);
+          setCapturingLocation(false);
+          resolve(null);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 60000,
+        }
+      );
+    });
+  }, [residenceLocation]);
+
+  const handleAdvanceToReview = useCallback(async () => {
+    await captureResidenceLocation();
+    setStep('review');
+  }, [captureResidenceLocation]);
 
   // ── Submit ───────────────────────────────────────────────
 
@@ -588,34 +650,34 @@ export default function VerifyIdentityPage() {
     try {
       // Todos os arquivos já estão no storage (upload progressivo).
       // Apenas atualizar o registro no banco com os paths e dados.
-      const { error: updateError } = await supabase
-        .from('identity_verifications')
+      const { error: updateError }: { error: { message?: string } | null } = await ((supabase
+        .from('identity_verifications' as any) as any)
         .update({
           video_url: uploadedPaths.video,
           residence_video_url: uploadedPaths.residenceVideo,
           status: 'pending' as const,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', verification.id);
+        .eq('id', verification.id) as Promise<{ error: { message?: string } | null }>);
       if (updateError) throw updateError;
       setUploadProgress(50);
 
       // Save PIX key to clientes table via analises_credito.cliente_id
-      const { data: analise } = await supabase
-        .from('analises_credito')
+      const { data: analise }: { data: { cliente_id: string | null } | null } = await ((supabase
+        .from('analises_credito' as any)
         .select('cliente_id')
         .eq('id', verification.analise_id)
-        .single();
+        .single() as unknown) as Promise<{ data: { cliente_id: string | null } | null }>);
       if (analise?.cliente_id) {
-        await supabase
-          .from('clientes')
+        await ((supabase
+          .from('clientes' as any) as any)
           .update({ pix_key: pixKey.trim(), pix_key_type: pixKeyType })
-          .eq('id', analise.cliente_id);
+          .eq('id', analise.cliente_id) as Promise<unknown>);
       }
       setUploadProgress(70);
 
       // Create audit log
-      await supabase.from('verification_logs').insert({
+      const logPayload: VerificationLogInsert = {
         verification_id: verification.id,
         analise_id: verification.analise_id,
         action: 'media_uploaded',
@@ -625,8 +687,15 @@ export default function VerifyIdentityPage() {
           residence_video_path: uploadedPaths.residenceVideo,
           pix_key: pixKey.trim(),
           pix_key_type: pixKeyType,
+          residence_location: residenceLocation ? {
+            latitude: residenceLocation.latitude,
+            longitude: residenceLocation.longitude,
+            accuracy: residenceLocation.accuracy,
+            captured_at: residenceLocation.capturedAt,
+          } : null,
         },
-      });
+      };
+      await ((supabase.from('verification_logs' as any) as any).insert(logPayload) as Promise<unknown>);
 
       setUploadProgress(100);
       setStep('submitted');
@@ -1135,8 +1204,8 @@ export default function VerifyIdentityPage() {
                       <RefreshCw className="h-4 w-4 mr-2" />
                       Regravar
                     </Button>
-                    <Button className="flex-1" onClick={() => setStep('review')} disabled={!uploadedPaths.residenceVideo || uploadingFile === 'residenceVideo'}>
-                      {uploadingFile === 'residenceVideo' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Enviando...</> : 'Próximo'}
+                    <Button className="flex-1" onClick={handleAdvanceToReview} disabled={!uploadedPaths.residenceVideo || uploadingFile === 'residenceVideo' || capturingLocation}>
+                      {uploadingFile === 'residenceVideo' ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Enviando...</> : capturingLocation ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Localizando...</> : 'Próximo'}
                     </Button>
                   </>
                 )}
@@ -1196,6 +1265,42 @@ export default function VerifyIdentityPage() {
                     controls
                     playsInline
                   />
+                )}
+              </div>
+
+              <div className="p-4 rounded-lg border border-sky-200 bg-sky-50 dark:bg-sky-950/20 space-y-3">
+                <p className="text-sm font-medium flex items-center gap-2">
+                  <MapPin className="h-4 w-4" />
+                  Localização da Fachada
+                </p>
+
+                {capturingLocation ? (
+                  <div className="flex items-center gap-2 text-sm text-sky-700 dark:text-sky-300">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Capturando localização para conferência do endereço...
+                  </div>
+                ) : residenceLocation ? (
+                  <div className="space-y-1 text-sm text-sky-900 dark:text-sky-100">
+                    <p>
+                      Latitude {residenceLocation.latitude.toFixed(6)} · Longitude {residenceLocation.longitude.toFixed(6)}
+                    </p>
+                    <p className="text-xs text-sky-700 dark:text-sky-300">
+                      Precisão aproximada: {residenceLocation.accuracy ? `${Math.round(residenceLocation.accuracy)} m` : 'não informada'} · capturada em {new Date(residenceLocation.capturedAt).toLocaleString('pt-BR')}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-sm text-sky-800 dark:text-sky-200">
+                      Vamos tentar capturar sua localização junto com o vídeo da fachada para o analista comparar com o endereço cadastrado.
+                    </p>
+                    {residenceLocationError && (
+                      <p className="text-xs text-amber-700 dark:text-amber-300">{residenceLocationError}</p>
+                    )}
+                    <Button variant="outline" size="sm" onClick={captureResidenceLocation} disabled={capturingLocation}>
+                      <MapPin className="h-4 w-4 mr-2" />
+                      Tentar capturar localização
+                    </Button>
+                  </div>
                 )}
               </div>
 

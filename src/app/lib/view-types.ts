@@ -366,7 +366,7 @@ export interface TicketAtendimentoView {
 
 /**
  * Card do Kanban de cobrança (view camelCase).
- * @property etapa - Posição no pipeline: a_vencer, vencido, contatado, negociacao, acordo, pago, perdido
+ * @property etapa - Posição no pipeline: a_vencer, vencido, contatado, negociacao, acordo, pago, perdido, arquivado
  * @property responsavelNome - Nome do funcionário responsável (JOIN)
  */
 export interface KanbanCobrancaView {
@@ -379,7 +379,7 @@ export interface KanbanCobrancaView {
   parcelaId: string | null;
   responsavelId: string | null;
   responsavelNome: string;
-  etapa: 'a_vencer' | 'vencido' | 'contatado' | 'negociacao' | 'acordo' | 'pago' | 'perdido';
+  etapa: 'a_vencer' | 'vencido' | 'contatado' | 'negociacao' | 'acordo' | 'pago' | 'perdido' | 'arquivado';
   valorDivida: number;
   diasAtraso: number;
   tentativasContato: number;

@@ -6,6 +6,48 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.3.0] — 2026-04-20
+
+### Adicionado — Sincronização estrutural, desembolso configurável e Arquivados no Kanban
+
+**Sincronização automática de status (migration 045)**
+- Funções SQL e triggers para manter `parcelas`, `emprestimos` e `clientes` sincronizados
+- Nova função `mark_parcelas_vencidas()` para marcar parcelas vencidas sem depender de ajuste manual
+- `get_dashboard_stats()` reescrita para usar `emprestimos` como fonte de verdade
+
+**Dashboard e cobranças mais consistentes**
+- Dashboard agora calcula carteira ativa diretamente dos empréstimos ativos/inadimplentes
+- `getParcelasVencidas()` também considera parcelas `pendente` já vencidas, mesmo antes do cron rodar
+- `cron-notificacoes` passa a executar a marcação de vencidas no início de cada ciclo
+
+**Aprovação e desembolso configuráveis**
+- Novas configurações globais para controle de desembolso, PIX automático e notificações de aprovação
+- `approve-credit` agora pode aprovar sem enviar PIX automaticamente, deixando o desembolso em fluxo manual
+- Mensagem de aprovação via WhatsApp respeita as novas flags e informa quando o pagamento será manual
+
+**Kanban de cobrança com Arquivados**
+- Nova etapa `arquivado` para clientes com mais de 365 dias de atraso
+- Botão manual para arquivar cards em N3
+- Scroll horizontal também no topo do quadro para facilitar navegação
+- Métricas gerenciais e relatórios passaram a excluir Arquivados da cobrança ativa
+
+### Arquivos criados/modificados
+
+| Arquivo | Tipo | Alteração |
+|---------|------|-----------|
+| `supabase/migrations/045_auto_sync_statuses.sql` | Novo | Sync estrutural de status + RPC do dashboard |
+| `supabase/migrations/046_kanban_arquivados_desembolso_config.sql` | Novo | Etapa `arquivado` + novas chaves de configuração |
+| `supabase/functions/approve-credit/index.ts` | Modificado | Desembolso automático opcional |
+| `supabase/functions/cron-notificacoes/index.ts` | Modificado | Executa `mark_parcelas_vencidas()` |
+| `src/app/pages/DashboardPage.tsx` | Modificado | Carteira ativa por empréstimos |
+| `src/app/pages/AnaliseCreditoPage.tsx` | Modificado | Controle manual de desembolso e totais |
+| `src/app/pages/ConfigSistemaPage.tsx` | Modificado | Toggles de aprovação/desembolso |
+| `src/app/pages/KanbanCobrancaPage.tsx` | Modificado | Arquivados + scroll superior + arquivar manual |
+| `src/app/services/kanbanCobrancaService.ts` | Modificado | Autoarquivamento >365 dias |
+| `src/app/services/parcelasService.ts` | Modificado | Busca vencidas com fallback de data |
+
+---
+
 ## [1.2.0] — 2026-04-20
 
 ### Adicionado — Migração PlataPlumo + Gestão de Instância WhatsApp

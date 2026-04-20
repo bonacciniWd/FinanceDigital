@@ -258,7 +258,9 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
 
     // Determinar etapa baseado no status
     let etapa: KanbanCobrancaEtapa = 'a_vencer';
-    if (emp.status === 'inadimplente' || diasAtraso > 0) {
+    if (diasAtraso > 365) {
+      etapa = 'arquivado';
+    } else if (emp.status === 'inadimplente' || diasAtraso > 0) {
       etapa = 'vencido';
     }
 
@@ -301,7 +303,7 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
 
     if (existing) {
       // Não sobrescrever etapas avançadas (contatado, negociacao, acordo)
-      const etapaPreservada = ['contatado', 'negociacao', 'acordo', 'pago'].includes(existing.etapa);
+      const etapaPreservada = ['contatado', 'negociacao', 'acordo', 'pago', 'arquivado'].includes(existing.etapa);
       // Se card está em "acordo", não atualizar valores — acordo tem valores próprios
       if (existing.etapa === 'acordo') {
         existingByCliente.delete(clienteId);
@@ -335,7 +337,7 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
   // 6) Remover cards de clientes que já não têm dívida ativa
   //    (mas preservar cards em etapas avançadas: acordo, pago)
   for (const [, card] of existingByCliente) {
-    if (['pago', 'acordo'].includes(card.etapa)) continue;
+    if (['pago', 'acordo', 'arquivado'].includes(card.etapa)) continue;
     const { error } = await supabase
       .from('kanban_cobranca')
       .delete()

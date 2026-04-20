@@ -39,7 +39,8 @@ export default function KanbanGerencialPage() {
     const ticketsPendentes = tickets.filter((t) => !['resolvido', 'cancelado'].includes(t.status)).length;
     const ticketsResolvidos = tickets.filter((t) => t.status === 'resolvido').length;
 
-    const valorEmCobranca = cobrancas.reduce((s, c) => s + c.valorDivida, 0);
+    const cobrancasAtivas = cobrancas.filter((c) => !['pago', 'perdido', 'arquivado'].includes(c.etapa));
+    const valorEmCobranca = cobrancasAtivas.reduce((s, c) => s + c.valorDivida, 0);
     const valorRecuperado = cobrancas
       .filter((c) => c.etapa === 'pago')
       .reduce((s, c) => s + c.valorDivida, 0);
@@ -53,7 +54,7 @@ export default function KanbanGerencialPage() {
       totalTickets: tickets.length,
       ticketsPendentes,
       ticketsResolvidos,
-      totalCobranca: cobrancas.length,
+      totalCobranca: cobrancasAtivas.length,
       acordos: cobrancas.filter((c) => c.etapa === 'acordo').length,
       pagos: cobrancas.filter((c) => c.etapa === 'pago').length,
       valorEmCobranca,
@@ -75,7 +76,7 @@ export default function KanbanGerencialPage() {
     () => [
       { area: 'Crédito', pendente: kpis.emAnalise, concluido: kpis.aprovadas + kpis.recusadas },
       { area: 'Atendim.', pendente: kpis.ticketsPendentes, concluido: kpis.ticketsResolvidos },
-      { area: 'Cobrança', pendente: cobrancas.filter((c) => !['pago', 'perdido'].includes(c.etapa)).length, concluido: kpis.pagos },
+      { area: 'Cobrança', pendente: cobrancas.filter((c) => !['pago', 'perdido', 'arquivado'].includes(c.etapa)).length, concluido: kpis.pagos },
     ],
     [kpis, cobrancas]
   );

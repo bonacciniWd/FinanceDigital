@@ -374,6 +374,24 @@ Deno.serve(async (req: Request) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
+    let notificacoesAprovacaoAtivas = true;
+    let desembolsoAutomaticoAtivo = false;
+    try {
+      const { data: cfgRows } = await adminClient
+        .from("configuracoes_sistema")
+        .select("chave, valor")
+        .in("chave", ["notificacoes_aprovacao_ativas", "desembolso_automatico_ativo"]);
+
+      const cfgMap: Record<string, unknown> = {};
+      for (const row of cfgRows ?? []) cfgMap[row.chave] = row.valor;
+
+      notificacoesAprovacaoAtivas = cfgMap.notificacoes_aprovacao_ativas !== false;
+      desembolsoAutomaticoAtivo = cfgMap.desembolso_automatico_ativo === true;
+      console.log(`[approve-credit] Config: notif_aprovacao=${notificacoesAprovacaoAtivas}, desembolso_auto=${desembolsoAutomaticoAtivo}`);
+    } catch (cfgErr) {
+      console.warn("[approve-credit] Falha ao carregar configuracoes_sistema, usando defaults seguros:", cfgErr instanceof Error ? cfgErr.message : cfgErr);
+    }
+
     // ── Autenticar chamador ─────────────────────────────
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -556,60 +574,64 @@ Deno.serve(async (req: Request) => {
     // ── Liberar via Pix (EFI ou Woovi, conforme gateway ativo) ──
     let paymentResult = null;
     let usedGateway = "woovi";
-    try {
-      const activeGw = await detectActiveGateway(adminClient);
+    if (desembolsoAutomaticoAtivo) {
+      try {
+        const activeGw = await detectActiveGateway(adminClient);
 
-      if (activeGw?.nome === "efi") {
-        usedGateway = "efi";
-        paymentResult = await efiPayment(adminClient, activeGw.config, {
-          valor: valorTotal,
-          pixKey: pix_key,
-          clienteId: analise.cliente_id,
-          clienteNome: analise.cliente_nome,
-          emprestimoId: emprestimo!.id,
-          callerId: caller.id,
-        });
-      } else {
-        // Fallback Woovi
-        usedGateway = "woovi";
-        const correlationID = `credit-${analise.id}-${Date.now()}`;
-        paymentResult = await wooviPayment({
-          value: Math.round(valorTotal * 100),
-          destinationAlias: pix_key,
-          destinationAliasType: pix_key_type.toUpperCase(),
-          correlationID,
-          comment: `Liberação de crédito - ${analise.cliente_nome}`,
-        });
+        if (activeGw?.nome === "efi") {
+          usedGateway = "efi";
+          paymentResult = await efiPayment(adminClient, activeGw.config, {
+            valor: valorTotal,
+            pixKey: pix_key,
+            clienteId: analise.cliente_id,
+            clienteNome: analise.cliente_nome,
+            emprestimoId: emprestimo!.id,
+            callerId: caller.id,
+          });
+        } else {
+          // Fallback Woovi
+          usedGateway = "woovi";
+          const correlationID = `credit-${analise.id}-${Date.now()}`;
+          paymentResult = await wooviPayment({
+            value: Math.round(valorTotal * 100),
+            destinationAlias: pix_key,
+            destinationAliasType: pix_key_type.toUpperCase(),
+            correlationID,
+            comment: `Liberação de crédito - ${analise.cliente_nome}`,
+          });
 
-        await adminClient.from("woovi_transactions").insert({
-          emprestimo_id: emprestimo!.id,
-          cliente_id: analise.cliente_id,
-          woovi_transaction_id: paymentResult?.payment?.transactionID ?? correlationID,
-          tipo: "payment",
-          valor: valorTotal,
-          status: "pending",
-          pix_key,
-          pix_key_type,
-          destinatario_nome: analise.cliente_nome,
-          descricao: `Liberação de crédito aprovado - Análise ${analise.id}`,
-          autorizado_por: caller.id,
-          autorizado_em: new Date().toISOString(),
-          gateway: "woovi",
-        });
+          await adminClient.from("woovi_transactions").insert({
+            emprestimo_id: emprestimo!.id,
+            cliente_id: analise.cliente_id,
+            woovi_transaction_id: paymentResult?.payment?.transactionID ?? correlationID,
+            tipo: "payment",
+            valor: valorTotal,
+            status: "pending",
+            pix_key,
+            pix_key_type,
+            destinatario_nome: analise.cliente_nome,
+            descricao: `Liberação de crédito aprovado - Análise ${analise.id}`,
+            autorizado_por: caller.id,
+            autorizado_em: new Date().toISOString(),
+            gateway: "woovi",
+          });
+        }
+
+        // Atualizar gateway utilizado no empréstimo + marcar desembolso
+        await adminClient.from("emprestimos").update({
+          gateway: usedGateway,
+          desembolsado: true,
+          desembolsado_em: new Date().toISOString(),
+          desembolsado_por: caller.id,
+        }).eq("id", emprestimo!.id);
+        console.log(`[approve-credit] Pagamento ${usedGateway} concluído:`, JSON.stringify(paymentResult));
+      } catch (pixErr) {
+        console.error(`[approve-credit] ${usedGateway} payment error:`, pixErr instanceof Error ? pixErr.message : pixErr);
+        // PIX falhou — empréstimo criado mas NÃO desembolsado (desembolsado=false por padrão)
+        console.log(`[approve-credit] Empréstimo ${emprestimo!.id} criado mas aguardando desembolso manual.`);
       }
-
-      // Atualizar gateway utilizado no empréstimo + marcar desembolso
-      await adminClient.from("emprestimos").update({
-        gateway: usedGateway,
-        desembolsado: true,
-        desembolsado_em: new Date().toISOString(),
-        desembolsado_por: caller.id,
-      }).eq("id", emprestimo!.id);
-      console.log(`[approve-credit] Pagamento ${usedGateway} concluído:`, JSON.stringify(paymentResult));
-    } catch (pixErr) {
-      console.error(`[approve-credit] ${usedGateway} payment error:`, pixErr instanceof Error ? pixErr.message : pixErr);
-      // PIX falhou — empréstimo criado mas NÃO desembolsado (desembolsado=false por padrão)
-      console.log(`[approve-credit] Empréstimo ${emprestimo!.id} criado mas aguardando desembolso manual.`);
+    } else {
+      console.log(`[approve-credit] Desembolso automático desativado. Empréstimo ${emprestimo!.id} aguardando desembolso manual.`);
     }
 
     // ── Atualizar análise para aprovado ─────────────────
@@ -624,6 +646,9 @@ Deno.serve(async (req: Request) => {
 
     // ── Enviar WhatsApp de aprovação + comprovante PIX ─────
     try {
+      if (!notificacoesAprovacaoAtivas) {
+        console.log("[approve-credit][WA] Notificações de aprovação desativadas.");
+      }
       let telefone: string | null = null;
       let sexoCliente = "masculino";
       if (analise.cliente_id) {
@@ -636,7 +661,7 @@ Deno.serve(async (req: Request) => {
         sexoCliente = cli?.sexo || "masculino";
       }
 
-      if (telefone) {
+      if (telefone && notificacoesAprovacaoAtivas) {
         const freqLabel: Record<string, string> = {
           semanal: "semanais",
           quinzenal: "quinzenais",
@@ -706,6 +731,9 @@ Deno.serve(async (req: Request) => {
           msg += `\n• Data/Hora: ${pixHorario}`;
           if (pixE2e) msg += `\n• ID E2E: ${pixE2e}`;
           if (pixIdEnvio) msg += `\n• ID Envio: ${pixIdEnvio}`;
+        } else if (!desembolsoAutomaticoAtivo) {
+          msg += `\n\n⏳ O seu crédito foi aprovado, mas o desembolso será realizado manualmente pela equipe.`;
+          msg += `\nAssim que o pagamento for enviado, o status será atualizado no painel interno.`;
         } else {
           msg += `\n\n⏳ O envio do PIX está sendo processado.`;
           msg += `\nVocê receberá o valor em sua chave: ${pix_key}`;
@@ -737,6 +765,7 @@ Deno.serve(async (req: Request) => {
           proximo_vencimento: proximoVencimento,
           pix_key,
           pix_payment_success: !!paymentResult,
+            desembolso_automatico_ativo: desembolsoAutomaticoAtivo,
         },
       });
     }
@@ -748,7 +777,7 @@ Deno.serve(async (req: Request) => {
         parcelas_geradas: numParcelas,
         valor_parcela: valorParcela,
         proximo_vencimento: proximoVencimento,
-        payment_status: paymentResult ? "initiated" : "failed_will_retry",
+        payment_status: paymentResult ? "initiated" : (desembolsoAutomaticoAtivo ? "failed_will_retry" : "manual_pending"),
         message: "Crédito aprovado, empréstimo e parcelas criados com sucesso",
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }

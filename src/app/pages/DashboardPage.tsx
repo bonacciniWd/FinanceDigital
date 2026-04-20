@@ -56,14 +56,10 @@ export default function DashboardPage() {
     return valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
   };
 
-  // KPIs reais — carteira inclui ativo + inadimplente (com juros corrigidos)
-  const empIds = new Set(
-    emprestimos.filter(e => e.status === 'ativo' || e.status === 'inadimplente').map(e => e.id)
-  );
-  const carteiraAtiva = todasParcelas
-    .filter(p => empIds.has(p.emprestimoId) && p.status !== 'paga' && p.status !== 'cancelada')
-    .reduce((sum, p) => sum + valorParcCorrigido(p), 0);
-  const emprestimosAtivos = emprestimos.filter(e => e.status === 'ativo' || e.status === 'inadimplente').length;
+  // KPIs reais — carteira calculada diretamente dos empréstimos (fonte de verdade)
+  const emprestimosAtivosEInadimplentes = emprestimos.filter(e => e.status === 'ativo' || e.status === 'inadimplente');
+  const carteiraAtiva = emprestimosAtivosEInadimplentes.reduce((sum, e) => sum + e.valor, 0);
+  const emprestimosAtivos = emprestimosAtivosEInadimplentes.length;
   const taxaInadimplenciaReal = clientes.length > 0
     ? Math.round((vencidosReal / clientes.length) * 100)
     : (stats?.taxa_inadimplencia ?? 0);

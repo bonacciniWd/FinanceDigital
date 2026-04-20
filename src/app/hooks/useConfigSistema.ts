@@ -10,6 +10,9 @@ const QUERY_KEY = 'config-sistema';
 export interface ConfigSistema {
   mensagens_automaticas_ativas: boolean;
   cobv_auto_ativa: boolean;
+  notificacoes_aprovacao_ativas: boolean;
+  controle_desembolso_ativo: boolean;
+  desembolso_automatico_ativo: boolean;
   multa_percentual: number;
   juros_percentual: number;
   [key: string]: unknown;
@@ -30,6 +33,9 @@ async function getConfig(): Promise<ConfigSistema> {
   return {
     mensagens_automaticas_ativas: config.mensagens_automaticas_ativas === true,
     cobv_auto_ativa: config.cobv_auto_ativa === true,
+    notificacoes_aprovacao_ativas: config.notificacoes_aprovacao_ativas !== false,
+    controle_desembolso_ativo: config.controle_desembolso_ativo !== false,
+    desembolso_automatico_ativo: config.desembolso_automatico_ativo === true,
     multa_percentual: typeof config.multa_percentual === 'number' ? config.multa_percentual : 2,
     juros_percentual: typeof config.juros_percentual === 'number' ? config.juros_percentual : 1,
     ...config,

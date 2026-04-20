@@ -46,7 +46,7 @@ const PLATFORM_LOGOS: Record<string, string> = {
   linux: linuxLogo,
 };
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const GITHUB_REPO = 'https://github.com/bonacciniWd/FinanceDigital';
 const GITHUB_RELEASE = `${GITHUB_REPO}/releases/download/v${APP_VERSION}`;
 
@@ -123,7 +123,14 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.2.0', date: '20 Abr 2026', isLatest: true, items: [
+  { version: '1.3.0', date: '20 Abr 2026', isLatest: true, items: [
+    'Sincronização automática de status entre parcelas, empréstimos e clientes',
+    'Dashboard recalculado pela fonte correta de empréstimos ativos e inadimplentes',
+    'Desembolso automático agora é opcional e configurável por painel administrativo',
+    'Kanban de cobrança ganhou etapa Arquivados para atrasos acima de 365 dias',
+    'Scroll horizontal no topo do Kanban e botão manual para arquivar N3',
+  ]},
+  { version: '1.2.0', date: '20 Abr 2026', isLatest: false, items: [
     'Migração completa PlataPlumo: 1.136 clientes, 5.821 empréstimos, 26.749 parcelas',
     'Admin pode definir instância do sistema direto pelo app (sem programador)',
     'Rate limiting no cron de notificações (40/dia, 3s entre envios)',

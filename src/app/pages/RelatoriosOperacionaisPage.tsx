@@ -132,6 +132,7 @@ export default function RelatoriosOperacionaisPage() {
       { etapa: '1° Contato', cards: cardsCobranca.filter((c) => c.etapa === 'contatado'), successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
       { etapa: 'Negociação', cards: cardsCobranca.filter((c) => c.etapa === 'negociacao'), successFn: (cs) => cs.filter((c) => c.tentativasContato >= 2).length },
       { etapa: 'Acordo', cards: cardsCobranca.filter((c) => c.etapa === 'acordo'), successFn: (cs) => cs.length },
+      { etapa: 'Arquivados', cards: cardsCobranca.filter((c) => c.etapa === 'arquivado'), successFn: () => 0 },
       { etapa: 'Pago', cards: cardsCobranca.filter((c) => c.etapa === 'pago'), successFn: (cs) => cs.length },
       { etapa: 'Perdido', cards: cardsCobranca.filter((c) => c.etapa === 'perdido'), successFn: () => 0 },
     ];
@@ -186,7 +187,7 @@ export default function RelatoriosOperacionaisPage() {
 
     const clientesAtivos = clientes.filter((c) => c.status !== 'vencido').length;
 
-    const totalCobranca = cardsCobranca.length;
+    const totalCobranca = cardsCobranca.filter((c) => c.etapa !== 'arquivado').length;
     const pagos = cardsCobranca.filter((c) => c.etapa === 'pago' || c.etapa === 'acordo').length;
     const taxaRecuperacao = totalCobranca > 0 ? Math.round((pagos / totalCobranca) * 100) : 0;
 

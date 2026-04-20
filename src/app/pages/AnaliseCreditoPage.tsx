@@ -31,6 +31,7 @@ import { toast } from 'sonner';
 import { useAnalises, useCreateAnalise, useUpdateAnalise } from '../hooks/useAnaliseCredito';
 import { useClientes } from '../hooks/useClientes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useConfigSistema } from '../hooks/useConfigSistema';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import AnaliseDetalhadaModal from '../components/AnaliseDetalhadaModal';
@@ -71,6 +72,7 @@ export default function AnaliseCreditoPage() {
   const updateMutation = useUpdateAnalise();
   const { data: clientes } = useClientes();
   const { data: emprestimos = [] } = useEmprestimos();
+  const { data: configSistema } = useConfigSistema();
   const { user } = useAuth();
 
   const formatCpf = (v: string) => {
@@ -98,13 +100,17 @@ export default function AnaliseCreditoPage() {
     if (!clienteId && !cpf) { setPendenciaCliente(null); return; }
     setVerificandoPendencia(true);
     try {
-      let result;
+      let result: {
+        tem_pendencia: boolean;
+        total_emprestimos_pendentes: number;
+        emprestimos?: Array<{ id: string; valor: number; status: string; parcelas: number; parcelas_pagas: number }>;
+      } | null = null;
       if (clienteId) {
-        const { data, error } = await supabase.rpc('verificar_pendencias_cliente_id', { p_cliente_id: clienteId });
+        const { data, error } = await (supabase as any).rpc('verificar_pendencias_cliente_id', { p_cliente_id: clienteId });
         if (error) throw error;
         result = data;
       } else {
-        const { data, error } = await supabase.rpc('verificar_pendencias_cliente', { p_cpf: cpf });
+        const { data, error } = await (supabase as any).rpc('verificar_pendencias_cliente', { p_cpf: cpf });
         if (error) throw error;
         result = data;
       }
@@ -206,7 +212,10 @@ export default function AnaliseCreditoPage() {
       });
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || 'Erro na aprovação');
-      toast.success(`Análise de ${analise.clienteNome} aprovada! ${data.parcelas_geradas} parcela(s) criada(s).`);
+      const payoutMsg = data?.payment_status === 'initiated'
+        ? 'Desembolso automático iniciado.'
+        : 'Crédito aprovado e aguardando desembolso manual.';
+      toast.success(`Análise de ${analise.clienteNome} aprovada! ${data.parcelas_geradas} parcela(s) criada(s). ${payoutMsg}`);
       setSelectedAnalise(null);
       // Invalidate relevant caches
       updateMutation.reset();
@@ -282,6 +291,9 @@ export default function AnaliseCreditoPage() {
 
   const aguardandoEnvio = emprestimosAprovados.filter(e => !e.desembolsado);
   const jaEnviados = emprestimosAprovados.filter(e => e.desembolsado);
+  const controleDesembolsoAtivo = configSistema?.controle_desembolso_ativo !== false;
+  const totalAguardandoEnvio = aguardandoEnvio.reduce((sum, e) => sum + e.valor, 0);
+  const totalJaEnviado = jaEnviados.reduce((sum, e) => sum + e.valor, 0);
 
   const handleNovaAnalise = () => {
     if (!formNova.clienteNome || !formNova.cpf || !formNova.valorSolicitado) {
@@ -509,7 +521,7 @@ export default function AnaliseCreditoPage() {
       </Card>
 
       {/* Controle de Desembolso — admin/gerência */}
-      {isAdminGerencia && emprestimosAprovados.length > 0 && (
+      {isAdminGerencia && controleDesembolsoAtivo && emprestimosAprovados.length > 0 && (
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-2 mb-4">
@@ -518,6 +530,23 @@ export default function AnaliseCreditoPage() {
               <Badge variant="outline" className="ml-auto">{aguardandoEnvio.length} aguardando</Badge>
               <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">{jaEnviados.length} enviados</Badge>
             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                <p className="text-xs text-muted-foreground">Valor pendente de envio</p>
+                <p className="text-lg font-semibold text-amber-700 dark:text-amber-400">{formatCurrency(totalAguardandoEnvio)}</p>
+              </div>
+              <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-3">
+                <p className="text-xs text-muted-foreground">Valor já desembolsado</p>
+                <p className="text-lg font-semibold text-green-700 dark:text-green-400">{formatCurrency(totalJaEnviado)}</p>
+              </div>
+            </div>
+
+            {configSistema?.desembolso_automatico_ativo === false && (
+              <div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-700 dark:text-blue-300">
+                O desembolso automático está desligado. Aprovações novas entram aqui para envio manual e conferência do que já foi pago.
+              </div>
+            )}
 
             {aguardandoEnvio.length > 0 && (
               <div className="mb-4">

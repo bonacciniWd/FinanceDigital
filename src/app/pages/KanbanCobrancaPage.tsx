@@ -23,6 +23,7 @@ import {
   MessageSquare,
   Phone,
   HandshakeIcon,
+  Archive,
   ChevronRight,
   Search,
   Loader2,
@@ -84,6 +85,7 @@ const COLUMNS: ColumnDef[] = [
   { id: 'vencido_n1',  title: 'N1 · 1-15 dias',   dotColor: '#f97316' },
   { id: 'vencido_n2',  title: 'N2 · 16-45 dias',  dotColor: '#ef4444' },
   { id: 'vencido_n3',  title: 'N3 · 46+ dias',     dotColor: '#991b1b' },
+  { id: 'arquivado',   title: 'ARQUIVADOS',       dotColor: '#64748b' },
   { id: 'contatado',   title: 'CONTATADO',         dotColor: '#3b82f6' },
   { id: 'negociacao',  title: 'NEGOCIAÇÃO',        dotColor: '#f97316' },
   { id: 'acordo',      title: 'ACORDOS',           dotColor: '#22c55e' },
@@ -127,9 +129,13 @@ export default function KanbanCobrancaPage() {
   const [comprovanteFile, setComprovanteFile] = useState<File | null>(null);
   const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
   const [quitarLoading, setQuitarLoading] = useState(false);
+  const [boardScrollWidth, setBoardScrollWidth] = useState(0);
 
   // Gerar PIX per parcela
   const [gerandoPixId, setGerandoPixId] = useState<string | null>(null);
+  const topScrollRef = useRef<HTMLDivElement | null>(null);
+  const boardScrollRef = useRef<HTMLDivElement | null>(null);
+  const syncingScrollRef = useRef<'top' | 'board' | null>(null);
 
   const { data: allCards = [], isLoading, error, refetch } = useCardsCobranca();
   const { data: emprestimos = [] } = useEmprestimos();
@@ -173,6 +179,16 @@ export default function KanbanCobrancaPage() {
       },
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const syncWidth = () => {
+      setBoardScrollWidth(boardScrollRef.current?.scrollWidth ?? 0);
+    };
+
+    syncWidth();
+    window.addEventListener('resize', syncWidth);
+    return () => window.removeEventListener('resize', syncWidth);
+  }, [allCards, isLoading]);
 
   const handleSyncManual = () => {
     syncCobrancas.mutate(undefined, {
@@ -230,7 +246,9 @@ export default function KanbanCobrancaPage() {
       } else if (col.id === 'vencido_n2') {
         map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 16 && c.diasAtraso <= 45);
       } else if (col.id === 'vencido_n3') {
-        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 46);
+        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 46 && c.diasAtraso <= 365);
+      } else if (col.id === 'arquivado') {
+        map[col.id] = filteredCards.filter((c) => c.etapa === 'arquivado' || (c.etapa === 'vencido' && c.diasAtraso > 365));
       } else {
         map[col.id] = filteredCards.filter((c) => c.etapa === col.id);
       }
@@ -239,19 +257,34 @@ export default function KanbanCobrancaPage() {
   }, [filteredCards]);
 
   const stats = useMemo(() => {
-    const total = allCards.reduce((sum, c) => sum + c.valorDivida, 0);
-    const negociacao = allCards
+    const cardsAtivos = allCards.filter((c) => !['pago', 'perdido', 'arquivado'].includes(c.etapa));
+    const total = cardsAtivos.reduce((sum, c) => sum + c.valorDivida, 0);
+    const negociacao = cardsAtivos
       .filter((c) => c.etapa === 'negociacao')
       .reduce((sum, c) => sum + c.valorDivida, 0);
-    const acordos = allCards.filter((c) => c.etapa === 'acordo').length;
+    const acordos = cardsAtivos.filter((c) => c.etapa === 'acordo').length;
     const pagos = allCards.filter((c) => c.etapa === 'pago');
     const totalPago = pagos.reduce((sum, c) => sum + c.valorDivida, 0);
-    const totalClientes = allCards.filter((c) => !['pago', 'perdido'].includes(c.etapa)).length;
-    const taxaConversao = allCards.filter((c) => c.etapa === 'negociacao').length > 0
-      ? Math.round((acordos / allCards.filter((c) => c.etapa === 'negociacao').length) * 100)
+    const totalClientes = cardsAtivos.length;
+    const totalNegociacao = cardsAtivos.filter((c) => c.etapa === 'negociacao').length;
+    const taxaConversao = totalNegociacao > 0
+      ? Math.round((acordos / totalNegociacao) * 100)
       : 0;
     return { total, negociacao, acordos, totalClientes, taxaConversao, totalPago };
   }, [allCards]);
+
+  const syncHorizontalScroll = (source: 'top' | 'board') => {
+    const from = source === 'top' ? topScrollRef.current : boardScrollRef.current;
+    const to = source === 'top' ? boardScrollRef.current : topScrollRef.current;
+    if (!from || !to) return;
+    if (syncingScrollRef.current && syncingScrollRef.current !== source) return;
+
+    syncingScrollRef.current = source;
+    to.scrollLeft = from.scrollLeft;
+    requestAnimationFrame(() => {
+      if (syncingScrollRef.current === source) syncingScrollRef.current = null;
+    });
+  };
 
   const handleDragStart = (e: React.DragEvent, cardId: string) => {
     e.dataTransfer.setData('cardId', cardId);
@@ -315,6 +348,22 @@ export default function KanbanCobrancaPage() {
           setSelectedCard(null);
         },
         onError: (err) => toast.error(`Erro: ${err.message}`),
+      }
+    );
+  };
+
+  const handleArquivarCard = (card: KanbanCobrancaView) => {
+    updateCard.mutate(
+      {
+        id: card.id,
+        updates: {
+          etapa: 'arquivado',
+          observacao: card.observacao || `Arquivado manualmente por ${user?.name || 'Sistema'}`,
+        },
+      },
+      {
+        onSuccess: () => toast.success(`${card.clienteNome} movido para Arquivados`),
+        onError: (err) => toast.error(`Erro ao arquivar: ${err.message}`),
       }
     );
   };
@@ -638,8 +687,54 @@ export default function KanbanCobrancaPage() {
           <Loader2 className="w-8 h-8 animate-spin text-primary" />
           <span className="ml-3 text-muted-foreground">Carregando pipeline...</span>
         </div>
+        
       ) : (
-        <div className="flex gap-4 overflow-x-auto pb-4">
+        <>
+          <div className="sticky top-0 z-10 bg-background/95 pb-2 backdrop-blur">
+            <div
+              ref={topScrollRef}
+              className="overflow-x-auto"
+              onScroll={() => syncHorizontalScroll('top')}
+            >
+              <div style={{ width: `${boardScrollWidth}px`, height: '1rem' }} />
+            </div>
+          </div>
+          {/* Estatísticas */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total em Cobrança</CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{formatCurrency(stats.total)}</div>
+            <p className="text-xs text-muted-foreground mt-1">{stats.totalClientes} clientes</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Em Negociação</CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{formatCurrency(stats.negociacao)}</div>
+            <p className="text-xs text-muted-foreground mt-1">{allCards.filter((c) => c.etapa === 'negociacao').length} clientes</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Acordos Fechados</CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{stats.acordos}</div>
+            <p className="text-xs text-muted-foreground mt-1">Recuperado: {formatCurrency(stats.totalPago)}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Taxa de Conversão</CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{stats.taxaConversao}%</div>
+            <p className="text-xs text-muted-foreground mt-1">negociação → acordo</p>
+          </CardContent>
+        </Card>
+      </div>
+          <div
+            ref={boardScrollRef}
+            className="flex gap-4 overflow-x-auto pb-4"
+            onScroll={() => syncHorizontalScroll('board')}
+          >
           {COLUMNS.map((column) => {
             const cards = cardsByEtapa[column.id] || [];
             const isOver = dragOverColumn === column.id;
@@ -763,6 +858,20 @@ export default function KanbanCobrancaPage() {
                                   </div>
                                 )}
                               </div>
+                              {column.id === 'vencido_n3' && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 px-2"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleArquivarCard(card);
+                                  }}
+                                  title="Arquivar cliente"
+                                >
+                                  <Archive className="w-4 h-4" />
+                                </Button>
+                              )}
                               <Button size="sm" variant="outline" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
                                 <ChevronRight className="w-4 h-4" />
                               </Button>
@@ -794,40 +903,11 @@ export default function KanbanCobrancaPage() {
               </div>
             );
           })}
-        </div>
+          </div>
+        </>
       )}
 
-      {/* Estatísticas */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total em Cobrança</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-foreground">{formatCurrency(stats.total)}</div>
-            <p className="text-xs text-muted-foreground mt-1">{stats.totalClientes} clientes</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Em Negociação</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-foreground">{formatCurrency(stats.negociacao)}</div>
-            <p className="text-xs text-muted-foreground mt-1">{allCards.filter((c) => c.etapa === 'negociacao').length} clientes</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Acordos Fechados</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-green-600 dark:text-green-400">{stats.acordos}</div>
-            <p className="text-xs text-muted-foreground mt-1">Recuperado: {formatCurrency(stats.totalPago)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Taxa de Conversão</CardTitle></CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-foreground">{stats.taxaConversao}%</div>
-            <p className="text-xs text-muted-foreground mt-1">negociação → acordo</p>
-          </CardContent>
-        </Card>
-      </div>
+      
 
       {/* Modal de Detalhes */}
       <Dialog open={!!selectedCard} onOpenChange={() => { setSelectedCard(null); setContatoObs(''); }}>

@@ -198,6 +198,15 @@ Deno.serve(async (req: Request) => {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  // Mantém os status sincronizados usando o mesmo cron já existente.
+  try {
+    const { data, error } = await adminClient.rpc("mark_parcelas_vencidas");
+    if (error) throw error;
+    console.log(`[cron] mark_parcelas_vencidas executado: ${data ?? 0} parcela(s) atualizada(s)`);
+  } catch (syncErr) {
+    console.warn("[cron] Não foi possível executar mark_parcelas_vencidas:", syncErr instanceof Error ? syncErr.message : syncErr);
+  }
+
   // ── Carregar configurações do sistema ──────────────────
   let mensagensAtivas = true;
   let cobvAutoAtiva = true;

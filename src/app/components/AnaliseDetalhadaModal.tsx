@@ -10,7 +10,7 @@
  * - Máximo 3 retries por verificação
  * - Após 3 rejeições → análise auto-recusada
  */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -38,6 +38,7 @@ import {
   X,
   ZoomIn,
   Briefcase,
+  ExternalLink,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -66,6 +67,99 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+}
+
+function normalizeText(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildEnderecoCadastro(clienteData: {
+  rua?: string;
+  numero?: string;
+  bairro?: string;
+  cidade?: string;
+  estado?: string;
+  cep?: string;
+  endereco?: string;
+} | null | undefined) {
+  if (!clienteData) return '';
+
+  const viaPrincipal = [
+    [clienteData.rua, clienteData.numero].filter(Boolean).join(', '),
+    clienteData.bairro,
+    [clienteData.cidade, clienteData.estado].filter(Boolean).join(' - '),
+    clienteData.cep,
+  ].filter(Boolean).join(' • ');
+
+  return viaPrincipal || clienteData.endereco || '';
+}
+
+function classifyAddressMatch(
+  clienteData: {
+    rua?: string;
+    numero?: string;
+    cidade?: string;
+    estado?: string;
+    endereco?: string;
+  } | null | undefined,
+  reverseAddress: Record<string, unknown> | undefined,
+  displayName: string | null
+) {
+  const expectedCity = normalizeText(clienteData?.cidade || '');
+  const expectedState = normalizeText(clienteData?.estado || '');
+  const expectedStreet = normalizeText(clienteData?.rua || clienteData?.endereco || '');
+  const expectedNumber = normalizeText(clienteData?.numero || '');
+
+  const actualCity = normalizeText(String(reverseAddress?.city || reverseAddress?.town || reverseAddress?.village || reverseAddress?.municipality || ''));
+  const actualState = normalizeText(String(reverseAddress?.state || reverseAddress?.region || ''));
+  const actualStreet = normalizeText(String(reverseAddress?.road || reverseAddress?.pedestrian || reverseAddress?.footway || ''));
+  const actualNumber = normalizeText(String(reverseAddress?.house_number || ''));
+  const actualDisplay = normalizeText(displayName || '');
+
+  const cityMatch = !!expectedCity && (actualCity.includes(expectedCity) || actualDisplay.includes(expectedCity));
+  const stateMatch = !!expectedState && (actualState.includes(expectedState) || actualDisplay.includes(expectedState));
+  const streetMatch = !!expectedStreet && (actualStreet.includes(expectedStreet) || actualDisplay.includes(expectedStreet));
+  const numberMatch = !!expectedNumber && (actualNumber === expectedNumber || actualDisplay.includes(expectedNumber));
+
+  if ((expectedCity || expectedState) && !cityMatch && !stateMatch) {
+    return {
+      status: 'mismatch' as const,
+      label: 'Baixa compatibilidade',
+      className: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
+      description: 'A cidade ou o estado da localização capturada não parecem bater com o cadastro.',
+    };
+  }
+
+  if ((cityMatch || stateMatch) && (streetMatch || numberMatch)) {
+    return {
+      status: 'match' as const,
+      label: 'Compatível',
+      className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300',
+      description: 'A localização capturada parece coerente com o endereço cadastrado.',
+    };
+  }
+
+  if (cityMatch || stateMatch) {
+    return {
+      status: 'partial' as const,
+      label: 'Compatibilidade parcial',
+      className: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+      description: 'Cidade ou estado conferem, mas rua e número precisam de validação manual.',
+    };
+  }
+
+  return {
+    status: 'unknown' as const,
+    label: 'Conferência manual',
+    className: 'bg-slate-100 text-slate-800 dark:bg-slate-900/30 dark:text-slate-300',
+    description: 'Não foi possível concluir a comparação automática. Confira os links de mapa abaixo.',
+  };
 }
 
 export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMagicLink }: Props) {
@@ -97,6 +191,8 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
 
   // Fetch client data to compare profissao
   const { data: clienteData } = useCliente(analise?.clienteId ?? undefined);
+  const [reverseLocationAddress, setReverseLocationAddress] = useState<string | null>(null);
+  const [locationMatch, setLocationMatch] = useState<ReturnType<typeof classifyAddressMatch> | null>(null);
 
   // Profession mismatch detection
   const profissaoCadastro = clienteData?.profissao?.trim().toLowerCase() || '';
@@ -164,6 +260,64 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
   const isSelfAnalysis = user?.id === latestVerification?.userId;
   const hasMedia = !!(latestVerification?.videoUrl);
   const canReview = !isSelfAnalysis && hasMedia && latestVerification?.status === 'pending';
+  const enderecoCadastro = useMemo(() => buildEnderecoCadastro(clienteData), [clienteData]);
+  const latestResidenceLocation = useMemo(() => {
+    const locationLog = [...(logs ?? [])]
+      .reverse()
+      .find((log) => {
+        const details = log.details as Record<string, unknown> | undefined;
+        return !!details?.residence_location && typeof details.residence_location === 'object';
+      });
+
+    const raw = (locationLog?.details as Record<string, unknown> | undefined)?.residence_location as Record<string, unknown> | undefined;
+    if (!raw) return null;
+
+    return {
+      latitude: Number(raw.latitude),
+      longitude: Number(raw.longitude),
+      accuracy: raw.accuracy == null ? null : Number(raw.accuracy),
+      capturedAt: String(raw.captured_at || locationLog?.created_at || ''),
+    };
+  }, [logs]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function reverseGeocodeResidence() {
+      if (!latestResidenceLocation) {
+        setReverseLocationAddress(null);
+        setLocationMatch(null);
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({
+          format: 'jsonv2',
+          lat: String(latestResidenceLocation.latitude),
+          lon: String(latestResidenceLocation.longitude),
+          zoom: '18',
+          addressdetails: '1',
+        });
+        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`);
+        if (!response.ok) throw new Error('Falha ao consultar localização reversa');
+        const data = await response.json();
+        if (cancelled) return;
+
+        const displayName = typeof data.display_name === 'string' ? data.display_name : null;
+        setReverseLocationAddress(displayName);
+        setLocationMatch(classifyAddressMatch(clienteData, data.address, displayName));
+      } catch {
+        if (cancelled) return;
+        setReverseLocationAddress(null);
+        setLocationMatch(classifyAddressMatch(clienteData, undefined, null));
+      }
+    }
+
+    reverseGeocodeResidence();
+    return () => {
+      cancelled = true;
+    };
+  }, [latestResidenceLocation, clienteData]);
 
   // Load signed URLs for media
   const loadMedia = async () => {
@@ -634,12 +788,76 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                 ) : null}
 
                 {/* Client Address */}
+                {enderecoCadastro && (
+                  <div className="p-3 rounded-lg bg-muted/50">
+                    <p className="text-sm font-medium flex items-center gap-2 mb-1">
+                      <MapPin className="h-4 w-4" /> Endereço de Cadastro
+                    </p>
+                    <p className="text-sm text-muted-foreground">{enderecoCadastro}</p>
+                  </div>
+                )}
+
                 {latestVerification.clientAddress && (
                   <div className="p-3 rounded-lg bg-muted/50">
                     <p className="text-sm font-medium flex items-center gap-2 mb-1">
                       <MapPin className="h-4 w-4" /> Endereço Informado
                     </p>
                     <p className="text-sm text-muted-foreground">{latestVerification.clientAddress}</p>
+                  </div>
+                )}
+
+                {latestResidenceLocation && (
+                  <div className="p-3 rounded-lg border border-sky-200 dark:border-sky-900/50 bg-sky-50 dark:bg-sky-950/20 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium flex items-center gap-2 mb-1">
+                          <MapPin className="h-4 w-4" /> Localização capturada na fachada
+                        </p>
+                        <p className="text-xs text-sky-800 dark:text-sky-200">
+                          Latitude {latestResidenceLocation.latitude.toFixed(6)} · Longitude {latestResidenceLocation.longitude.toFixed(6)}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Precisão: {latestResidenceLocation.accuracy ? `${Math.round(latestResidenceLocation.accuracy)} m` : 'não informada'} · capturada em {latestResidenceLocation.capturedAt ? new Date(latestResidenceLocation.capturedAt).toLocaleString('pt-BR') : 'horário indisponível'}
+                        </p>
+                      </div>
+                      {locationMatch && (
+                        <Badge className={locationMatch.className}>{locationMatch.label}</Badge>
+                      )}
+                    </div>
+
+                    {reverseLocationAddress && (
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1">Endereço aproximado pela localização</p>
+                        <p className="text-sm text-sky-900 dark:text-sky-100">{reverseLocationAddress}</p>
+                      </div>
+                    )}
+
+                    {locationMatch && (
+                      <p className="text-xs text-muted-foreground">{locationMatch.description}</p>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        href={`https://www.google.com/maps?q=${latestResidenceLocation.latitude},${latestResidenceLocation.longitude}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-medium transition-colors"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        Abrir localização capturada
+                      </a>
+                      {enderecoCadastro && (
+                        <a
+                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(enderecoCadastro)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-white border border-border hover:bg-muted text-xs font-medium transition-colors"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          Buscar endereço cadastrado
+                        </a>
+                      )}
+                    </div>
                   </div>
                 )}
 
