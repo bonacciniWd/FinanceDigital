@@ -24,4 +24,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('storage:decrypt', { name }),
   deleteEncrypted: (name) =>
     ipcRenderer.invoke('storage:delete', { name }),
+
+  // Auto-updater events
+  onUpdateAvailable: (callback) =>
+    ipcRenderer.on('update:available', (_event, version) => callback(version)),
 });

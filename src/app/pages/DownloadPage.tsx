@@ -46,7 +46,7 @@ const PLATFORM_LOGOS: Record<string, string> = {
   linux: linuxLogo,
 };
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const GITHUB_REPO = 'https://github.com/bonacciniWd/FinanceDigital';
 const GITHUB_RELEASE = `${GITHUB_REPO}/releases/download/v${APP_VERSION}`;
 
@@ -123,7 +123,14 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.1.0', date: '17 Abr 2026', isLatest: true, items: [
+  { version: '1.2.0', date: '20 Abr 2026', isLatest: true, items: [
+    'Migração completa PlataPlumo: 1.136 clientes, 5.821 empréstimos, 26.749 parcelas',
+    'Admin pode definir instância do sistema direto pelo app (sem programador)',
+    'Rate limiting no cron de notificações (40/dia, 3s entre envios)',
+    'Guard para não notificar clientes migrados (plataplumo_migrado)',
+    'Auto-update: app verifica e atualiza automaticamente ao iniciar',
+  ]},
+  { version: '1.1.0', date: '17 Abr 2026', isLatest: false, items: [
     'Score dinâmico automático — ajusta por pagamento antecipado/atrasado',
     'Controle de desembolso (admin/gerência) com rastreamento PIX',
     'Renda mensal no cadastro de clientes com formatação R$',

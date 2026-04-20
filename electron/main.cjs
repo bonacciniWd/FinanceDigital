@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, net } = require('electron
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
+const { autoUpdater } = require('electron-updater');
 const ipGuard = require('./ip-guard.cjs');
 const encryptedStorage = require('./encrypted-storage.cjs');
 const usageTracker = require('./usage-tracker.cjs');
@@ -128,6 +129,45 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+
+  // ── Auto-updater (produção apenas) ────────────────────────
+  if (!isDev) {
+    const log = require('electron-log');
+    log.transports.file.level = 'info';
+    autoUpdater.logger = log;
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on('update-available', (info) => {
+      console.log(`[updater] Nova versão disponível: ${info.version}`);
+      if (mainWindow) {
+        mainWindow.webContents.send('update:available', info.version);
+      }
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log(`[updater] Update baixado: ${info.version}`);
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Atualização disponível',
+        message: `A versão ${info.version} foi baixada. O app será reiniciado para aplicar a atualização.`,
+        buttons: ['Reiniciar agora', 'Depois'],
+        defaultId: 0,
+      }).then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall(false, true);
+        }
+      });
+    });
+
+    autoUpdater.on('error', (err) => {
+      console.error('[updater] Erro ao verificar atualizações:', err.message);
+    });
+
+    // Verifica atualizações 5s após iniciar (e depois a cada 4h)
+    setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 5000);
+    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
+  }
 });
 
 app.on('window-all-closed', () => {
