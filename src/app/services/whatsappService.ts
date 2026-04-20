@@ -177,6 +177,22 @@ export async function syncAll(): Promise<SyncAllResult> {
   return invokeManageInstance({ action: 'sync_all' });
 }
 
+/** Definir uma instância como "sistema" (usada pelo cron e notificações automáticas).
+ *  Remove is_system de todas as outras instâncias. */
+export async function setAsSystem(instanciaId: string): Promise<void> {
+  // Primeiro remove is_system de todas
+  await supabase
+    .from('whatsapp_instancias')
+    .update({ is_system: false })
+    .eq('is_system', true);
+  // Depois marca a selecionada
+  const { error } = await supabase
+    .from('whatsapp_instancias')
+    .update({ is_system: true })
+    .eq('id', instanciaId);
+  if (error) throw new Error(error.message);
+}
+
 // ══════════════════════════════════════════════════════════
 // ── Envio de mensagens ────────────────────────────────────
 // ══════════════════════════════════════════════════════════

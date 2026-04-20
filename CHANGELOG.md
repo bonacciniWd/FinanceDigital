@@ -6,6 +6,42 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.2.0] — 2026-04-20
+
+### Adicionado — Migração PlataPlumo + Gestão de Instância WhatsApp
+
+**Migração de dados PlataPlumo (042 + 043)**
+- Importação completa de CSV: 1.136 clientes, 5.821 empréstimos, 26.749 parcelas
+- Fix de consistência: parcelas vencidas, empréstimos inadimplentes/quitados, clientes vencidos
+- Kanban cards criados automaticamente para empréstimos ativos
+
+**Rate limiting no cron de notificações**
+- Limite de 40 mensagens/dia com delay de 3s entre envios
+- Guard para não notificar clientes migrados (`plataplumo_migrado`)
+
+**Admin: Definir Instância do Sistema (WhatsAppPage)**
+- Botão "Definir como Sistema" no card de instância (admin/gerência)
+- `setAsSystem()` no service layer: remove `is_system` de todas e marca a selecionada
+- Hook `useSetAsSystem()` com invalidação automática de cache
+
+**Correções Evolution API**
+- Token da instância Sistema atualizado (migration 044)
+- Webhook auto-configurado para CONNECTION_UPDATE/QRCODE_UPDATED
+
+### Arquivos criados/modificados
+
+| Arquivo | Tipo | Alteração |
+|---------|------|-----------|
+| `supabase/migrations/042_migrate_plataplumo.sql` | Novo | Migração completa PlataPlumo |
+| `supabase/migrations/043_fix_data_consistency.sql` | Novo | Fix status parcelas/empréstimos/clientes |
+| `supabase/migrations/044_fix_sistema_instance_token.sql` | Novo | Token + URL da instância Sistema |
+| `supabase/functions/cron-notificacoes/index.ts` | Modificado | Rate limit + migration guard |
+| `src/app/services/whatsappService.ts` | Modificado | `setAsSystem()` |
+| `src/app/hooks/useWhatsapp.ts` | Modificado | `useSetAsSystem()` |
+| `src/app/pages/WhatsAppPage.tsx` | Modificado | Botão "Definir como Sistema" |
+
+---
+
 ## [1.1.0] — 2026-04-17
 
 ### Adicionado — Score Dinâmico + Desembolso + Renda Mensal + Acordos + Formatação R$

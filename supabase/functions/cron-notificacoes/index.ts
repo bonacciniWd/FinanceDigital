@@ -449,6 +449,38 @@ Deno.serve(async (req: Request) => {
   const em3diasStr = fmtDate(em3dias);
   const ontemStr = fmtDate(ontem);
 
+  // ── Rate Limiting: limite diário de mensagens ──────────
+  const MAX_MENSAGENS_DIA = 40; // WhatsApp bloqueia a partir de ~200 msgs/dia em número novo
+  const DELAY_ENTRE_MSGS = 3000; // 3 segundos entre mensagens (evita detecção de spam)
+
+  // Contar mensagens já enviadas hoje
+  const { count: msgsHoje } = await adminClient
+    .from("notificacoes_log")
+    .select("*", { count: "exact", head: true })
+    .gte("created_at", hojeStr + "T00:00:00Z")
+    .eq("status", "enviado");
+
+  let mensagensRestantes = Math.max(0, MAX_MENSAGENS_DIA - (msgsHoje ?? 0));
+  console.log(`[cron] Rate limit: ${msgsHoje ?? 0} enviadas hoje, ${mensagensRestantes} restantes (máx ${MAX_MENSAGENS_DIA})`);
+
+  if (mensagensRestantes <= 0) {
+    console.log("[cron] Limite diário atingido. Abortando.");
+    return new Response(
+      JSON.stringify({ success: true, message: "Limite diário de mensagens atingido", enviados: 0, limite: MAX_MENSAGENS_DIA }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  // ── Guard: ignorar clientes migrados sem interação ─────
+  // Dados migrados do PlataPlumo não devem receber notificação automática
+  // até que o operador interaja manualmente com o cliente no sistema.
+  const { data: clientesMigrados } = await adminClient
+    .from("clientes")
+    .select("id")
+    .eq("grupo", "plataplumo_migrado");
+  const idsMigrados = new Set((clientesMigrados ?? []).map((c: any) => c.id));
+  console.log(`[cron] Clientes migrados excluídos do cron: ${idsMigrados.size}`);
+
   // ── Buscar parcelas relevantes com dados do cliente ───
   const { data: parcelasAlvo, error: parcErr } = await adminClient
     .from("parcelas")
@@ -528,6 +560,15 @@ Deno.serve(async (req: Request) => {
     const clienteCpf: string | null = cli?.cpf || null;
 
     if (!telefone) continue;
+
+    // Pular clientes migrados (PlataPlumo) — evitar spam em massa
+    if (idsMigrados.has(parcela.cliente_id)) continue;
+
+    // Rate limit check
+    if (mensagensRestantes <= 0) {
+      console.log("[cron] Limite diário atingido no meio da execução.");
+      break;
+    }
 
     // Valor corrigido com juros automáticos
     const valorReal = valorCorrigidoParcela(parcela);
@@ -685,11 +726,13 @@ Deno.serve(async (req: Request) => {
       await enviarQrCode(telefone, chargeData.qrCodeImage, `QR Code PIX - Parcela ${parcela.numero} - ${valorFmt}`);
     }
 
-    if (ok) totalEnviados++;
-    else totalErros++;
+    if (ok) {
+      totalEnviados++;
+      mensagensRestantes--;
+    } else totalErros++;
 
-    // Pequeno delay para não sobrecarregar a API
-    await new Promise((r) => setTimeout(r, 500));
+    // Delay entre mensagens (3s — previne bloqueio por spam)
+    await new Promise((r) => setTimeout(r, DELAY_ENTRE_MSGS));
   }
 
   // ── Notificações por tempo de atraso (3, 7, 15, 30 dias) ──
@@ -744,6 +787,15 @@ Deno.serve(async (req: Request) => {
       const clienteCpf: string | null = cli?.cpf || null;
 
       if (!telefone) continue;
+
+      // Pular clientes migrados (PlataPlumo)
+      if (idsMigrados.has(parcela.cliente_id)) continue;
+
+      // Rate limit check
+      if (mensagensRestantes <= 0) {
+        console.log("[cron] Limite diário atingido nos tiers de atraso.");
+        break;
+      }
 
       const tier = dataTierMap.get(parcela.data_vencimento);
       if (!tier) continue;
@@ -833,10 +885,12 @@ Deno.serve(async (req: Request) => {
         await enviarQrCode(telefone, chargeData.qrCodeImage, `QR Code PIX - Parcela ${parcela.numero} - ${valorFmt}`);
       }
 
-      if (ok) totalEnviados++;
-      else totalErros++;
+      if (ok) {
+        totalEnviados++;
+        mensagensRestantes--;
+      } else totalErros++;
 
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, DELAY_ENTRE_MSGS));
     }
   }
 

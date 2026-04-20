@@ -46,6 +46,7 @@ import {
   useEstatisticasWhatsapp,
   useConfigurarWebhook,
   useSyncInstancias,
+  useSetAsSystem,
 } from '../hooks/useWhatsapp';
 import { statusInstancia, conectarInstancia } from '../services/whatsappService';
 import { supabase } from '../lib/supabase';
@@ -456,6 +457,7 @@ export default function WhatsAppPage() {
   const enviar = useEnviarWhatsapp();
   const configurarWebhook = useConfigurarWebhook();
   const syncInstancias = useSyncInstancias();
+  const setAsSystem = useSetAsSystem();
 
   // ── Etiquetas e clientes ──────────────────────────────
   const { data: allEtiquetas = [] } = useEtiquetas();
@@ -1200,6 +1202,25 @@ export default function WhatsAppPage() {
                       onClick={(e) => { e.stopPropagation(); openQrModal(inst.id, inst.qr_code); }}
                     >
                       <QrCode className="w-3 h-3 mr-1" />Ver QR
+                    </Button>
+                  )}
+                  {isAdminOrGerencia && !inst.is_system && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-xs text-blue-600 hover:text-blue-700"
+                      title="Definir como instância do sistema (cron, notificações)"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Definir "${inst.instance_name}" como instância do sistema?\n\nEla será usada para envios automáticos (cron, notificações, verificações).`)) {
+                          setAsSystem.mutate(inst.id, {
+                            onSuccess: () => toast.success(`"${inst.instance_name}" definida como instância do sistema`),
+                            onError: (err) => toast.error(`Erro: ${(err as Error).message}`),
+                          });
+                        }
+                      }}
+                    >
+                      <Settings className="w-3 h-3" />
                     </Button>
                   )}
                   {isAdminOrGerencia && !inst.is_system && (

@@ -166,6 +166,19 @@ export function useSyncInstancias() {
   });
 }
 
+/** Definir uma instância como "sistema" (cron, notificações automáticas). */
+export function useSetAsSystem() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (instanciaId: string) =>
+      whatsappService.setAsSystem(instanciaId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [INSTANCIAS_KEY] });
+    },
+  });
+}
+
 // ══════════════════════════════════════════════════════════
 // ── Mensagens / Conversas ─────────────────────────────────
 // ══════════════════════════════════════════════════════════
