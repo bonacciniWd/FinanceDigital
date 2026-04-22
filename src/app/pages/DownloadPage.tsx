@@ -46,7 +46,7 @@ const PLATFORM_LOGOS: Record<string, string> = {
   linux: linuxLogo,
 };
 
-const APP_VERSION = '1.4.1';
+const APP_VERSION = __APP_VERSION__;
 const GITHUB_REPO = 'https://github.com/bonacciniWd/FinanceDigital';
 const GITHUB_RELEASE = `${GITHUB_REPO}/releases/download/v${APP_VERSION}`;
 

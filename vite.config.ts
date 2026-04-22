@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import pkg from './package.json' with { type: 'json' }
 
 export default defineConfig({
   plugins: [
@@ -15,6 +16,11 @@ export default defineConfig({
       // Alias @ to the src directory
       '@': path.resolve(__dirname, './src'),
     },
+  },
+
+  define: {
+    // Exposes package.json version to renderer as __APP_VERSION__ string literal
+    __APP_VERSION__: JSON.stringify(pkg.version),
   },
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
