@@ -9,7 +9,8 @@
     "dev": "vite --host",
     "electron:dev": "ELECTRON_DEV=true npx electron electron/main.cjs",
     "electron:build": "vite build && npx electron-builder --config electron-builder.json",
-    "electron:publish": "vite build && npx electron-builder --config electron-builder.json --publish always"
+    "electron:publish": "vite build && npx electron-builder --config electron-builder.json --publish always",
+    "release": "bash scripts/release-local.sh"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

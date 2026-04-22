@@ -6,6 +6,8 @@ dist/
 *.pem
 *.p12
 *.key
+.env.electron
+.env.local
 
 # Electron builds — usar GitHub Releases para distribuição
 release/
