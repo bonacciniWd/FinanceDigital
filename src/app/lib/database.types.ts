@@ -234,6 +234,7 @@ export interface Database {
           desembolsado: boolean;
           desembolsado_em: string | null;
           desembolsado_por: string | null;
+          skip_verification: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -258,6 +259,7 @@ export interface Database {
           desembolsado?: boolean;
           desembolsado_em?: string | null;
           desembolsado_por?: string | null;
+          skip_verification?: boolean;
         };
         Update: {
           cliente_id?: string;
@@ -279,6 +281,7 @@ export interface Database {
           desembolsado?: boolean;
           desembolsado_em?: string | null;
           desembolsado_por?: string | null;
+          skip_verification?: boolean;
           updated_at?: string;
         };
       };
@@ -730,6 +733,11 @@ export interface Database {
           cliente_nome: string;
           cpf: string;
           valor_solicitado: number;
+          valor_total_receber: number | null;
+          valor_parcela: number | null;
+          valores_parcelas: number[] | null;
+          skip_verification: boolean;
+          skip_verification_reason: string | null;
           renda_mensal: number;
           score_serasa: number;
           score_interno: number;
@@ -755,6 +763,11 @@ export interface Database {
           cliente_nome: string;
           cpf: string;
           valor_solicitado: number;
+          valor_total_receber?: number | null;
+          valor_parcela?: number | null;
+          valores_parcelas?: number[] | null;
+          skip_verification?: boolean;
+          skip_verification_reason?: string | null;
           renda_mensal: number;
           score_serasa: number;
           score_interno?: number;
@@ -777,6 +790,11 @@ export interface Database {
           cliente_nome?: string;
           cpf?: string;
           valor_solicitado?: number;
+          valor_total_receber?: number | null;
+          valor_parcela?: number | null;
+          valores_parcelas?: number[] | null;
+          skip_verification?: boolean;
+          skip_verification_reason?: string | null;
           renda_mensal?: number;
           score_serasa?: number;
           score_interno?: number;

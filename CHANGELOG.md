@@ -6,6 +6,36 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.0] — 2026-04-22
+
+### Adicionado — Valores variáveis por parcela, auto-aprovação auditada e desembolso em Pagamentos
+
+**Dois valores por análise (migration 047)**
+- Separação entre `valor_solicitado` (PIX enviado ao cliente) e `valor_total_receber` (total que volta para nós)
+- Campo manual `valor_parcela` com derivação bidirecional automática (alterar parcelas recalcula total e vice-versa)
+- `approve-credit` passa a honrar os valores manuais quando informados; caso contrário, cai no cálculo legado (Price 2.5%)
+
+**Valores individuais por parcela (migration 048)**
+- Grid dinâmico no modal de nova análise: após definir o nº de parcelas, cada uma pode receber um valor diferente
+- Soma dos valores alimenta automaticamente o campo "Valor a Receber"
+- Novo campo `analises_credito.valores_parcelas jsonb` persistido; `approve-credit` grava cada linha em `parcelas` com o valor específico
+- Valor médio continua sendo gravado em `emprestimos.valor_parcela` para compatibilidade
+
+**Pular link de verificação com auditoria (migration 048)**
+- Novo checkbox "Pular link de verificação (auto-aprovar)" com motivo opcional no modal de criação
+- A análise é criada e imediatamente auto-aprovada, sem vídeo-selfie nem validação de documentos
+- Registro em `verification_logs` com `action = credit_approved_skip_verification` (verification_id nulo)
+- Novo campo `emprestimos.skip_verification` com índice parcial para varredura admin rápida
+- Card vermelho exclusivo para admin na aba Desembolsos listando empréstimos aprovados sem verificação
+
+**Controle de Desembolso migrado para Pagamentos**
+- Painel removido de `/clientes/analise-credito` e movido para `/pagamentos-woovi` (aba "Desembolsos")
+- Aba só aparece para admin/gerência quando o desembolso automático está ligado/desligado e há aprovações para acompanhar
+- Totais de pendente/enviado, botão "Marcar Enviado" e colapso de já enviados preservados
+- Badges "sem verificação" destacam empréstimos auto-aprovados na própria lista
+
+---
+
 ## [1.3.0] — 2026-04-20
 
 ### Adicionado — Sincronização estrutural, desembolso configurável e Arquivados no Kanban

@@ -134,6 +134,7 @@ export interface Emprestimo {
   gateway?: string | null;
   desembolsado?: boolean;
   desembolsadoEm?: string | null;
+  skipVerification?: boolean;
 }
 
 /**
@@ -211,6 +212,11 @@ export interface AnaliseCredito {
   clienteNome: string;
   cpf: string;
   valorSolicitado: number;
+  valorTotalReceber?: number | null;
+  valorParcela?: number | null;
+  valoresParcelas?: number[] | null;
+  skipVerification?: boolean;
+  skipVerificationReason?: string | null;
   rendaMensal: number;
   scoreSerasa: number;
   scoreInterno: number;

@@ -17,6 +17,9 @@ import {
   Loader2,
   FileText,
   CalendarIcon,
+  Banknote,
+  DollarSign,
+  ShieldAlert,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -63,6 +66,11 @@ import {
 import { useParcelas } from '../hooks/useParcelas';
 import { useClientes } from '../hooks/useClientes';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
+import { useEmprestimos } from '../hooks/useEmprestimos';
+import { useAnalises } from '../hooks/useAnaliseCredito';
+import { useConfigSistema } from '../hooks/useConfigSistema';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
 import { toast } from 'sonner';
 import { valorCorrigido } from '../lib/juros';
 import type { Parcela } from '../lib/view-types';
@@ -151,10 +159,51 @@ export default function PagamentosWooviPage() {
   const { data: allParcelas = [] } = useParcelas();
   const { data: clientes = [] } = useClientes();
   const { data: instancias = [] } = useInstancias();
+  const { data: emprestimos = [] } = useEmprestimos();
+  const { data: analises = [] } = useAnalises();
+  const { data: configSistema } = useConfigSistema();
+  const { user } = useAuth();
   const enviarWhatsapp = useEnviarWhatsapp();
 
   const criarCobrancaEfi = useCriarCobrancaEfi();
   const { data: efiBalanceData } = useSaldoEfi();
+
+  // ── Desembolso manual (migrado de AnaliseCreditoPage) ─────────
+  const isAdminGerencia = user?.role === 'admin' || user?.role === 'gerencia';
+  const [markingDesembolso, setMarkingDesembolso] = useState<string | null>(null);
+
+  const handleMarcarDesembolsado = async (emprestimoId: string) => {
+    setMarkingDesembolso(emprestimoId);
+    try {
+      const { error } = await (supabase.from('emprestimos') as any)
+        .update({ desembolsado: true, desembolsado_em: new Date().toISOString(), desembolsado_por: user?.id })
+        .eq('id', emprestimoId);
+      if (error) throw error;
+      toast.success('Empréstimo marcado como desembolsado!');
+    } catch (err: any) {
+      toast.error(`Erro: ${err.message}`);
+    } finally {
+      setMarkingDesembolso(null);
+    }
+  };
+
+  const emprestimosAprovados = useMemo(() => {
+    if (!analises || !emprestimos.length) return [];
+    const analisesAprovadas = new Set(analises.filter((a) => a.status === 'aprovado').map((a) => a.id));
+    return emprestimos
+      .filter((e) => e.analiseId && analisesAprovadas.has(e.analiseId))
+      .map((e) => {
+        const analise = analises.find((a) => a.id === e.analiseId);
+        return { ...e, clienteNome: analise?.clienteNome ?? e.clienteNome ?? '' };
+      });
+  }, [analises, emprestimos]);
+
+  const aguardandoEnvio = emprestimosAprovados.filter((e) => !e.desembolsado);
+  const jaEnviados = emprestimosAprovados.filter((e) => e.desembolsado);
+  const emprestimosSkipVerification = emprestimosAprovados.filter((e) => e.skipVerification);
+  const controleDesembolsoAtivo = configSistema?.controle_desembolso_ativo !== false;
+  const totalAguardandoEnvio = aguardandoEnvio.reduce((sum, e) => sum + e.valor, 0);
+  const totalJaEnviado = jaEnviados.reduce((sum, e) => sum + e.valor, 0);
 
   // ── Filtro de período global ────────────────────────────
   const [dateFrom, setDateFrom] = useState<Date>(subDays(new Date(), 30));
@@ -631,6 +680,15 @@ export default function PagamentosWooviPage() {
             Transações
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{filteredTx.length}</Badge>
           </TabsTrigger>
+          {isAdminGerencia && controleDesembolsoAtivo && (
+            <TabsTrigger value="desembolsos" className="flex items-center gap-2">
+              <Banknote className="h-4 w-4" />
+              Desembolsos
+              {aguardandoEnvio.length > 0 && (
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">{aguardandoEnvio.length}</Badge>
+              )}
+            </TabsTrigger>
+          )}
           <TabsTrigger value="extratos" className="flex items-center gap-2">
             <FileText className="h-4 w-4" />
             Extratos
@@ -766,6 +824,120 @@ export default function PagamentosWooviPage() {
             </div>
           )}
         </TabsContent>
+
+        {/* ── Tab: Desembolsos (admin/gerência) ─────────── */}
+        {isAdminGerencia && controleDesembolsoAtivo && (
+          <TabsContent value="desembolsos" className="space-y-4">
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Banknote className="w-5 h-5 text-primary" />
+                  <h3 className="font-semibold">Controle de Desembolso</h3>
+                  <Badge variant="outline" className="ml-auto">{aguardandoEnvio.length} aguardando</Badge>
+                  <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400">{jaEnviados.length} enviados</Badge>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                    <p className="text-xs text-muted-foreground">Valor pendente de envio</p>
+                    <p className="text-lg font-semibold text-amber-700 dark:text-amber-400">{formatCurrency(totalAguardandoEnvio)}</p>
+                  </div>
+                  <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-3">
+                    <p className="text-xs text-muted-foreground">Valor já desembolsado</p>
+                    <p className="text-lg font-semibold text-green-700 dark:text-green-400">{formatCurrency(totalJaEnviado)}</p>
+                  </div>
+                </div>
+
+                {configSistema?.desembolso_automatico_ativo === false && (
+                  <div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3 text-sm text-blue-700 dark:text-blue-300">
+                    O desembolso automático está desligado. Aprovações novas entram aqui para envio manual e conferência do que já foi pago.
+                  </div>
+                )}
+
+                {emprestimosSkipVerification.length > 0 && user?.role === 'admin' && (
+                  <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <ShieldAlert className="h-4 w-4 text-red-600" />
+                      <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                        Empréstimos sem verificação de identidade ({emprestimosSkipVerification.length})
+                      </p>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mb-2">
+                      Estes empréstimos foram auto-aprovados pelo criador sem o fluxo de vídeo-selfie/documentos. Acompanhe de perto.
+                    </p>
+                    <div className="space-y-1">
+                      {emprestimosSkipVerification.slice(0, 10).map((e) => (
+                        <div key={e.id} className="flex items-center justify-between text-xs p-2 rounded bg-red-500/5">
+                          <span className="font-medium">{e.clienteNome}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">{formatCurrency(e.valor)}</span>
+                            <Badge variant="outline" className="text-[10px] h-4 px-1">{e.status}</Badge>
+                            <span className="text-muted-foreground">{e.aprovadoEm ? new Date(e.aprovadoEm).toLocaleDateString('pt-BR') : '—'}</span>
+                          </div>
+                        </div>
+                      ))}
+                      {emprestimosSkipVerification.length > 10 && (
+                        <p className="text-[11px] text-muted-foreground text-center pt-1">... e mais {emprestimosSkipVerification.length - 10}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {aguardandoEnvio.length > 0 ? (
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">⏳ Aguardando Envio do Dinheiro</p>
+                    <div className="space-y-2">
+                      {aguardandoEnvio.map((e) => (
+                        <div key={e.id} className="flex items-center justify-between p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{e.clienteNome}</span>
+                            {e.skipVerification && (
+                              <Badge variant="outline" className="text-[10px] h-4 px-1 bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-400">sem verificação</Badge>
+                            )}
+                            <span className="text-muted-foreground text-sm">{formatCurrency(e.valor)}</span>
+                            <span className="text-muted-foreground text-xs">{new Date(e.dataContrato).toLocaleDateString('pt-BR')}</span>
+                          </div>
+                          <Button
+                            size="sm"
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                            onClick={() => handleMarcarDesembolsado(e.id)}
+                            disabled={markingDesembolso === e.id}
+                          >
+                            <DollarSign className="w-4 h-4 mr-1" />
+                            {markingDesembolso === e.id ? 'Marcando...' : 'Marcar Enviado'}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-6">Nenhum empréstimo aguardando desembolso.</p>
+                )}
+
+                {jaEnviados.length > 0 && (
+                  <details className="group">
+                    <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                      ✅ Já enviados ({jaEnviados.length})
+                    </summary>
+                    <div className="mt-2 space-y-1">
+                      {jaEnviados.map((e) => (
+                        <div key={e.id} className="flex items-center justify-between p-2 rounded bg-green-500/5 text-sm">
+                          <span className="flex items-center gap-2">
+                            {e.clienteNome} — {formatCurrency(e.valor)}
+                            {e.skipVerification && (
+                              <Badge variant="outline" className="text-[10px] h-4 px-1 bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-400">sem verificação</Badge>
+                            )}
+                          </span>
+                          <span className="text-xs text-muted-foreground">{e.desembolsadoEm ? new Date(e.desembolsadoEm).toLocaleDateString('pt-BR') : '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         {/* ── Tab: Extratos ─────────────────────────────── */}
         <TabsContent value="extratos" className="space-y-4">

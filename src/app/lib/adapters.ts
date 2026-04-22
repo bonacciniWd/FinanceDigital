@@ -141,6 +141,7 @@ export function dbEmprestimoToView(e: EmprestimoComCliente): Emprestimo {
     gateway: e.gateway,
     desembolsado: (e as any).desembolsado ?? false,
     desembolsadoEm: (e as any).desembolsado_em ?? undefined,
+    skipVerification: (e as any).skip_verification ?? false,
   };
 }
 
@@ -292,6 +293,11 @@ export function dbAnaliseCreditoToView(a: DbAnaliseCredito): AnaliseCredito {
     clienteNome: a.cliente_nome,
     cpf: a.cpf,
     valorSolicitado: a.valor_solicitado,
+    valorTotalReceber: a.valor_total_receber ?? null,
+    valorParcela: a.valor_parcela ?? null,
+    valoresParcelas: a.valores_parcelas ?? null,
+    skipVerification: a.skip_verification ?? false,
+    skipVerificationReason: a.skip_verification_reason ?? null,
     rendaMensal: a.renda_mensal,
     scoreSerasa: a.score_serasa,
     scoreInterno: a.score_interno,
@@ -316,6 +322,11 @@ export function viewAnaliseCreditoToInsert(a: Partial<AnaliseCredito>) {
     cliente_nome: a.clienteNome,
     cpf: a.cpf,
     valor_solicitado: a.valorSolicitado,
+    valor_total_receber: a.valorTotalReceber ?? null,
+    valor_parcela: a.valorParcela ?? null,
+    valores_parcelas: a.valoresParcelas ?? null,
+    skip_verification: a.skipVerification ?? false,
+    skip_verification_reason: a.skipVerificationReason ?? null,
     renda_mensal: a.rendaMensal,
     score_serasa: a.scoreSerasa,
     score_interno: a.scoreInterno ?? 0,

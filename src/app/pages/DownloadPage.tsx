@@ -157,7 +157,7 @@ const CHANGELOG = [
     'Auto-refresh de sessão quando aba fica inativa',
     'Modal de cadastro landscape com 2 colunas',
   ]},
-  { version: '8.5.0', date: '31 Mar 2026', isLatest: false, items: [
+  { version: '0.5.0', date: '31 Mar 2026', isLatest: false, items: [
     'Integração EFI Bank completa (cobranças cobv com vencimento)',
     'Geração de QR Code PIX e envio automático via WhatsApp',
     'Sistema de comprovantes de pagamento obrigatórios',
@@ -165,32 +165,32 @@ const CHANGELOG = [
     'Verificação automática de status PIX pós-envio',
     'Novas variáveis de template: {pixCopiaCola}, {valorNum}, etc.',
   ]},
-  { version: '8.4.0', date: '30 Mar 2026', isLatest: false, items: [
+  { version: '0.4.0', date: '30 Mar 2026', isLatest: false, items: [
     'Mapa do Brasil interativo com zoom, pan e filtro por cidade',
     'Valor e vencimento derivados do empréstimo ativo',
     'Coluna "Parcelas" (pagas/total) na listagem de clientes',
     'Painel lateral de cidades com contagem de clientes',
   ]},
-  { version: '8.3.0', date: '30 Mar 2026', isLatest: false, items: [
+  { version: '0.3.0', date: '30 Mar 2026', isLatest: false, items: [
     'Sistema de alerta de pendências com notificações Realtime',
     'Som de alarme + toast para novas análises de crédito',
     'Endereço detalhado com API IBGE (cidades por UF)',
     'Mapa do Brasil com SVG clicável por estado',
     'Exclusão de parcelas restrita a admin',
   ]},
-  { version: '8.2.0', date: '26 Mar 2026', isLatest: false, items: [
+  { version: '0.2.0', date: '26 Mar 2026', isLatest: false, items: [
     'Campo Profissão no cadastro de clientes',
     'Auto-rejeição por divergência de profissão na verificação',
     'Modal "Efetuar Pagamento" com abas Completo/Parcial',
     'Desconto, observação e conta bancária por parcela',
   ]},
-  { version: '8.1.0', date: '23 Mar 2026', isLatest: false, items: [
+  { version: '0.1.0', date: '23 Mar 2026', isLatest: false, items: [
     'Fix race condition de autenticação + IP check',
     'Electron: IP check no startup, zoom corrigido',
     'ActivityTracker resiliente com timeout de 8s',
     'Sessão restaurada com JWT expirado corrigida',
   ]},
-  { version: '8.0.0', date: '23 Mar 2026', isLatest: false, items: [
+  { version: '0.0.1', date: '23 Mar 2026', isLatest: false, items: [
     'Sistema de IP Whitelist + App Desktop (Electron)',
     'Builds para Windows, macOS e Linux',
     'Verificação de IP no startup do Electron',

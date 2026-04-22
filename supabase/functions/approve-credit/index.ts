@@ -482,8 +482,12 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Verificar identidade aprovada ───────────────────
+    // Exceção: se a análise foi criada com skip_verification=true, o criador
+    // optou por pular o link de verificação e o empréstimo é auto-aprovado.
+    // Este caminho fica registrado em emprestimos.skip_verification para o admin.
     const verification = analise.identity_verifications;
-    if (analise.verification_required && (!verification || verification.status !== "approved")) {
+    const skipVerification = analise.skip_verification === true;
+    if (!skipVerification && analise.verification_required && (!verification || verification.status !== "approved")) {
       return new Response(
         JSON.stringify({ error: "Verificação de identidade não aprovada" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -502,18 +506,45 @@ Deno.serve(async (req: Request) => {
     const numParcelas = analise.numero_parcelas || 1;
     const periodicidade = analise.periodicidade || "mensal";
     const diaPagamento = analise.dia_pagamento ?? null;
-    const taxaJuros = 0.025; // 2.5% ao mês default
 
-    // Calcular valor da parcela com juros (tabela Price)
-    const valorTotal = analise.valor_solicitado;
+    // Valor do PIX que sai para o cliente (principal desembolsado)
+    const valorSolicitado: number = analise.valor_solicitado;
+    // Valor total que a empresa vai receber de volta (manual, opcional).
+    // Se não informado, assume = valor_solicitado (sem lucro embutido).
+    const valorTotalReceber: number = analise.valor_total_receber ?? valorSolicitado;
+
+    // Valor de cada parcela:
+    //   1. Se valores_parcelas (array) vier preenchido com tamanho == numParcelas, usa por posição.
+    //   2. Se valor_parcela (único) vier preenchido, aplica igual a todas.
+    //   3. Senão, se houver lucro embutido (total > solicitado), divide o total pelas parcelas.
+    //   4. Senão, mantém o comportamento legado (tabela Price 2,5%/mês) para análises antigas.
+    // ATENÇÃO: juros de mora por atraso são aplicados dinamicamente em runtime
+    // (src/app/lib/juros.ts); este bloco não interfere nisso.
+    const taxaJurosLegado = 0.025;
     let valorParcela: number;
-    if (taxaJuros > 0 && numParcelas > 1) {
-      const pmt = (valorTotal * taxaJuros * Math.pow(1 + taxaJuros, numParcelas)) /
-        (Math.pow(1 + taxaJuros, numParcelas) - 1);
+    let valoresPorParcela: number[] | null = null;
+    let taxaJurosArmazenada = 0;
+
+    if (Array.isArray(analise.valores_parcelas) && analise.valores_parcelas.length === numParcelas) {
+      valoresPorParcela = (analise.valores_parcelas as number[]).map((v) => Math.round(Number(v) * 100) / 100);
+      valorParcela = valoresPorParcela.reduce((s, v) => s + v, 0) / numParcelas; // média, só para coluna emprestimos.valor_parcela
+      valorParcela = Math.round(valorParcela * 100) / 100;
+    } else if (analise.valor_parcela && analise.valor_parcela > 0) {
+      valorParcela = Math.round(analise.valor_parcela * 100) / 100;
+    } else if (analise.valor_total_receber && analise.valor_total_receber > 0) {
+      valorParcela = Math.round((valorTotalReceber / numParcelas) * 100) / 100;
+    } else if (numParcelas > 1) {
+      // Legado: Price com 2.5% a.m.
+      const pmt = (valorSolicitado * taxaJurosLegado * Math.pow(1 + taxaJurosLegado, numParcelas)) /
+        (Math.pow(1 + taxaJurosLegado, numParcelas) - 1);
       valorParcela = Math.round(pmt * 100) / 100;
+      taxaJurosArmazenada = taxaJurosLegado * 100;
     } else {
-      valorParcela = Math.round((valorTotal / numParcelas) * 100) / 100;
+      valorParcela = Math.round((valorSolicitado / numParcelas) * 100) / 100;
     }
+
+    // Principal registrado no empréstimo = valor que saiu em PIX para o cliente.
+    const valorTotal = valorSolicitado;
 
     // Gerar datas de vencimento
     const hoje = new Date();
@@ -535,7 +566,7 @@ Deno.serve(async (req: Request) => {
         valor: valorTotal,
         parcelas: numParcelas,
         valor_parcela: valorParcela,
-        taxa_juros: taxaJuros * 100, // Armazenar como percentual (2.5)
+        taxa_juros: taxaJurosArmazenada, // Percentual (0 quando parcela é manual; juros de mora são por atraso)
         tipo_juros: tipoJurosMap[periodicidade] || "mensal",
         data_contrato: hoje.toISOString().split("T")[0],
         proximo_vencimento: proximoVencimento,
@@ -545,6 +576,7 @@ Deno.serve(async (req: Request) => {
         aprovado_em: new Date().toISOString(),
         vendedor_id: analise.analista_id ?? null,
         gateway: "auto",
+        skip_verification: skipVerification,
       })
       .select("id")
       .single();
@@ -556,8 +588,8 @@ Deno.serve(async (req: Request) => {
       emprestimo_id: emprestimo!.id,
       cliente_id: analise.cliente_id,
       numero: idx + 1,
-      valor: valorParcela,
-      valor_original: valorParcela,
+      valor: valoresPorParcela ? valoresPorParcela[idx] : valorParcela,
+      valor_original: valoresPorParcela ? valoresPorParcela[idx] : valorParcela,
       data_vencimento: dataVenc,
       status: "pendente" as const,
     }));
@@ -766,6 +798,24 @@ Deno.serve(async (req: Request) => {
           pix_key,
           pix_payment_success: !!paymentResult,
             desembolso_automatico_ativo: desembolsoAutomaticoAtivo,
+        },
+      });
+    } else if (skipVerification) {
+      // Trilha de auditoria para admin: aprovação sem verificação de identidade
+      await adminClient.from("verification_logs").insert({
+        verification_id: null,
+        analise_id,
+        action: "credit_approved_skip_verification",
+        performed_by: caller.id,
+        details: {
+          emprestimo_id: emprestimo!.id,
+          valor: valorTotal,
+          parcelas: numParcelas,
+          valor_parcela: valorParcela,
+          valores_parcelas: valoresPorParcela,
+          skip_reason: analise.skip_verification_reason ?? null,
+          created_by: analise.analista_id ?? null,
+          pix_key,
         },
       });
     }

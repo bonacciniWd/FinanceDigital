@@ -14,3 +14,7 @@ build/
 # Fly.io — não versionar estado local
 fly-evolution/.fly/
 .vercel
+
+# PII — dados de clientes migrados
+plataPlumo_loansSummaryView.csv
+*.csv
