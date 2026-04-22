@@ -46,7 +46,7 @@ const PLATFORM_LOGOS: Record<string, string> = {
   linux: linuxLogo,
 };
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.1';
 const GITHUB_REPO = 'https://github.com/bonacciniWd/FinanceDigital';
 const GITHUB_RELEASE = `${GITHUB_REPO}/releases/download/v${APP_VERSION}`;
 
@@ -68,7 +68,7 @@ const PLATFORMS = [
     os: 'macOS',
     icon: Apple,
     url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-mac-x64.dmg`,
-    size: '135 MB',
+    size: '136 MB',
     note: 'macOS 12+ (Intel & Apple Silicon)',
     ext: '.dmg',
     color: 'from-purple-500 to-pink-500',
@@ -123,7 +123,19 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.3.0', date: '20 Abr 2026', isLatest: true, items: [
+  { version: '1.4.1', date: '22 Abr 2026', isLatest: true, items: [
+    'Botão "Verificar atualizações" na tela de login (desktop) com versão instalada visível',
+    'Mensagens de progresso, erro e "reiniciar para instalar" diretamente no app',
+    'IPC updater expõe status e permite instalar manualmente sem esperar auto-check',
+  ]},
+  { version: '1.4.0', date: '22 Abr 2026', isLatest: false, items: [
+    'Valores individuais por parcela — permite cobrar valores diferentes em cada vencimento',
+    'Separação entre Valor Solicitado (PIX ao cliente) e Valor a Receber (total de volta)',
+    'Checkbox "Pular verificação" auto-aprova a análise com registro de auditoria',
+    'Painel de Desembolsos migrado para /pagamentos-woovi com controle admin-only',
+    'Card vermelho de aviso para análises aprovadas sem verificação de identidade',
+  ]},
+  { version: '1.3.0', date: '20 Abr 2026', isLatest: false, items: [
     'Sincronização automática de status entre parcelas, empréstimos e clientes',
     'Dashboard recalculado pela fonte correta de empréstimos ativos e inadimplentes',
     'Desembolso automático agora é opcional e configurável por painel administrativo',
