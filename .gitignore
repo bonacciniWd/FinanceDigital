@@ -23,3 +23,4 @@ fly-evolution/.fly/
 # PII — dados de clientes migrados
 plataPlumo_loansSummaryView.csv
 *.csv
+dist/
