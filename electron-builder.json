@@ -17,10 +17,18 @@
     "releaseType": "release"
   },
   "mac": {
-    "target": ["dmg"],
+    "target": [
+      { "target": "dmg", "arch": ["x64", "arm64"] }
+    ],
     "icon": "build/icon.icns",
-    "category": "public.app-category.finance"
+    "category": "public.app-category.finance",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "notarize": false
   },
+  "afterSign": "scripts/notarize.cjs",
   "win": {
     "target": ["nsis"],
     "icon": "build/icon.ico"

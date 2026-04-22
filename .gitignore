@@ -9,7 +9,12 @@ dist/
 
 # Electron builds — usar GitHub Releases para distribuição
 release/
-build/
+build/*
+!build/icon.icns
+!build/icon.ico
+!build/icon.png
+!build/icon.iconset
+!build/entitlements.mac.plist
 
 # Fly.io — não versionar estado local
 fly-evolution/.fly/
