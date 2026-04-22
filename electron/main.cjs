@@ -88,6 +88,54 @@ ipcMain.handle('storage:delete', (_event, { name }) => {
   return encryptedStorage.deleteEncrypted(name);
 });
 
+// --- Updater IPC (manual check/download/install) ---
+
+let updaterState = {
+  status: 'idle', // idle | checking | available | not-available | downloading | downloaded | error
+  version: null,
+  currentVersion: null,
+  progress: 0,
+  error: null,
+};
+
+function broadcastUpdaterStatus() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update:status', updaterState);
+  }
+}
+
+ipcMain.handle('update:check', async () => {
+  updaterState.currentVersion = app.getVersion();
+  if (isDev) {
+    updaterState = { ...updaterState, status: 'error', error: 'Updater desativado em modo desenvolvimento' };
+    return updaterState;
+  }
+  try {
+    updaterState = { ...updaterState, status: 'checking', error: null };
+    broadcastUpdaterStatus();
+    const result = await autoUpdater.checkForUpdates();
+    if (!result || !result.updateInfo) {
+      updaterState = { ...updaterState, status: 'not-available' };
+    }
+    return updaterState;
+  } catch (err) {
+    updaterState = { ...updaterState, status: 'error', error: err.message || String(err) };
+    broadcastUpdaterStatus();
+    return updaterState;
+  }
+});
+
+ipcMain.handle('update:quitAndInstall', () => {
+  if (updaterState.status === 'downloaded') {
+    autoUpdater.quitAndInstall(false, true);
+  }
+});
+
+ipcMain.handle('update:getStatus', () => {
+  updaterState.currentVersion = app.getVersion();
+  return updaterState;
+});
+
 // --- App Lifecycle ---
 
 app.whenReady().then(async () => {
@@ -138,15 +186,32 @@ app.whenReady().then(async () => {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
 
+    autoUpdater.on('checking-for-update', () => {
+      updaterState = { ...updaterState, status: 'checking', error: null };
+      broadcastUpdaterStatus();
+    });
+
     autoUpdater.on('update-available', (info) => {
       console.log(`[updater] Nova versão disponível: ${info.version}`);
-      if (mainWindow) {
-        mainWindow.webContents.send('update:available', info.version);
-      }
+      updaterState = { ...updaterState, status: 'downloading', version: info.version, progress: 0, error: null };
+      broadcastUpdaterStatus();
+      if (mainWindow) mainWindow.webContents.send('update:available', info.version);
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      updaterState = { ...updaterState, status: 'not-available', version: info.version, error: null };
+      broadcastUpdaterStatus();
+    });
+
+    autoUpdater.on('download-progress', (p) => {
+      updaterState = { ...updaterState, status: 'downloading', progress: Math.round(p.percent) };
+      broadcastUpdaterStatus();
     });
 
     autoUpdater.on('update-downloaded', (info) => {
       console.log(`[updater] Update baixado: ${info.version}`);
+      updaterState = { ...updaterState, status: 'downloaded', version: info.version, progress: 100 };
+      broadcastUpdaterStatus();
       dialog.showMessageBox(mainWindow, {
         type: 'info',
         title: 'Atualização disponível',
@@ -162,6 +227,8 @@ app.whenReady().then(async () => {
 
     autoUpdater.on('error', (err) => {
       console.error('[updater] Erro ao verificar atualizações:', err.message);
+      updaterState = { ...updaterState, status: 'error', error: err.message || String(err) };
+      broadcastUpdaterStatus();
     });
 
     // Verifica atualizações 5s após iniciar (e depois a cada 4h)

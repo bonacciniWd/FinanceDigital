@@ -17,7 +17,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { Mail, Lock, Eye, EyeOff, Sun, Moon, Download, BookOpen } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, Sun, Moon, Download, BookOpen, RefreshCw } from 'lucide-react';
 
 import logo from '../assets/logo-login.png';
 import { useTheme } from '../contexts/ThemeContext';
@@ -34,6 +34,37 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
+
+  // ── Auto-updater (apenas desktop / Electron) ────────────
+  type UpdaterState = {
+    status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+    version: string | null;
+    currentVersion: string | null;
+    progress: number;
+    error: string | null;
+  };
+  const [updater, setUpdater] = useState<UpdaterState>({ status: 'idle', version: null, currentVersion: null, progress: 0, error: null });
+  const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.checkForUpdates;
+
+  useEffect(() => {
+    if (!isElectron) return;
+    const api = (window as any).electronAPI;
+    // Estado inicial + listener de mudanças
+    api.getUpdateStatus().then((s: UpdaterState) => setUpdater(s));
+    api.onUpdateStatus((s: UpdaterState) => setUpdater(s));
+  }, [isElectron]);
+
+  const handleCheckUpdate = async () => {
+    if (!isElectron) return;
+    const api = (window as any).electronAPI;
+    setUpdater((u) => ({ ...u, status: 'checking', error: null }));
+    await api.checkForUpdates();
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!isElectron) return;
+    await (window as any).electronAPI.quitAndInstall();
+  };
 
   // Mostra erro de IP bloqueado vindo do ProtectedRoute
   useEffect(() => {
@@ -176,6 +207,52 @@ export default function LoginPage() {
               </a>
             </div>
           </form>
+
+          {/* ── Atualização do App (apenas desktop) ──────────── */}
+          {isElectron && (
+            <div className="mt-6 pt-4 border-t border-border/60 space-y-2">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  Versão instalada: <span className="font-mono">{updater.currentVersion ?? '—'}</span>
+                </span>
+                {updater.status === 'downloaded' ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="default"
+                    className="h-7 text-xs"
+                    onClick={handleInstallUpdate}
+                  >
+                    Reiniciar e instalar {updater.version}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs gap-1"
+                    disabled={updater.status === 'checking' || updater.status === 'downloading'}
+                    onClick={handleCheckUpdate}
+                  >
+                    <RefreshCw className={`w-3 h-3 ${updater.status === 'checking' || updater.status === 'downloading' ? 'animate-spin' : ''}`} />
+                    {updater.status === 'checking' ? 'Verificando...' : updater.status === 'downloading' ? `Baixando ${updater.progress}%` : 'Verificar atualizações'}
+                  </Button>
+                )}
+              </div>
+              {updater.status === 'not-available' && (
+                <p className="text-[11px] text-green-600 dark:text-green-400">Você está na versão mais recente.</p>
+              )}
+              {updater.status === 'available' && updater.version && (
+                <p className="text-[11px] text-blue-600 dark:text-blue-400">Nova versão {updater.version} disponível — baixando…</p>
+              )}
+              {updater.status === 'error' && updater.error && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  Não foi possível atualizar automaticamente: {updater.error}.{' '}
+                  <Link to="/download" className="underline">Baixar manualmente</Link>.
+                </p>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

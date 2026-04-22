@@ -6,6 +6,19 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.1] — 2026-04-22
+
+### Adicionado — Botão manual de atualização na tela de login (desktop)
+
+- Novos IPC handlers no Electron main: `update:check`, `update:getStatus`, `update:quitAndInstall`
+- Preload expõe `electronAPI.checkForUpdates()`, `getUpdateStatus()`, `quitAndInstall()` e `onUpdateStatus()`
+- Tela de login mostra a versão instalada, botão "Verificar atualizações" e barra de progresso do download
+- Mensagens de erro do updater ficam visíveis (ajuda a diagnosticar falhas de assinatura de código em macOS)
+- Quando o update termina de baixar, a tela troca automaticamente para "Reiniciar e instalar {versão}"
+- Versão web não mostra o botão (detecta `window.electronAPI`)
+
+---
+
 ## [1.4.0] — 2026-04-22
 
 ### Adicionado — Valores variáveis por parcela, auto-aprovação auditada e desembolso em Pagamentos

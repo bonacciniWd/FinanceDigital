@@ -28,4 +28,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Auto-updater events
   onUpdateAvailable: (callback) =>
     ipcRenderer.on('update:available', (_event, version) => callback(version)),
+  onUpdateStatus: (callback) =>
+    ipcRenderer.on('update:status', (_event, state) => callback(state)),
+
+  // Auto-updater manual controls
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  getUpdateStatus: () => ipcRenderer.invoke('update:getStatus'),
+  quitAndInstall: () => ipcRenderer.invoke('update:quitAndInstall'),
 });
