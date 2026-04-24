@@ -123,7 +123,15 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.1', date: '22 Abr 2026', isLatest: true, items: [
+  { version: '1.4.2', date: '23 Abr 2026', isLatest: true, items: [
+    'Juros automáticos por atraso agora configuráveis em Configurações do Sistema',
+    'Parâmetros editáveis: juro fixo (R$/dia), juro percentual (%/dia), limiar e teto de dias',
+    'Juros congelam automaticamente para clientes em Kanban Arquivado ou Perdido',
+    'Gestão de Parcelas respeita o congelamento ao somar totais',
+    'Scroll horizontal do Kanban de Cobrança reescrito: sempre visível na base e sem cobrir cards',
+    'Cada coluna do Kanban ganhou scroll vertical próprio (funciona bem com 200+ cards)',
+  ]},
+  { version: '1.4.1', date: '22 Abr 2026', isLatest: false, items: [
     'Botão "Verificar atualizações" na tela de login (desktop) com versão instalada visível',
     'Mensagens de progresso, erro e "reiniciar para instalar" diretamente no app',
     'IPC updater expõe status e permite instalar manualmente sem esperar auto-check',

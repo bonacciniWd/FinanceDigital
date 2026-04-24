@@ -706,7 +706,7 @@ export default function KanbanCobrancaPage() {
             const cards = cardsByEtapa[column.id] || [];
             const isOver = dragOverColumn === column.id;
             return (
-              <div key={column.id} className="flex-shrink-0 w-[500px] h-full flex flex-col">
+              <div key={column.id} className="flex-shrink-0 w-80 h-full flex flex-col">
                 <Card
                   className={`liquid-metal-column ${isOver ? 'dragging-over' : ''} flex flex-col h-full overflow-hidden`}
                   style={{ '--kanban-col-color': `${column.dotColor}88` } as React.CSSProperties}
@@ -819,17 +819,17 @@ export default function KanbanCobrancaPage() {
                             </div>
                             <div className="flex gap-1 pt-2 relative">
                               <div className="flex-1 relative">
-                                <Button size="sm" variant="secondary" className="flex-1 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); setChatMenuCard(chatMenuCard === card.id ? null : card.id); }}>
+                                <Button size="sm" variant="outline" className="flex-1 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); setChatMenuCard(chatMenuCard === card.id ? null : card.id); }}>
                                   <MessageSquare className="w-3 h-3 mr-1" />Chat
                                 </Button>
                                 {chatMenuCard === card.id && (
-                                  <div className="absolute bottom-full text-black left-0 mb-1 bg-white/80 border border-border rounded-lg shadow-lg z-50 w-96 p-1" onClick={(e) => e.stopPropagation()}>
-                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(card.clienteTelefone))}`); }}>
-                                      <MessageSquare className="w-6 h-6 text-green-600" />
+                                  <div className="absolute bottom-full left-0 mb-1 bg-popover border border-border rounded-lg shadow-lg z-50 w-56 p-1" onClick={(e) => e.stopPropagation()}>
+                                    <button className="w-full text-left px-3 py-2 text-xs hover:bg-muted rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(card.clienteTelefone))}`); }}>
+                                      <MessageSquare className="w-3.5 h-3.5 text-green-600" />
                                       <span>WhatsApp Business (sistema)</span>
                                     </button>
-                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); handleWhatsappDireto(card.clienteTelefone); }}>
-                                      <ExternalLink className="w-6 h-6 text-blue-600" />
+                                    <button className="w-full text-left px-3 py-2 text-xs hover:bg-muted rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); handleWhatsappDireto(card.clienteTelefone); }}>
+                                      <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
                                       <span>WhatsApp App / Web</span>
                                     </button>
                                   </div>
@@ -849,7 +849,7 @@ export default function KanbanCobrancaPage() {
                                   <Archive className="w-4 h-4" />
                                 </Button>
                               )}
-                              <Button size="sm" variant="default" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
+                              <Button size="sm" variant="outline" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
                                 <ChevronRight className="w-4 h-4" />
                               </Button>
                             </div>

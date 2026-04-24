@@ -6,6 +6,47 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.2] — 2026-04-23
+
+### Adicionado — Juros automáticos configuráveis via ConfigSistema
+
+**Parâmetros de juros por atraso agora editáveis (migration 049)**
+- Novas chaves em `configuracoes_sistema`: `juros_fixo_dia` (R$/dia, default 100), `juros_perc_dia` (fração, default 0,10 = 10%/dia), `juros_limiar` (valor até o qual usa juro fixo, default 1000) e `juros_dias_max` (teto de dias de atraso considerados, default 365)
+- Seeds idempotentes com `ON CONFLICT DO NOTHING`
+- Card "Juros Automáticos por Atraso" em `/configuracoes-sistema` com 4 inputs; campo de percentual exibe como % e persiste como fração
+- Box informativo explicando que juros congelam quando o cliente está em Kanban `arquivado`/`perdido`
+
+**Runtime mutável em `src/app/lib/juros.ts`**
+- `setJurosConfig(partial)` / `getJurosConfig()` e defaults exportados (`JUROS_*_DEFAULT`)
+- `calcularJurosAtraso` e `valorCorrigido` passam a ler do runtime em vez de constantes fixas
+- Hook `useSyncJurosConfig()` propaga valores do DB → runtime; montado via `RuntimeConfigSync` dentro dos providers em `App.tsx`
+
+### Corrigido — Congelamento de juros em GestaoParcelas e scroll do Kanban de Cobrança
+
+**Propagação de `congelarJuros` por etapa Kanban**
+- `GestaoParcelasPage` consome `useCardsCobranca()` para montar `Set` de clientes em `arquivado`/`perdido` (`ETAPAS_CONGELA_JUROS`)
+- Closure `parcelaTotal(p)` passa `{ congelarJuros }` para `valorCorrigido`, garantindo que parcelas desses clientes parem de acumular juros no relatório
+
+**Scroll do Kanban de Cobrança reescrito**
+- Removido scroller sticky duplicado + lógica de sincronização (causava loop "volta sozinho" e cobertura de cards)
+- Board agora tem altura fixa `calc(100vh - 260px)` (mín. 400px) → scrollbar horizontal nativo fica sempre visível na base da viewport
+- Cada coluna tem scroll vertical próprio (`overflow-y-auto` no `CardContent` com `flex-1 min-h-0`), header da coluna fixo
+- Funciona bem com 200+ cards por coluna sem precisar rolar a página até o fim
+
+### Arquivos criados/modificados
+
+| Arquivo | Tipo | Alteração |
+|---------|------|-----------|
+| `supabase/migrations/049_juros_automaticos_config.sql` | Criado | Seeds das 4 chaves de juros |
+| `src/app/lib/juros.ts` | Modificado | Runtime mutável + getters/setters |
+| `src/app/hooks/useConfigSistema.ts` | Modificado | Campos de juros + `useSyncJurosConfig()` |
+| `src/app/App.tsx` | Modificado | `RuntimeConfigSync` dentro dos providers |
+| `src/app/pages/ConfigSistemaPage.tsx` | Modificado | Card "Juros Automáticos por Atraso" |
+| `src/app/pages/GestaoParcelasPage.tsx` | Modificado | `congelarJuros` por etapa Kanban |
+| `src/app/pages/KanbanCobrancaPage.tsx` | Modificado | Scroll horizontal reescrito |
+
+---
+
 ## [1.4.1] — 2026-04-22
 
 ### Adicionado — Botão manual de atualização na tela de login (desktop)
