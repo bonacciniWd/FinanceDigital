@@ -60,6 +60,7 @@ import { useConfigSistema } from '../hooks/useConfigSistema';
 import { supabase } from '../lib/supabase';
 import { valorCorrigido } from '../lib/juros';
 import { useAuth } from '../contexts/AuthContext';
+import { useClienteModal } from '../contexts/ClienteModalContext';
 import type { ParcelaUpdate } from '../lib/database.types';
 import type { KanbanCobrancaView, Emprestimo } from '../lib/view-types';
 import type { KanbanCobrancaEtapa } from '../lib/database.types';
@@ -95,6 +96,7 @@ const COLUMNS: ColumnDef[] = [
 export default function KanbanCobrancaPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { openClienteModal } = useClienteModal();
   const [selectedCard, setSelectedCard] = useState<KanbanCobrancaView | null>(null);
   const [busca, setBusca] = useState('');
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
@@ -129,13 +131,9 @@ export default function KanbanCobrancaPage() {
   const [comprovanteFile, setComprovanteFile] = useState<File | null>(null);
   const [comprovantePreview, setComprovantePreview] = useState<string | null>(null);
   const [quitarLoading, setQuitarLoading] = useState(false);
-  const [boardScrollWidth, setBoardScrollWidth] = useState(0);
 
   // Gerar PIX per parcela
   const [gerandoPixId, setGerandoPixId] = useState<string | null>(null);
-  const topScrollRef = useRef<HTMLDivElement | null>(null);
-  const boardScrollRef = useRef<HTMLDivElement | null>(null);
-  const syncingScrollRef = useRef<'top' | 'board' | null>(null);
 
   const { data: allCards = [], isLoading, error, refetch } = useCardsCobranca();
   const { data: emprestimos = [] } = useEmprestimos();
@@ -179,16 +177,6 @@ export default function KanbanCobrancaPage() {
       },
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const syncWidth = () => {
-      setBoardScrollWidth(boardScrollRef.current?.scrollWidth ?? 0);
-    };
-
-    syncWidth();
-    window.addEventListener('resize', syncWidth);
-    return () => window.removeEventListener('resize', syncWidth);
-  }, [allCards, isLoading]);
 
   const handleSyncManual = () => {
     syncCobrancas.mutate(undefined, {
@@ -272,19 +260,6 @@ export default function KanbanCobrancaPage() {
       : 0;
     return { total, negociacao, acordos, totalClientes, taxaConversao, totalPago };
   }, [allCards]);
-
-  const syncHorizontalScroll = (source: 'top' | 'board') => {
-    const from = source === 'top' ? topScrollRef.current : boardScrollRef.current;
-    const to = source === 'top' ? boardScrollRef.current : topScrollRef.current;
-    if (!from || !to) return;
-    if (syncingScrollRef.current && syncingScrollRef.current !== source) return;
-
-    syncingScrollRef.current = source;
-    to.scrollLeft = from.scrollLeft;
-    requestAnimationFrame(() => {
-      if (syncingScrollRef.current === source) syncingScrollRef.current = null;
-    });
-  };
 
   const handleDragStart = (e: React.DragEvent, cardId: string) => {
     e.dataTransfer.setData('cardId', cardId);
@@ -662,7 +637,7 @@ export default function KanbanCobrancaPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-8">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Kanban - Cobrança</h1>
@@ -690,15 +665,6 @@ export default function KanbanCobrancaPage() {
         
       ) : (
         <>
-          <div className="sticky top-0 z-10 bg-background/95 pb-2 backdrop-blur">
-            <div
-              ref={topScrollRef}
-              className="overflow-x-auto"
-              onScroll={() => syncHorizontalScroll('top')}
-            >
-              <div style={{ width: `${boardScrollWidth}px`, height: '1rem' }} />
-            </div>
-          </div>
           {/* Estatísticas */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <Card>
@@ -730,24 +696,25 @@ export default function KanbanCobrancaPage() {
           </CardContent>
         </Card>
       </div>
+          {/* Board: altura limitada ao viewport, scroll horizontal visivel na base
+              da tela; cada coluna tem scroll vertical interno. */}
           <div
-            ref={boardScrollRef}
-            className="flex gap-4 overflow-x-auto pb-4"
-            onScroll={() => syncHorizontalScroll('board')}
+            className="flex gap-4 overflow-x-auto overflow-y-hidden pb-2"
+            style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}
           >
           {COLUMNS.map((column) => {
             const cards = cardsByEtapa[column.id] || [];
             const isOver = dragOverColumn === column.id;
             return (
-              <div key={column.id} className="flex-shrink-0 w-80">
+              <div key={column.id} className="flex-shrink-0 w-[500px] h-full flex flex-col">
                 <Card
-                  className={`liquid-metal-column ${isOver ? 'dragging-over' : ''}`}
+                  className={`liquid-metal-column ${isOver ? 'dragging-over' : ''} flex flex-col h-full overflow-hidden`}
                   style={{ '--kanban-col-color': `${column.dotColor}88` } as React.CSSProperties}
                   onDragOver={(e) => handleDragOver(e, column.id)}
                   onDragLeave={() => setDragOverColumn(null)}
                   onDrop={(e) => handleDrop(e, column.id)}
                 >
-                  <CardHeader className="pb-3">
+                  <CardHeader className="pb-3 shrink-0">
                     <div className="flex items-center justify-between">
                       <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
                         <span className="kanban-status-dot" style={{ background: column.dotColor, '--dot-color': column.dotColor } as React.CSSProperties} />
@@ -756,7 +723,7 @@ export default function KanbanCobrancaPage() {
                       <Badge variant="secondary" className="font-semibold">{cards.length}</Badge>
                     </div>
                   </CardHeader>
-                  <CardContent className="space-y-3 min-h-[100px]">
+                  <CardContent className="space-y-3 overflow-y-auto flex-1 min-h-0">
                     {cards.length === 0 && (
                       <p className="text-xs text-muted-foreground text-center py-4 italic">Nenhum card nesta etapa</p>
                     )}
@@ -772,7 +739,17 @@ export default function KanbanCobrancaPage() {
                           <div className="space-y-2">
                             <div className="flex items-start justify-between">
                               <div className="flex-1 min-w-0">
-                                <div className="font-semibold text-sm text-foreground truncate">{card.clienteNome}</div>
+                                <button
+                                  type="button"
+                                  className="font-semibold text-sm text-foreground truncate text-left hover:text-primary hover:underline focus:outline-none"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openClienteModal(card.clienteId);
+                                  }}
+                                  title="Abrir detalhes do cliente"
+                                >
+                                  {card.clienteNome}
+                                </button>
                                 <div className="text-xs text-muted-foreground mt-0.5 truncate">{card.clienteTelefone}</div>
                               </div>
                               {card.diasAtraso > 0 && (
@@ -842,17 +819,17 @@ export default function KanbanCobrancaPage() {
                             </div>
                             <div className="flex gap-1 pt-2 relative">
                               <div className="flex-1 relative">
-                                <Button size="sm" variant="outline" className="flex-1 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); setChatMenuCard(chatMenuCard === card.id ? null : card.id); }}>
+                                <Button size="sm" variant="secondary" className="flex-1 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); setChatMenuCard(chatMenuCard === card.id ? null : card.id); }}>
                                   <MessageSquare className="w-3 h-3 mr-1" />Chat
                                 </Button>
                                 {chatMenuCard === card.id && (
-                                  <div className="absolute bottom-full left-0 mb-1 bg-popover border border-border rounded-lg shadow-lg z-50 w-56 p-1" onClick={(e) => e.stopPropagation()}>
-                                    <button className="w-full text-left px-3 py-2 text-xs hover:bg-muted rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(card.clienteTelefone))}`); }}>
-                                      <MessageSquare className="w-3.5 h-3.5 text-green-600" />
+                                  <div className="absolute bottom-full text-black left-0 mb-1 bg-white/80 border border-border rounded-lg shadow-lg z-50 w-96 p-1" onClick={(e) => e.stopPropagation()}>
+                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(card.clienteTelefone))}`); }}>
+                                      <MessageSquare className="w-6 h-6 text-green-600" />
                                       <span>WhatsApp Business (sistema)</span>
                                     </button>
-                                    <button className="w-full text-left px-3 py-2 text-xs hover:bg-muted rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); handleWhatsappDireto(card.clienteTelefone); }}>
-                                      <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
+                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); handleWhatsappDireto(card.clienteTelefone); }}>
+                                      <ExternalLink className="w-6 h-6 text-blue-600" />
                                       <span>WhatsApp App / Web</span>
                                     </button>
                                   </div>
@@ -872,7 +849,7 @@ export default function KanbanCobrancaPage() {
                                   <Archive className="w-4 h-4" />
                                 </Button>
                               )}
-                              <Button size="sm" variant="outline" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
+                              <Button size="sm" variant="default" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
                                 <ChevronRight className="w-4 h-4" />
                               </Button>
                             </div>
@@ -906,8 +883,6 @@ export default function KanbanCobrancaPage() {
           </div>
         </>
       )}
-
-      
 
       {/* Modal de Detalhes */}
       <Dialog open={!!selectedCard} onOpenChange={() => { setSelectedCard(null); setContatoObs(''); }}>

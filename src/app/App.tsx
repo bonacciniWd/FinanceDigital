@@ -13,8 +13,10 @@ import { RouterProvider } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { ClienteModalProvider } from './contexts/ClienteModalContext';
 import { Toaster } from './components/ui/sonner';
 import { router } from './routes';
+import { useSyncJurosConfig } from './hooks/useConfigSistema';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,13 +28,22 @@ const queryClient = new QueryClient({
   },
 });
 
+/** Sincroniza parâmetros configuráveis (juros) do banco → runtime da lib. */
+function RuntimeConfigSync() {
+  useSyncJurosConfig();
+  return null;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <RouterProvider router={router} />
-          <Toaster />
+          <ClienteModalProvider>
+            <RuntimeConfigSync />
+            <RouterProvider router={router} />
+            <Toaster />
+          </ClienteModalProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>

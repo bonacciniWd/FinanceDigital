@@ -47,15 +47,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // ── Helpers ──────────────────────────────────────────────
 
-  /** Detecta IP público do usuário */
+  /** Detecta IP público do usuário (com timeout curto para não travar o login) */
   const detectPublicIp = async (): Promise<string> => {
+    const fetchWithTimeout = async (url: string, ms = 3000): Promise<Response> => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), ms);
+      try {
+        return await fetch(url, { signal: ctrl.signal });
+      } finally {
+        clearTimeout(t);
+      }
+    };
     try {
-      const ipRes = await fetch('https://api.ipify.org?format=json');
+      const ipRes = await fetchWithTimeout('https://api.ipify.org?format=json');
       const ipData = await ipRes.json();
       return ipData.ip?.trim() ?? '';
     } catch {
       try {
-        const ipRes = await fetch('https://ifconfig.me/ip');
+        const ipRes = await fetchWithTimeout('https://ifconfig.me/ip');
         return (await ipRes.text()).trim();
       } catch {
         return '';
@@ -71,6 +80,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const isElectron = !!(window as any).electronAPI;
     if (isElectron) return { allowed: true }; // Electron has ip-guard.cjs
 
+    // Short-circuit: só consulta IP público se houver alguma restrição configurada.
+    // Isso evita esperar ipify quando o sistema está aberto a qualquer IP.
+    const [globalRes, profileRes] = await Promise.all([
+      supabase.from('allowed_ips').select('ip_address').eq('active', true),
+      (supabase as any).from('profiles').select('allowed_ips').eq('id', userId).single(),
+    ]);
+
+    const globalIps = globalRes.data ?? [];
+    const profileIps: string[] | null = profileRes.data?.allowed_ips ?? null;
+
+    const temRestricaoGlobal = globalIps.length > 0;
+    const temRestricaoProfile = !!(profileIps && profileIps.length > 0);
+
+    if (!temRestricaoGlobal && !temRestricaoProfile) {
+      return { allowed: true };
+    }
+
     const currentIp = await detectPublicIp();
     if (!currentIp) {
       console.warn('[Auth] Não foi possível detectar IP — permitindo acesso');
@@ -79,13 +105,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     console.log('[Auth] IP detectado:', currentIp);
 
-    // 1) Verifica whitelist global (tabela allowed_ips)
-    const { data: globalIps } = await supabase
-      .from('allowed_ips')
-      .select('ip_address')
-      .eq('active', true);
-
-    if (globalIps && globalIps.length > 0) {
+    // 1) Whitelist global
+    if (temRestricaoGlobal) {
       const { data: allowed, error: rpcErr } = await supabase.rpc('check_ip_allowed', {
         check_ip: currentIp,
       });
@@ -100,19 +121,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // 2) Verifica allowed_ips do profile (restrição individual)
-    const { data: profileData } = await (supabase as any)
-      .from('profiles')
-      .select('allowed_ips')
-      .eq('id', userId)
-      .single();
-
-    const profileIps: string[] | null = profileData?.allowed_ips;
-
-    if (profileIps && profileIps.length > 0) {
+    // 2) Restrição por profile
+    if (temRestricaoProfile) {
       const normalizeIp = (ip: string) => (ip || '').split('/')[0].trim();
       const normalizedCurrent = normalizeIp(currentIp);
-      const profileAllowed = profileIps.some((ip: string) => normalizeIp(ip) === normalizedCurrent);
+      const profileAllowed = profileIps!.some((ip: string) => normalizeIp(ip) === normalizedCurrent);
       console.log('[Auth] Profile IP check:', { currentIp: normalizedCurrent, profileIps, profileAllowed });
 
       if (!profileAllowed) {
@@ -178,14 +191,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function profileToAuthUser(profile: Profile): AuthUser {
-    return {
+    const authUser: AuthUser = {
       id: profile.id,
       name: profile.name,
       email: profile.email,
       role: profile.role,
       avatar: profile.avatar_url ?? undefined,
     };
+    // Cache local para restaurar role/nome antes do fetchProfile em background
+    try {
+      localStorage.setItem('fintechflow_profile_cache', JSON.stringify(authUser));
+    } catch { /* ignore */ }
+    return authUser;
   }
+
+  /** Monta um AuthUser mínimo a partir do session.user (sem esperar profile) */
+  function minimalAuthUserFromSession(sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }): AuthUser {
+    const meta = (sessionUser.user_metadata ?? {}) as { name?: string; role?: UserRole };
+    // Tenta recuperar role do cache local (último profile carregado) para não rebaixar admin→comercial
+    let cachedRole: UserRole | null = null;
+    let cachedName: string | null = null;
+    let cachedAvatar: string | null = null;
+    try {
+      const cached = JSON.parse(localStorage.getItem('fintechflow_profile_cache') ?? 'null');
+      if (cached && cached.id === sessionUser.id) {
+        cachedRole = cached.role ?? null;
+        cachedName = cached.name ?? null;
+        cachedAvatar = cached.avatar ?? null;
+      }
+    } catch { /* ignore */ }
+    return {
+      id: sessionUser.id,
+      name: cachedName ?? meta.name ?? sessionUser.email?.split('@')[0] ?? 'Usuário',
+      email: sessionUser.email ?? '',
+      role: (cachedRole ?? meta.role ?? 'comercial') as UserRole,
+      avatar: cachedAvatar ?? undefined,
+    };
+  }
+
+  /**
+   * Restaura sessão: seta user mínimo imediatamente e roda IP/profile em background.
+   * Garante que a UI não fica travada se ipify/profile demorarem.
+   */
+  const hydrateSessionInBackground = useCallback(
+    async (sessionUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }, ignoreRef: { current: boolean }) => {
+      try {
+        const ipCheck = await verifyIpAccess(sessionUser.id);
+        if (ignoreRef.current) return;
+        if (!ipCheck.allowed) {
+          console.warn('[Auth] IP bloqueado:', ipCheck.error);
+          setIpBlockedMsg(ipCheck.error ?? 'IP não autorizado');
+          await supabase.auth.signOut({ scope: 'local' });
+          setUser(null);
+          return;
+        }
+        const profile = await fetchProfile(sessionUser.id, sessionUser.email ?? undefined);
+        if (!ignoreRef.current && profile) setUser(profileToAuthUser(profile));
+      } catch (err) {
+        console.error('[Auth] hydrateSessionInBackground falhou:', err);
+        // Mantém o user mínimo — não derruba sessão válida
+      }
+    },
+    [verifyIpAccess, fetchProfile],
+  );
 
   // ── Inicialização ────────────────────────────────────────
 
@@ -194,6 +262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('fintechflow_user');
 
     let ignore = false;
+    const ignoreRef = { get current() { return ignore; }, set current(v: boolean) { ignore = v; } };
 
     // Usamos SOMENTE o listener onAuthStateChange para definir o estado inicial
     // e reagir a mudanças. Isso evita race conditions entre getSession() e o listener.
@@ -209,61 +278,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.log('[Auth] SIGNED_IN ignorado — login() controlará o user');
             return;
           }
-          // Aguarda 200ms para verificar se login() está prestes a rodar
-          // (SIGNED_IN pode disparar de sessão restaurada ANTES de login() setar a flag)
-          await new Promise((r) => setTimeout(r, 200));
-          if (ignore || loginInProgressRef.current) {
-            console.log('[Auth] SIGNED_IN ignorado após delay — login() assumiu');
-            return;
-          }
-          // Sessão restaurada sem login() ativo — verifica IP antes de confiar
-          const ipCheck = await verifyIpAccess(session.user.id);
-          if (!ipCheck.allowed) {
-            console.warn('[Auth] IP bloqueado na restauração de sessão:', ipCheck.error);
-            setIpBlockedMsg(ipCheck.error ?? 'IP não autorizado');
-            await supabase.auth.signOut({ scope: 'local' });
-            if (!ignore) setLoading(false);
-            return;
-          }
-          const profile = await fetchProfile(session.user.id, session.user.email);
-          if (!ignore && profile) setUser(profileToAuthUser(profile));
-          if (!ignore) setLoading(false);
+          // Sessão restaurada — só seta mínimo se ainda não houver user carregado
+          // (evita rebaixar role='comercial' em refresh silencioso)
+          setUser((prev) => prev ?? minimalAuthUserFromSession(session.user));
+          setLoading(false);
+          void hydrateSessionInBackground(session.user, ignoreRef);
         } else if (event === 'INITIAL_SESSION' && session?.user) {
-          // Sessão restaurada do localStorage — valida antes de confiar
+          // Sessão restaurada do localStorage — seta user mínimo imediatamente
           const expiresAt = session.expires_at ?? 0;
           const now = Math.floor(Date.now() / 1000);
-          let validSession = false;
 
           if (expiresAt > now) {
-            validSession = true;
+            setUser((prev) => prev ?? minimalAuthUserFromSession(session.user));
+            setLoading(false);
+            void hydrateSessionInBackground(session.user, ignoreRef);
           } else {
             // JWT expirado — aguarda o auto-refresh (até 3s)
             console.log('[Auth] JWT expirado, aguardando auto-refresh...');
-            await new Promise((r) => setTimeout(r, 3000));
-            if (ignore) return;
-            const { data: { session: refreshed } } = await supabase.auth.getSession();
-            if (refreshed?.user) {
-              validSession = true;
-            }
+            setLoading(false);
+            (async () => {
+              await new Promise((r) => setTimeout(r, 3000));
+              if (ignore) return;
+              const { data: { session: refreshed } } = await supabase.auth.getSession();
+              if (refreshed?.user && !ignore) {
+                setUser(minimalAuthUserFromSession(refreshed.user));
+                void hydrateSessionInBackground(refreshed.user, ignoreRef);
+              }
+            })();
           }
-
-          if (validSession) {
-            // Verifica IP antes de restaurar sessão
-            const ipCheck = await verifyIpAccess(session.user.id);
-            if (!ipCheck.allowed) {
-              console.warn('[Auth] IP bloqueado na restauração INITIAL_SESSION:', ipCheck.error);
-              setIpBlockedMsg(ipCheck.error ?? 'IP não autorizado');
-              await supabase.auth.signOut({ scope: 'local' });
-              if (!ignore) setLoading(false);
-              return;
-            }
-            const profile = await fetchProfile(session.user.id, session.user.email);
-            if (!ignore && profile) setUser(profileToAuthUser(profile));
-          }
-          if (!ignore) setLoading(false);
         } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-          // Refresh silencioso bem-sucedido
+          // Refresh silencioso bem-sucedido — se ainda não tem user, seta mínimo
           setLoading(false);
+          setUser((prev) => prev ?? minimalAuthUserFromSession(session.user));
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setLoading(false);
@@ -285,7 +331,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(fallbackTimer);
       subscription.unsubscribe();
     };
-  }, [fetchProfile, verifyIpAccess]);
+  }, [fetchProfile, verifyIpAccess, hydrateSessionInBackground]);
 
   // ── Periodic IP re-check (every 5 min) ──────────────────
 
@@ -322,27 +368,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { success: false, error: error.message };
       }
 
-      // ── IP restriction check ──
-      if (authData.user) {
-        const ipCheck = await verifyIpAccess(authData.user.id);
-        if (!ipCheck.allowed) {
-          loginInProgressRef.current = false;
-          await supabase.auth.signOut({ scope: 'local' });
-          return { success: false, error: ipCheck.error };
-        }
+      if (!authData.user) {
+        loginInProgressRef.current = false;
+        return { success: false, error: 'Resposta inválida do servidor.' };
       }
 
-      // ── Seta o user manualmente ──────────
-      if (authData.user) {
-        console.log('[Auth] Carregando profile...');
-        const profile = await fetchProfile(authData.user.id, authData.user.email ?? undefined);
-        if (profile) {
-          setUser(profileToAuthUser(profile));
-        }
-      }
-
-      loginInProgressRef.current = false;
+      // ── Seta user MÍNIMO imediatamente a partir do authData ──
+      // Isso libera a UI mesmo que verifyIpAccess / fetchProfile demorem.
+      const authUser = authData.user;
+      const fallbackName = (authUser.user_metadata?.name as string | undefined) ?? authUser.email?.split('@')[0] ?? 'Usuário';
+      const fallbackRole = ((authUser.user_metadata?.role as UserRole | undefined) ?? 'comercial') as UserRole;
+      setUser({
+        id: authUser.id,
+        name: fallbackName,
+        email: authUser.email ?? '',
+        role: fallbackRole,
+      });
       setLoading(false);
+
+      // ── IP check + profile em background (não bloqueia a UI) ──
+      (async () => {
+        try {
+          const ipCheck = await verifyIpAccess(authUser.id);
+          if (!ipCheck.allowed) {
+            setIpBlockedMsg(ipCheck.error ?? 'IP não autorizado');
+            await supabase.auth.signOut({ scope: 'local' });
+            setUser(null);
+            return;
+          }
+          const profile = await fetchProfile(authUser.id, authUser.email ?? undefined);
+          if (profile) setUser(profileToAuthUser(profile));
+        } catch (err) {
+          console.error('[Auth] post-login background check falhou:', err);
+          // Mantém o user mínimo — não derruba a sessão
+        } finally {
+          loginInProgressRef.current = false;
+        }
+      })();
+
       return { success: true };
     } catch (e) {
       console.error('[Auth] login error:', e);
@@ -405,6 +468,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // best-effort
     } finally {
+      try { localStorage.removeItem('fintechflow_profile_cache'); } catch { /* ignore */ }
       setUser(null);
     }
   }

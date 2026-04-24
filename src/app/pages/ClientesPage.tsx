@@ -32,6 +32,7 @@ import { cn } from '../components/ui/utils';
 import { supabase } from '../lib/supabase';
 import type { Cliente } from '../lib/view-types';
 import type { ClienteInsert, ClienteUpdate, Sexo } from '../lib/database.types';
+import { useClienteModal } from '../contexts/ClienteModalContext';
 
 type ViewMode = 'table' | 'cards';
 
@@ -91,6 +92,7 @@ export default function ClientesPage() {
   const { data: parcelasCliente = [], isLoading: loadingParcelas } = useParcelasByCliente(selectedClient?.id);
   const createCliente = useCreateCliente();
   const updateCliente = useUpdateCliente();
+  const { openClienteModal } = useClienteModal();
 
   // IBGE cidades
   const [cidadesLista, setCidadesLista] = useState<string[]>([]);
@@ -603,7 +605,9 @@ export default function ClientesPage() {
                     <tr key={cliente.id} className="border-b hover:bg-muted/50">
                       <td className="py-3 px-4">
                         <div>
+                          <button onClick={() => openClienteModal(cliente.id, { tab: 'whatsapp' })}>
                           <div className="font-medium">{cliente.nome}</div>
+                          </button>
                           <div className="text-sm text-muted-foreground flex items-center gap-2">
                             📧 {cliente.email}
                           </div>

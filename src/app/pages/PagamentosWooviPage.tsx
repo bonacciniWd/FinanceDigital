@@ -20,6 +20,7 @@ import {
   Banknote,
   DollarSign,
   ShieldAlert,
+  Copy,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -190,13 +191,22 @@ export default function PagamentosWooviPage() {
   const emprestimosAprovados = useMemo(() => {
     if (!analises || !emprestimos.length) return [];
     const analisesAprovadas = new Set(analises.filter((a) => a.status === 'aprovado').map((a) => a.id));
+    const clienteById = new Map(clientes.map((c) => [c.id, c]));
     return emprestimos
       .filter((e) => e.analiseId && analisesAprovadas.has(e.analiseId))
       .map((e) => {
         const analise = analises.find((a) => a.id === e.analiseId);
-        return { ...e, clienteNome: analise?.clienteNome ?? e.clienteNome ?? '' };
+        const cliente = clienteById.get(e.clienteId);
+        return {
+          ...e,
+          clienteNome: analise?.clienteNome ?? e.clienteNome ?? '',
+          pixKey: cliente?.pix_key ?? null,
+          pixKeyType: cliente?.pix_key_type ?? null,
+          clienteCpf: cliente?.cpf ?? null,
+          clienteTelefone: cliente?.telefone ?? null,
+        };
       });
-  }, [analises, emprestimos]);
+  }, [analises, emprestimos, clientes]);
 
   const aguardandoEnvio = emprestimosAprovados.filter((e) => !e.desembolsado);
   const jaEnviados = emprestimosAprovados.filter((e) => e.desembolsado);
@@ -710,7 +720,7 @@ export default function PagamentosWooviPage() {
               </SelectContent>
             </Select>
           </div>
-
+§
           {loadingCharges ? (
             <p className="text-muted-foreground text-sm">Carregando...</p>
           ) : filteredCharges.length === 0 ? (
@@ -887,27 +897,74 @@ export default function PagamentosWooviPage() {
                   <div className="mb-4">
                     <p className="text-sm font-medium text-amber-600 dark:text-amber-400 mb-2">⏳ Aguardando Envio do Dinheiro</p>
                     <div className="space-y-2">
-                      {aguardandoEnvio.map((e) => (
-                        <div key={e.id} className="flex items-center justify-between p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{e.clienteNome}</span>
-                            {e.skipVerification && (
-                              <Badge variant="outline" className="text-[10px] h-4 px-1 bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-400">sem verificação</Badge>
-                            )}
-                            <span className="text-muted-foreground text-sm">{formatCurrency(e.valor)}</span>
-                            <span className="text-muted-foreground text-xs">{new Date(e.dataContrato).toLocaleDateString('pt-BR')}</span>
+                      {aguardandoEnvio.map((e) => {
+                        const pixLabel = e.pixKeyType
+                          ? `${e.pixKeyType.toUpperCase()}: ${e.pixKey}`
+                          : e.pixKey ?? '';
+                        return (
+                          <div key={e.id} className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20 space-y-2">
+                            <div className="flex items-start justify-between gap-3 flex-wrap">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium">{e.clienteNome}</span>
+                                {e.skipVerification && (
+                                  <Badge variant="outline" className="text-[10px] h-4 px-1 bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-400">sem verificação</Badge>
+                                )}
+                                <span className="text-muted-foreground text-sm">{formatCurrency(e.valor)}</span>
+                                <span className="text-muted-foreground text-xs">{new Date(e.dataContrato).toLocaleDateString('pt-BR')}</span>
+                              </div>
+                              <Button
+                                size="sm"
+                                className="bg-green-600 hover:bg-green-700 text-white"
+                                onClick={() => handleMarcarDesembolsado(e.id)}
+                                disabled={markingDesembolso === e.id}
+                              >
+                                <DollarSign className="w-4 h-4 mr-1" />
+                                {markingDesembolso === e.id ? 'Marcando...' : 'Marcar Enviado'}
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap text-xs bg-background/60 rounded border border-amber-500/20 px-2 py-1.5">
+                              {e.pixKey ? (
+                                <>
+                                  <span className="text-muted-foreground">PIX:</span>
+                                  <span className="font-mono font-medium truncate max-w-xs">{pixLabel}</span>
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 text-primary hover:text-primary/80"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(e.pixKey ?? '');
+                                      toast.success('Chave PIX copiada!');
+                                    }}
+                                    title="Copiar chave PIX"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                    copiar
+                                  </button>
+                                  <span className="text-muted-foreground">•</span>
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 text-primary hover:text-primary/80"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(e.valor.toFixed(2).replace('.', ','));
+                                      toast.success('Valor copiado!');
+                                    }}
+                                    title="Copiar valor"
+                                  >
+                                    <Copy className="w-3 h-3" />
+                                    valor
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="text-red-600 dark:text-red-400">⚠️ Cliente sem PIX cadastrada — cadastre na ficha do cliente antes de enviar.</span>
+                              )}
+                              {e.clienteCpf && (
+                                <>
+                                  <span className="text-muted-foreground ml-auto">CPF: <span className="font-mono">{e.clienteCpf}</span></span>
+                                </>
+                              )}
+                            </div>
                           </div>
-                          <Button
-                            size="sm"
-                            className="bg-green-600 hover:bg-green-700 text-white"
-                            onClick={() => handleMarcarDesembolsado(e.id)}
-                            disabled={markingDesembolso === e.id}
-                          >
-                            <DollarSign className="w-4 h-4 mr-1" />
-                            {markingDesembolso === e.id ? 'Marcando...' : 'Marcar Enviado'}
-                          </Button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ) : (

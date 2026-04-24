@@ -15,16 +15,36 @@ import type {
 
 /** Buscar todas as parcelas com nome do cliente */
 export async function getParcelas(status?: string): Promise<ParcelaComCliente[]> {
-  let query = supabase
-    .from('parcelas')
-    .select('*, clientes(nome)')
-    .order('data_vencimento');
+  // Paginação: o Supabase limita a 1000 rows por request por padrão.
+  // Buscamos em lotes de 1000 até trazer tudo, para a Gestão de Parcelas
+  // refletir o estado completo (métricas, filtros pendentes/vencidas/pagas).
+  const pageSize = 1000;
+  const all: ParcelaComCliente[] = [];
+  let from = 0;
 
-  if (status) query = query.eq('status', status);
+  for (;;) {
+    let query = supabase
+      .from('parcelas')
+      .select('*, clientes(nome)')
+      .order('data_vencimento', { ascending: false })
+      .range(from, from + pageSize - 1);
 
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-  return (data ?? []) as ParcelaComCliente[];
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+
+    const batch = (data ?? []) as ParcelaComCliente[];
+    all.push(...batch);
+
+    if (batch.length < pageSize) break;
+    from += pageSize;
+
+    // Guarda de segurança: não ultrapassa 50k parcelas
+    if (from >= 50000) break;
+  }
+
+  return all;
 }
 
 /** Buscar parcelas de um empréstimo específico */

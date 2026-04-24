@@ -38,6 +38,7 @@ import { useAdminUsers } from '../hooks/useAdminUsers';
 import { useContasBancarias } from '../hooks/useContasBancarias';
 import { useCriarCobvEfi } from '../hooks/useWoovi';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
+import { useClienteModal } from '../contexts/ClienteModalContext';
 import { supabase } from '../lib/supabase';
 import type { Emprestimo, Parcela, Cliente } from '../lib/view-types';
 import { calcularJurosAtraso, diasDeAtraso } from '../lib/juros';
@@ -45,6 +46,7 @@ import { calcularJurosAtraso, diasDeAtraso } from '../lib/juros';
 export default function EmprestimosAtivosPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { openClienteModal } = useClienteModal();
   const [selectedEmprestimo, setSelectedEmprestimo] = useState<Emprestimo | null>(null);
   const [filtroStatus, setFiltroStatus] = useState('todos');
   const [searchTerm, setSearchTerm] = useState('');
@@ -316,7 +318,16 @@ export default function EmprestimosAtivosPage() {
                 ) : (
                   filtered.map((e) => (
                     <tr key={e.id} className="border-b hover:bg-muted/50">
-                      <td className="py-3 font-medium">{e.clienteNome}</td>
+                      <td className="py-3 font-medium">
+                        <button
+                          type="button"
+                          className="hover:text-primary hover:underline text-left"
+                          title="Abrir detalhes do cliente"
+                          onClick={() => openClienteModal(e.clienteId)}
+                        >
+                          {e.clienteNome}
+                        </button>
+                      </td>
                       <td className="py-3 text-right">{formatCurrency(e.valor)}</td>
                       <td className="py-3 text-center">{e.parcelasPagas}/{e.parcelas}</td>
                       <td className="py-3 w-32">

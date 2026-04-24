@@ -555,7 +555,7 @@ export default function AnaliseCreditoPage() {
 
       {/* Modal Nova Análise */}
       <Dialog open={showNovaAnalise} onOpenChange={setShowNovaAnalise}>
-        <DialogContent className="min-w-[700px]">
+        <DialogContent className="min-w-[700px] max-h-[90vh] overflow-y-scroll">
           <DialogHeader>
             <DialogTitle>Nova Análise de Crédito</DialogTitle>
           </DialogHeader>

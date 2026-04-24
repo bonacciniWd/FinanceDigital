@@ -467,11 +467,11 @@ Deno.serve(async (req: Request) => {
       console.log(`[approve-credit] PIX key recebida no body: ${pix_key} (tipo: ${pix_key_type})`);
     }
 
-    if (!pix_key || !pix_key_type) {
-      return new Response(
-        JSON.stringify({ error: "Chave PIX não encontrada. Informe pix_key e pix_key_type ou cadastre no perfil do cliente." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // PIX key não é obrigatória — se ausente, apenas pula o desembolso automático
+    // e o empréstimo fica aguardando envio manual na tela de Pagamentos > Desembolsos.
+    const hasPixKey = !!(pix_key && pix_key_type);
+    if (!hasPixKey) {
+      console.log("[approve-credit] Cliente sem PIX cadastrada — empréstimo será marcado para desembolso manual.");
     }
 
     if (analise.status !== "em_analise" && analise.status !== "pendente") {
@@ -606,7 +606,7 @@ Deno.serve(async (req: Request) => {
     // ── Liberar via Pix (EFI ou Woovi, conforme gateway ativo) ──
     let paymentResult = null;
     let usedGateway = "woovi";
-    if (desembolsoAutomaticoAtivo) {
+    if (desembolsoAutomaticoAtivo && hasPixKey) {
       try {
         const activeGw = await detectActiveGateway(adminClient);
 
@@ -663,7 +663,10 @@ Deno.serve(async (req: Request) => {
         console.log(`[approve-credit] Empréstimo ${emprestimo!.id} criado mas aguardando desembolso manual.`);
       }
     } else {
-      console.log(`[approve-credit] Desembolso automático desativado. Empréstimo ${emprestimo!.id} aguardando desembolso manual.`);
+      const motivo = !hasPixKey
+        ? "Sem chave PIX do cliente"
+        : "Desembolso automático desativado";
+      console.log(`[approve-credit] ${motivo}. Empréstimo ${emprestimo!.id} aguardando desembolso manual.`);
     }
 
     // ── Atualizar análise para aprovado ─────────────────

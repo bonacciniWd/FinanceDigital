@@ -13,7 +13,7 @@ import { Skeleton } from '../components/ui/skeleton';
 import { Settings2, MessageSquare, Receipt, Percent, AlertTriangle, Calculator, Handshake, Banknote } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfigSistema, useUpdateConfig } from '../hooks/useConfigSistema';
-import { JUROS_FIXO_DIA, JUROS_PERC_DIA, JUROS_LIMIAR } from '../lib/juros';
+import { JUROS_FIXO_DIA_DEFAULT, JUROS_PERC_DIA_DEFAULT, JUROS_LIMIAR_DEFAULT, JUROS_DIAS_MAX_DEFAULT } from '../lib/juros';
 
 export default function ConfigSistemaPage() {
   const { data: config, isLoading, isError } = useConfigSistema();
@@ -295,20 +295,85 @@ export default function ConfigSistemaPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900/30 p-4">
-              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Dívida abaixo de R$ {JUROS_LIMIAR.toLocaleString('pt-BR')}</p>
-              <p className="text-2xl font-bold text-amber-700 dark:text-amber-400 mt-1">R$ {JUROS_FIXO_DIA},00 <span className="text-sm font-normal">/ dia</span></p>
-              <p className="text-xs text-muted-foreground mt-1">Valor fixo por dia de atraso</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-900/30 p-4 space-y-2">
+              <Label htmlFor="juros_fixo_dia" className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                Valor fixo por dia (R$)
+              </Label>
+              <Input
+                id="juros_fixo_dia"
+                type="number"
+                min={0}
+                step={1}
+                defaultValue={config.juros_fixo_dia}
+                onBlur={(e) => handleNumber('juros_fixo_dia', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Aplicado quando a dívida é menor que o limiar abaixo. Padrão: R$ {JUROS_FIXO_DIA_DEFAULT}.
+              </p>
             </div>
-            <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-900/30 p-4">
-              <p className="text-sm font-semibold text-red-800 dark:text-red-300">Dívida a partir de R$ {JUROS_LIMIAR.toLocaleString('pt-BR')}</p>
-              <p className="text-2xl font-bold text-red-700 dark:text-red-400 mt-1">{(JUROS_PERC_DIA * 100).toFixed(0)}% <span className="text-sm font-normal">/ dia</span></p>
-              <p className="text-xs text-muted-foreground mt-1">Percentual do valor original por dia de atraso</p>
+            <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-900/30 p-4 space-y-2">
+              <Label htmlFor="juros_perc_dia" className="text-sm font-semibold text-red-800 dark:text-red-300">
+                Percentual por dia (%)
+              </Label>
+              <Input
+                id="juros_perc_dia"
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                defaultValue={+(config.juros_perc_dia * 100).toFixed(2)}
+                onBlur={(e) => {
+                  const num = parseFloat(e.target.value);
+                  if (isNaN(num) || num < 0) return;
+                  handleNumber('juros_perc_dia', String(num / 100));
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Aplicado quando a dívida ≥ limiar. Padrão: {(JUROS_PERC_DIA_DEFAULT * 100).toFixed(0)}% / dia.
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-950/20 dark:border-slate-800 p-4 space-y-2">
+              <Label htmlFor="juros_limiar" className="text-sm font-semibold">
+                Limiar fixo/percentual (R$)
+              </Label>
+              <Input
+                id="juros_limiar"
+                type="number"
+                min={0}
+                step={100}
+                defaultValue={config.juros_limiar}
+                onBlur={(e) => handleNumber('juros_limiar', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Divide a regra fixa da percentual. Padrão: R$ {JUROS_LIMIAR_DEFAULT.toLocaleString('pt-BR')}.
+              </p>
+            </div>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-900/30 p-4 space-y-2">
+              <Label htmlFor="juros_dias_max" className="text-sm font-semibold text-blue-800 dark:text-blue-300">
+                Limite de dias de acumulação
+              </Label>
+              <Input
+                id="juros_dias_max"
+                type="number"
+                min={1}
+                step={1}
+                defaultValue={config.juros_dias_max}
+                onBlur={(e) => handleNumber('juros_dias_max', e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Juros param de correr após esse nº de dias de atraso. Padrão: {JUROS_DIAS_MAX_DEFAULT} dias.
+              </p>
             </div>
           </div>
+          <div className="mt-4 p-3 rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-950/20 dark:border-slate-800 text-xs">
+            <p className="font-semibold text-slate-800 dark:text-slate-300">🗄 Dívida congelada</p>
+            <p className="text-muted-foreground mt-1">
+              Quando o card do cliente está no Kanban em <strong>Arquivado</strong> ou <strong>Perdido</strong>, os juros de mora param de correr automaticamente (independente da configuração acima).
+            </p>
+          </div>
           <div className="mt-4 p-3 rounded-lg bg-muted/50 text-xs text-muted-foreground">
-            <p><strong>Nota:</strong> Juros são calculados automaticamente em tempo real sobre parcelas vencidas não pagas. Se um juros manual for atribuído à parcela, o cálculo automático não é aplicado. Para alterar as regras, edite o arquivo <code>src/app/lib/juros.ts</code>.</p>
+            <p><strong>Nota:</strong> Juros são calculados em tempo real sobre parcelas vencidas não pagas. Se um juros manual for atribuído à parcela, o cálculo automático não é aplicado. Alterações são propagadas a toda a aplicação em poucos segundos após salvar.</p>
           </div>
         </CardContent>
       </Card>

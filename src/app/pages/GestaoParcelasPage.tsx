@@ -9,7 +9,7 @@
  * @route /clientes/gestao-parcelas
  * @access Protegido — perfis admin, gerente, operador
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -29,15 +29,20 @@ import { useParcelas, useRegistrarPagamento, useUpdateParcela } from '../hooks/u
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useCriarCobrancaEfi, useCobrancasWoovi } from '../hooks/useWoovi';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
+import { useCardsCobranca } from '../hooks/useKanbanCobranca';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { useClienteModal } from '../contexts/ClienteModalContext';
 import type { Parcela } from '../lib/view-types';
 import type { ParcelaUpdate } from '../lib/database.types';
 import { calcularJurosAtraso, diasDeAtraso, valorCorrigido } from '../lib/juros';
 
+/** Etapas do kanban em que juros param de correr (dívida congelada) */
+const ETAPAS_CONGELA_JUROS = new Set(['arquivado', 'perdido']);
+
 /** Valor total corrigido de uma parcela (original + juros + multa - desconto) */
-const parcelaTotal = (p: Parcela) =>
-  valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
+const calcParcelaTotal = (p: Parcela, congelarJuros = false) =>
+  valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, { congelarJuros }).total;
 
 /* ── Types ───────────────────────────────────────────────── */
 
@@ -94,8 +99,26 @@ const empStatusBadge = (s: string) => {
 
 export default function GestaoParcelasPage() {
   const { user } = useAuth();
+  const { openClienteModal } = useClienteModal();
   const { data: parcelas = [], isLoading: loadingP, isError: errorP } = useParcelas();
   const { data: emprestimos = [], isLoading: loadingE } = useEmprestimos();
+  const { data: cardsKanban = [] } = useCardsCobranca();
+
+  // Set de clienteIds cujos cards estão em etapa "arquivado" ou "perdido" — juros param de correr
+  const clientesCongelados = useMemo(() => {
+    const s = new Set<string>();
+    for (const card of cardsKanban) {
+      if (card.clienteId && ETAPAS_CONGELA_JUROS.has(card.etapa)) {
+        s.add(card.clienteId);
+      }
+    }
+    return s;
+  }, [cardsKanban]);
+
+  const parcelaTotal = useCallback(
+    (p: Parcela) => calcParcelaTotal(p, clientesCongelados.has(p.clienteId)),
+    [clientesCongelados],
+  );
   const registrarPagamento = useRegistrarPagamento();
   const updateParcela = useUpdateParcela();
   const criarCobrancaEfi = useCriarCobrancaEfi();
@@ -233,11 +256,15 @@ export default function GestaoParcelasPage() {
     const pendentes = parcelas.filter(p => p.status === 'pendente');
     const vencidas = parcelas.filter(p => p.status === 'vencida');
     const pagas = parcelas.filter(p => p.status === 'paga');
+    // Usa valor ORIGINAL (principal) nas métricas — juros de atraso crescem
+    // 10% ao dia (src/app/lib/juros.ts) e distorcem totais agregados.
+    // O valor corrigido com juros aparece no card individual de cada parcela.
+    const somaOriginal = (arr: Parcela[]) => arr.reduce((a, p) => a + (p.valorOriginal ?? p.valor), 0);
     return {
       totalPendentes: pendentes.length,
-      valorPendentes: pendentes.reduce((a, p) => a + parcelaTotal(p), 0),
+      valorPendentes: somaOriginal(pendentes),
       totalVencidas: vencidas.length,
-      valorVencidas: vencidas.reduce((a, p) => a + parcelaTotal(p), 0),
+      valorVencidas: somaOriginal(vencidas),
       totalPagas: pagas.length,
       valorPagas: pagas.reduce((a, p) => a + p.valor, 0),
       total: parcelas.length,
@@ -395,9 +422,13 @@ export default function GestaoParcelasPage() {
         </div>
       </div>
 
-      {/* Métricas */}
+      {/* Métricas — clique em um card para filtrar */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
+        <Card
+          role="button"
+          onClick={() => setFiltroStatus(filtroStatus === 'pendente' ? 'todos' : 'pendente')}
+          className={`cursor-pointer transition-all hover:border-yellow-500/50 hover:shadow-md ${filtroStatus === 'pendente' ? 'border-yellow-500 ring-2 ring-yellow-500/30' : ''}`}
+        >
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Pendentes</CardTitle>
             <Clock className="w-4 h-4 text-yellow-500" />
@@ -407,7 +438,11 @@ export default function GestaoParcelasPage() {
             <p className="text-xs text-muted-foreground mt-1">{formatCurrency(metricas.valorPendentes)}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          role="button"
+          onClick={() => setFiltroStatus(filtroStatus === 'vencida' ? 'todos' : 'vencida')}
+          className={`cursor-pointer transition-all hover:border-red-500/50 hover:shadow-md ${filtroStatus === 'vencida' ? 'border-red-500 ring-2 ring-red-500/30' : ''}`}
+        >
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Vencidas</CardTitle>
             <AlertTriangle className="w-4 h-4 text-red-500" />
@@ -417,7 +452,11 @@ export default function GestaoParcelasPage() {
             <p className="text-xs text-muted-foreground mt-1">{formatCurrency(metricas.valorVencidas)}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          role="button"
+          onClick={() => setFiltroStatus(filtroStatus === 'paga' ? 'todos' : 'paga')}
+          className={`cursor-pointer transition-all hover:border-green-500/50 hover:shadow-md ${filtroStatus === 'paga' ? 'border-green-500 ring-2 ring-green-500/30' : ''}`}
+        >
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Pagas</CardTitle>
             <CheckCircle className="w-4 h-4 text-green-500" />
@@ -427,7 +466,11 @@ export default function GestaoParcelasPage() {
             <p className="text-xs text-muted-foreground mt-1">{formatCurrency(metricas.valorPagas)}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          role="button"
+          onClick={() => setFiltroStatus('todos')}
+          className={`cursor-pointer transition-all hover:border-primary/50 hover:shadow-md ${filtroStatus === 'todos' ? 'border-primary ring-2 ring-primary/30' : ''}`}
+        >
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total</CardTitle>
             <Receipt className="w-4 h-4 text-muted-foreground" />
@@ -530,7 +573,16 @@ export default function GestaoParcelasPage() {
                         : <ChevronRight className="w-5 h-5 text-muted-foreground" />}
                       <User className="w-5 h-5 text-primary" />
                       <div>
-                        <CardTitle className="text-base">{grupo.clienteNome}</CardTitle>
+                        <CardTitle
+                          className="text-base hover:text-primary hover:underline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openClienteModal(grupo.clienteId);
+                          }}
+                          title="Abrir detalhes do cliente"
+                        >
+                          {grupo.clienteNome}
+                        </CardTitle>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {grupo.emprestimos.length} empréstimo(s)
                         </p>

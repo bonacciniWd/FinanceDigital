@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-const CACHE_NAME = 'fintech-digital-v1';
+const CACHE_NAME = 'fintech-digital-v2';
 const OFFLINE_URL = '/';
 
 // Assets to cache on install
@@ -40,8 +40,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets: cache-first
-  if (request.url.match(/\.(js|css|svg|png|jpg|webp|woff2?)$/)) {
+  // JS/CSS: NETWORK-FIRST (evita servir bundles antigos após deploy).
+  // Só cacheia para fallback offline.
+  if (request.url.match(/\.(js|css)$/)) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // Imagens/fontes: cache-first (dificilmente mudam)
+  if (request.url.match(/\.(svg|png|jpg|jpeg|webp|woff2?)$/)) {
     event.respondWith(
       caches.match(request).then((cached) =>
         cached || fetch(request).then((response) => {
@@ -54,7 +69,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation: network-first, fallback to cached index
+  // Navegação (documento HTML): network-first, fallback cache
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request).catch(() => caches.match(OFFLINE_URL))
@@ -62,7 +77,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Default: network with cache fallback
+  // Default: network com fallback cache
   event.respondWith(
     fetch(request).catch(() => caches.match(request))
   );

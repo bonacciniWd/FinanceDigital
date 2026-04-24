@@ -2,32 +2,74 @@
  * @module juros
  * @description Configuração global de juros automáticos por atraso.
  *
- * Regra:
- *  - Valor original < R$1.000 → R$100 / dia de atraso
- *  - Valor original ≥ R$1.000 → 10% do valor original / dia de atraso
+ * Regra padrão (overridável via `configuracoes_sistema` no Supabase):
+ *  - Valor original < limiar → fixo R$/dia de atraso
+ *  - Valor original ≥ limiar → percentual do valor original / dia
+ *  - Juros param de correr após `juros_dias_max` dias de atraso
+ *  - Quando o empréstimo está arquivado/perdido no Kanban, juros também
+ *    param (ver `valorCorrigido` com `options.congelarJuros`).
+ *
+ * Os valores podem ser alterados em runtime via `setJurosConfig(...)`.
+ * O hook `useSyncJurosConfig` (chamado em App.tsx) propaga mudanças do
+ * banco automaticamente.
  */
 
-/** Valor fixo diário para dívidas abaixo do limiar */
-export const JUROS_FIXO_DIA = 100; // R$
+/** Defaults — usados se o banco não tiver valor configurado */
+export const JUROS_FIXO_DIA_DEFAULT = 100;   // R$
+export const JUROS_PERC_DIA_DEFAULT = 0.10;  // 10%
+export const JUROS_LIMIAR_DEFAULT = 1_000;   // R$
+export const JUROS_DIAS_MAX_DEFAULT = 365;   // dias
 
-/** Percentual diário para dívidas ≥ limiar */
-export const JUROS_PERC_DIA = 0.10; // 10%
+/** Runtime mutável — atualizado por setJurosConfig */
+const runtime = {
+  fixoDia: JUROS_FIXO_DIA_DEFAULT,
+  percDia: JUROS_PERC_DIA_DEFAULT,
+  limiar: JUROS_LIMIAR_DEFAULT,
+  diasMax: JUROS_DIAS_MAX_DEFAULT,
+};
 
-/** Limiar que separa regra fixa da percentual */
-export const JUROS_LIMIAR = 1_000; // R$
+/** Retrocompat — leitura pontual (snapshot do runtime no momento do import) */
+export const JUROS_FIXO_DIA = runtime.fixoDia;
+export const JUROS_PERC_DIA = runtime.percDia;
+export const JUROS_LIMIAR = runtime.limiar;
+export const JUROS_DIAS_MAX = runtime.diasMax;
+
+export interface JurosConfigPartial {
+  fixoDia?: number;
+  percDia?: number;
+  limiar?: number;
+  diasMax?: number;
+}
+
+/** Atualiza os parâmetros de juros em runtime. Valores inválidos são ignorados. */
+export function setJurosConfig(partial: JurosConfigPartial): void {
+  if (typeof partial.fixoDia === 'number' && partial.fixoDia >= 0) runtime.fixoDia = partial.fixoDia;
+  if (typeof partial.percDia === 'number' && partial.percDia >= 0) runtime.percDia = partial.percDia;
+  if (typeof partial.limiar === 'number' && partial.limiar >= 0) runtime.limiar = partial.limiar;
+  if (typeof partial.diasMax === 'number' && partial.diasMax >= 0) runtime.diasMax = Math.floor(partial.diasMax);
+}
+
+/** Retorna snapshot atual dos parâmetros de juros em runtime. */
+export function getJurosConfig() {
+  return {
+    fixoDia: runtime.fixoDia,
+    percDia: runtime.percDia,
+    limiar: runtime.limiar,
+    diasMax: runtime.diasMax,
+  };
+}
 
 /**
  * Calcula juros automáticos com base no valor original e dias de atraso.
- * @param valorOriginal Valor da parcela sem juros/multa
- * @param diasAtraso    Dias corridos após o vencimento (≤ 0 retorna 0)
- * @returns Valor de juros em R$
+ * Usa os parâmetros de runtime (configuráveis).
  */
 export function calcularJurosAtraso(valorOriginal: number, diasAtraso: number): number {
   if (diasAtraso <= 0 || valorOriginal <= 0) return 0;
-  if (valorOriginal < JUROS_LIMIAR) {
-    return JUROS_FIXO_DIA * diasAtraso;
+  const dias = Math.min(diasAtraso, runtime.diasMax);
+  if (valorOriginal < runtime.limiar) {
+    return runtime.fixoDia * dias;
   }
-  return Math.round(valorOriginal * JUROS_PERC_DIA * diasAtraso * 100) / 100;
+  return Math.round(valorOriginal * runtime.percDia * dias * 100) / 100;
 }
 
 /**
@@ -47,11 +89,15 @@ export function diasDeAtraso(dataVencimento: string | Date): number {
 /**
  * Retorna o valor total corrigido (valorOriginal + juros automáticos).
  * Usa juros do banco se já preenchido; caso contrário calcula automaticamente.
+ *
  * @param valorOriginal  Valor base da parcela
  * @param dataVencimento Data de vencimento
  * @param jurosManual    Juros já registrado no banco (default 0)
  * @param multa          Multa já registrada (default 0)
  * @param desconto       Desconto aplicado (default 0)
+ * @param options        { congelarJuros?: boolean } — se true (ex.: empréstimo
+ *                       arquivado ou perdido no kanban), juros param de correr
+ *                       e o total retorna apenas valorOriginal + jurosManual + multa - desconto.
  */
 export function valorCorrigido(
   valorOriginal: number,
@@ -59,9 +105,15 @@ export function valorCorrigido(
   jurosManual = 0,
   multa = 0,
   desconto = 0,
+  options: { congelarJuros?: boolean } = {},
 ): { total: number; juros: number; dias: number } {
   const dias = diasDeAtraso(dataVencimento);
-  const juros = jurosManual > 0 ? jurosManual : calcularJurosAtraso(valorOriginal, dias);
+  let juros: number;
+  if (options.congelarJuros) {
+    juros = jurosManual > 0 ? jurosManual : 0;
+  } else {
+    juros = jurosManual > 0 ? jurosManual : calcularJurosAtraso(valorOriginal, dias);
+  }
   const total = Math.max(valorOriginal + juros + multa - desconto, 0);
-  return { total, juros, dias };
+  return { total, juros, dias: Math.min(dias, runtime.diasMax) };
 }

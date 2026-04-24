@@ -21,6 +21,7 @@ import { Search, Loader2, AlertCircle, CheckCircle, XCircle, Clock, FileText, Sh
 import { toast } from 'sonner';
 import { useAnalises, useUpdateAnalise } from '../hooks/useAnaliseCredito';
 import { useAuth } from '../contexts/AuthContext';
+import { useClienteModal } from '../contexts/ClienteModalContext';
 import { supabase } from '../lib/supabase';
 import AnaliseDetalhadaModal from '../components/AnaliseDetalhadaModal';
 import type { AnaliseCredito } from '../lib/view-types';
@@ -47,6 +48,7 @@ export default function KanbanAnalisePage() {
   const { data: allAnalises = [], isLoading, error } = useAnalises();
   const updateAnalise = useUpdateAnalise();
   const { user } = useAuth();
+  const { openClienteModal } = useClienteModal();
 
   // ── Contagem de verificações pendentes com mídia ─────────
   const [pendingVerifCount, setPendingVerifCount] = useState(0);
@@ -220,7 +222,22 @@ export default function KanbanAnalisePage() {
                         onClick={() => setSelectedAnalise(item)}
                       >
                         <CardContent className="p-4 space-y-2">
-                          <div className="font-semibold text-sm text-foreground">{item.clienteNome}</div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-semibold text-sm text-foreground truncate">{item.clienteNome}</div>
+                            {item.clienteId && (
+                              <button
+                                type="button"
+                                title="Abrir detalhes do cliente"
+                                className="text-[10px] text-primary hover:underline shrink-0"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openClienteModal(item.clienteId!);
+                                }}
+                              >
+                                ver ficha
+                              </button>
+                            )}
+                          </div>
                           <div className="flex justify-between text-xs text-muted-foreground">
                             <span>{formatCurrency(item.valorSolicitado)}</span>
                             <span>{new Date(item.dataSolicitacao).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>
