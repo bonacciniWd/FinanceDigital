@@ -116,6 +116,22 @@ export default function KanbanAnalisePage() {
     return 'text-red-600 dark:text-red-400';
   };
 
+  const getComprometimentoColor = (pct: number) => {
+    if (pct <= 30) return 'text-green-600 dark:text-green-400';
+    if (pct <= 50) return 'text-yellow-600 dark:text-yellow-400';
+    return 'text-red-600 dark:text-red-400';
+  };
+
+  const maskCpf = (cpf: string) => {
+    const d = cpf.replace(/\D/g, '');
+    if (d.length !== 11) return cpf;
+    return `***.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+  };
+
+  const periodicidadeLabel: Record<string, string> = {
+    mensal: 'men.', semanal: 'sem.', quinzenal: 'quin.', diario: 'diár.',
+  };
+
   const handleDragStart = (e: React.DragEvent, analiseId: string) => {
     e.dataTransfer.setData('analiseId', analiseId);
     e.dataTransfer.effectAllowed = 'move';
@@ -169,101 +185,7 @@ export default function KanbanAnalisePage() {
           <Input placeholder="Buscar por nome ou CPF..." className="pl-10" value={busca} onChange={(e) => setBusca(e.target.value)} />
         </div>
       </div>
-
-      {/* Alerta de verificações pendentes */}
-      {pendingVerifCount > 0 && (
-        <Alert className="border-amber-300 bg-amber-50 dark:bg-amber-950/30">
-          <Bell className="h-4 w-4 text-amber-600" />
-          <AlertDescription className="text-amber-800 dark:text-amber-300 flex items-center gap-2">
-            <strong>{pendingVerifCount}</strong> verificação(ões) de identidade aguardando revisão.
-            Clique em um card e vá na aba &quot;Verificação&quot; para analisar.
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {isLoading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-8 h-8 animate-spin text-primary" />
-          <span className="ml-3 text-muted-foreground">Carregando análises...</span>
-        </div>
-      ) : (
-        <div className="flex gap-4 overflow-x-auto pb-4">
-          {COLUMNS.map((col) => {
-            const items = analisesByStatus[col.id] || [];
-            const isOver = dragOverColumn === col.id;
-            return (
-              <div key={col.id} className="flex-shrink-0 w-72">
-                <Card
-                  className={`liquid-metal-column ${isOver ? 'dragging-over' : ''}`}
-                  style={{ '--kanban-col-color': `${col.dotColor}88` } as React.CSSProperties}
-                  onDragOver={(e) => handleDragOver(e, col.id)}
-                  onDragLeave={() => setDragOverColumn(null)}
-                  onDrop={(e) => handleDrop(e, col.id)}
-                >
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
-                        <span className="kanban-status-dot" style={{ background: col.dotColor, '--dot-color': col.dotColor } as React.CSSProperties} />
-                        {col.title}
-                      </CardTitle>
-                      <Badge variant="secondary" className="font-semibold">{items.length}</Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3 min-h-[80px]">
-                    {items.length === 0 && (
-                      <p className="text-xs text-muted-foreground text-center py-4 italic">Nenhuma análise</p>
-                    )}
-                    {items.map((item) => (
-                      <Card
-                        key={item.id}
-                        className="liquid-metal-card cursor-grab active:cursor-grabbing"
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, item.id)}
-                        onClick={() => setSelectedAnalise(item)}
-                      >
-                        <CardContent className="p-4 space-y-2">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="font-semibold text-sm text-foreground truncate">{item.clienteNome}</div>
-                            {item.clienteId && (
-                              <button
-                                type="button"
-                                title="Abrir detalhes do cliente"
-                                className="text-[10px] text-primary hover:underline shrink-0"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openClienteModal(item.clienteId!);
-                                }}
-                              >
-                                ver ficha
-                              </button>
-                            )}
-                          </div>
-                          <div className="flex justify-between text-xs text-muted-foreground">
-                            <span>{formatCurrency(item.valorSolicitado)}</span>
-                            <span>{new Date(item.dataSolicitacao).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className={`text-xs font-bold ${getScoreColor(item.scoreSerasa)}`}>
-                              Score: {item.scoreSerasa}
-                            </span>
-                            {item.rendaMensal > 0 && (
-                              <span className="text-xs text-muted-foreground">
-                                Renda: {formatCurrency(item.rendaMensal)}
-                              </span>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </CardContent>
-                </Card>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* KPIs */}
+ {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4 text-center">
@@ -304,6 +226,149 @@ export default function KanbanAnalisePage() {
         </Card>
       </div>
 
+      {/* Alerta de verificações pendentes */}
+      {pendingVerifCount > 0 && (
+        <Alert className="border-amber-300 bg-amber-50 dark:bg-amber-950/30">
+          <Bell className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-800 dark:text-amber-300 flex items-center gap-2">
+            <strong>{pendingVerifCount}</strong> verificação(ões) de identidade aguardando revisão.
+            Clique em um card e vá na aba &quot;Verificação&quot; para analisar.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          <span className="ml-3 text-muted-foreground">Carregando análises...</span>
+        </div>
+      ) : (
+        <div
+            className="flex gap-4 overflow-x-auto overflow-y-hidden pb-6"
+            style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}
+          >
+          {COLUMNS.map((col) => {
+            const items = analisesByStatus[col.id] || [];
+            const isOver = dragOverColumn === col.id;
+            return (
+              <div key={col.id} className="flex-shrink-0 w-[500px] h-full flex flex-col">
+                <Card
+                  className={`liquid-metal-column ${isOver ? 'dragging-over' : ''} flex flex-col h-full overflow-hidden`}
+                  style={{ '--kanban-col-color': `${col.dotColor}88` } as React.CSSProperties}
+                  onDragOver={(e) => handleDragOver(e, col.id)}
+                  onDragLeave={() => setDragOverColumn(null)}
+                  onDrop={(e) => handleDrop(e, col.id)}
+                >
+                  <CardHeader className="pb-3 shrink-0">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                        <span className="kanban-status-dot" style={{ background: col.dotColor, '--dot-color': col.dotColor } as React.CSSProperties} />
+                        {col.title}
+                      </CardTitle>
+                      <Badge variant="secondary" className="font-semibold">{items.length}</Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3 overflow-y-auto flex-1 min-h-0">
+                    {items.length === 0 && (
+                      <p className="text-xs text-muted-foreground text-center py-4 italic">Nenhuma análise</p>
+                    )}
+                    {items.map((item) => {
+                      const comprPct = item.valorParcela && item.rendaMensal > 0
+                        ? Math.round((item.valorParcela / item.rendaMensal) * 100)
+                        : null;
+                      const periLabel = item.periodicidade ? (periodicidadeLabel[item.periodicidade] || item.periodicidade) : null;
+                      return (
+                        <Card
+                          key={item.id}
+                          className="liquid-metal-card cursor-grab active:cursor-grabbing"
+                          draggable
+                          onDragStart={(e) => handleDragStart(e, item.id)}
+                          onClick={() => setSelectedAnalise(item)}
+                        >
+                          <CardContent className="p-4 space-y-2">
+                            {/* Nome + link ficha */}
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="font-semibold text-sm text-foreground truncate">{item.clienteNome}</div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {item.skipVerification && (
+                                  <Badge className="text-[9px] px-1 py-0 bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" title={item.skipVerificationReason || 'Verificação pulada'}>
+                                    s/ verif.
+                                  </Badge>
+                                )}
+                                {item.clienteId && (
+                                  <button
+                                    type="button"
+                                    title="Abrir detalhes do cliente"
+                                    className="text-[10px] text-primary hover:underline"
+                                    onClick={(e) => { e.stopPropagation(); openClienteModal(item.clienteId!); }}
+                                  >
+                                    ver ficha
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* CPF mascarado + data */}
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                              <span className="font-mono">{maskCpf(item.cpf)}</span>
+                              <span>{new Date(item.dataSolicitacao).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' })}</span>
+                            </div>
+
+                            {/* Valor solicitado + parcelamento */}
+                            <div className="flex justify-between text-xs">
+                              <span className="font-semibold text-foreground">{formatCurrency(item.valorSolicitado)}</span>
+                              {item.numeroParcelas && (
+                                <span className="text-muted-foreground">
+                                  {item.numeroParcelas}x{periLabel ? ` ${periLabel}` : ''}
+                                  {item.valorParcela ? ` · ${formatCurrency(item.valorParcela)}` : ''}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Scores + comprometimento de renda */}
+                            <div className="grid grid-cols-3 gap-1 text-xs">
+                              <div className="flex flex-col">
+                                <span className="text-muted-foreground text-[10px]">Serasa</span>
+                                <span className={`font-bold ${getScoreColor(item.scoreSerasa)}`}>{item.scoreSerasa}</span>
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-muted-foreground text-[10px]">Score int.</span>
+                                <span className={`font-bold ${getScoreColor(item.scoreInterno)}`}>{item.scoreInterno}</span>
+                              </div>
+                              {comprPct !== null && (
+                                <div className="flex flex-col text-right">
+                                  <span className="text-muted-foreground text-[10px]">Comprom.</span>
+                                  <span className={`font-bold ${getComprometimentoColor(comprPct)}`}>{comprPct}%</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Renda mensal */}
+                            {item.rendaMensal > 0 && (
+                              <div className="text-xs text-muted-foreground">
+                                Renda: <span className="font-medium text-foreground">{formatCurrency(item.rendaMensal)}</span>
+                              </div>
+                            )}
+
+                            {/* Motivo da recusa (apenas coluna recusado) */}
+                            {item.status === 'recusado' && item.motivo && (
+                              <div className="text-[10px] text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded px-2 py-1 truncate" title={item.motivo}>
+                                {item.motivo}
+                              </div>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+     
       {/* Modal de Detalhes (Verificação de Identidade integrada) */}
       <AnaliseDetalhadaModal
         analise={selectedAnalise}

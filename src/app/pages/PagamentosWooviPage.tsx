@@ -21,6 +21,9 @@ import {
   DollarSign,
   ShieldAlert,
   Copy,
+  ChevronRight,
+  CreditCard,
+  Receipt,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -147,6 +150,7 @@ export default function PagamentosWooviPage() {
   const [chargeStatusFilter, setChargeStatusFilter] = useState<string>('');
   const [showNovaCobranca, setShowNovaCobranca] = useState(false);
   const [selectedCharge, setSelectedCharge] = useState<any>(null);
+  const [selectedChargeDetail, setSelectedChargeDetail] = useState<any>(null);
   const [criandoCobranca, setCriandoCobranca] = useState(false);
 
   // Form state — nova cobrança (parcela-based)
@@ -734,8 +738,15 @@ export default function PagamentosWooviPage() {
             <div className="grid gap-3">
               {filteredCharges.map((charge) => {
                 const cfg = chargeStatusConfig[charge.status] || chargeStatusConfig.ERROR;
+                const parcela = charge.parcelaId
+                  ? allParcelas.find((p) => p.id === charge.parcelaId)
+                  : null;
                 return (
-                  <Card key={charge.id} className="p-4">
+                  <Card
+                    key={charge.id}
+                    className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+                    onClick={() => setSelectedChargeDetail(charge)}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-4">
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-50 dark:bg-orange-900/20">
@@ -746,6 +757,11 @@ export default function PagamentosWooviPage() {
                           <p className="text-xs text-muted-foreground">
                             {charge.wooviChargeId.slice(0, 8)}... · {formatDate(charge.createdAt)}
                           </p>
+                          {parcela && (
+                            <p className="text-xs text-muted-foreground">
+                              Parcela {parcela.numero} · venc. {new Date(parcela.dataVencimento).toLocaleDateString('pt-BR')}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
@@ -753,7 +769,7 @@ export default function PagamentosWooviPage() {
                           <p className="font-semibold">{formatCurrency(charge.valor)}</p>
                           <Badge className={cfg.className}>{cfg.label}</Badge>
                         </div>
-                        <div className="flex gap-1">
+                        <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                           {charge.status === 'ACTIVE' && (
                             <Button
                               variant="ghost"
@@ -765,6 +781,9 @@ export default function PagamentosWooviPage() {
                               <Eye className="h-4 w-4" />
                             </Button>
                           )}
+                          <Button variant="ghost" size="icon" className="h-8 w-8" title="Ver detalhes">
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
                         </div>
                       </div>
                     </div>
@@ -1216,10 +1235,10 @@ export default function PagamentosWooviPage() {
                     parcelaSelecionada.multa,
                     parcelaSelecionada.desconto,
                   );
-                  return corr.jurosValor > 0 ? (
+                  return corr.juros > 0 ? (
                     <div className="flex justify-between text-sm text-red-600 dark:text-red-400">
                       <span>Juros/multa atraso:</span>
-                      <span>+ {formatCurrency(corr.jurosValor)}</span>
+                      <span>+ {formatCurrency(corr.juros)}</span>
                     </div>
                   ) : null;
                 })()}
@@ -1268,6 +1287,179 @@ export default function PagamentosWooviPage() {
               Gerar e Enviar Cobrança
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Dialog: Detalhes da Cobrança ─────────────── */}
+      <Dialog open={!!selectedChargeDetail} onOpenChange={() => setSelectedChargeDetail(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Receipt className="h-5 w-5 text-orange-500" />
+              Detalhes da Cobrança
+            </DialogTitle>
+          </DialogHeader>
+          {selectedChargeDetail && (() => {
+            const charge = selectedChargeDetail;
+            const cfg = chargeStatusConfig[charge.status] || chargeStatusConfig.ERROR;
+            const parcela = charge.parcelaId
+              ? allParcelas.find((p) => p.id === charge.parcelaId)
+              : null;
+            const emprestimo = charge.emprestimoId
+              ? emprestimos.find((e) => e.id === charge.emprestimoId)
+              : parcela?.emprestimoId
+              ? emprestimos.find((e) => e.id === parcela.emprestimoId)
+              : null;
+            const corr = parcela
+              ? valorCorrigido(parcela.valorOriginal, parcela.dataVencimento, parcela.juros, parcela.multa, parcela.desconto)
+              : null;
+            return (
+              <div className="space-y-4">
+                {/* ── Cobrança ── */}
+                <div className="rounded-lg border p-4 space-y-2">
+                  <div className="flex items-center gap-2 mb-1">
+                    <QrCode className="h-4 w-4 text-orange-500" />
+                    <span className="text-sm font-semibold">Cobrança Pix</span>
+                    <Badge className={`ml-auto ${cfg.className}`}>{cfg.label}</Badge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                    <span className="text-muted-foreground">Cliente:</span>
+                    <span className="font-medium">{charge.clienteNome || '—'}</span>
+                    <span className="text-muted-foreground">Valor:</span>
+                    <span className="font-semibold text-orange-600 dark:text-orange-400">{formatCurrency(charge.valor)}</span>
+                    <span className="text-muted-foreground">Emitida em:</span>
+                    <span>{formatDate(charge.createdAt)}</span>
+                    {charge.paidAt && (
+                      <>
+                        <span className="text-muted-foreground">Pago em:</span>
+                        <span className="text-green-600 dark:text-green-400">{formatDate(charge.paidAt)}</span>
+                      </>
+                    )}
+                    {charge.expirationDate && charge.status === 'ACTIVE' && (
+                      <>
+                        <span className="text-muted-foreground">Expira em:</span>
+                        <span className="text-amber-600 dark:text-amber-400">{formatDate(charge.expirationDate)}</span>
+                      </>
+                    )}
+                    <span className="text-muted-foreground">ID:</span>
+                    <span className="font-mono text-xs text-muted-foreground truncate">{charge.wooviChargeId}</span>
+                    <span className="text-muted-foreground">Gateway:</span>
+                    <span className="uppercase text-xs">{charge.gateway}</span>
+                  </div>
+                  {charge.status === 'ACTIVE' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full mt-2"
+                      onClick={() => { setSelectedChargeDetail(null); setSelectedCharge(charge); }}
+                    >
+                      <Eye className="h-4 w-4 mr-2" />
+                      Ver QR Code
+                    </Button>
+                  )}
+                </div>
+
+                {/* ── Parcela ── */}
+                {parcela ? (
+                  <div className="rounded-lg border p-4 space-y-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <CreditCard className="h-4 w-4 text-blue-500" />
+                      <span className="text-sm font-semibold">Parcela #{parcela.numero}</span>
+                      <Badge
+                        className={`ml-auto text-xs ${
+                          parcela.status === 'paga'
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                            : parcela.status === 'vencida'
+                            ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                            : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400'
+                        }`}
+                      >
+                        {parcela.status}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                      <span className="text-muted-foreground">Valor original:</span>
+                      <span>{formatCurrency(parcela.valorOriginal)}</span>
+                      <span className="text-muted-foreground">Vencimento:</span>
+                      <span>{new Date(parcela.dataVencimento).toLocaleDateString('pt-BR')}</span>
+                      {corr && corr.juros > 0 && (
+                        <>
+                          <span className="text-muted-foreground">Juros/multa:</span>
+                          <span className="text-red-600 dark:text-red-400">+ {formatCurrency(corr.juros)}</span>
+                          <span className="text-muted-foreground font-semibold">Total corrigido:</span>
+                          <span className="font-semibold">{formatCurrency(corr.total)}</span>
+                        </>
+                      )}
+                      {parcela.dataPagamento && (
+                        <>
+                          <span className="text-muted-foreground">Pago em:</span>
+                          <span className="text-green-600 dark:text-green-400">{new Date(parcela.dataPagamento).toLocaleDateString('pt-BR')}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed p-3 text-center">
+                    <p className="text-xs text-muted-foreground">Cobrança sem parcela vinculada</p>
+                  </div>
+                )}
+
+                {/* ── Empréstimo ── */}
+                {emprestimo ? (
+                  <div className="rounded-lg border p-4 space-y-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Banknote className="h-4 w-4 text-green-500" />
+                      <span className="text-sm font-semibold">Empréstimo</span>
+                      <Badge
+                        className={`ml-auto text-xs ${
+                          emprestimo.status === 'ativo'
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                            : emprestimo.status === 'inadimplente'
+                            ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                            : emprestimo.status === 'quitado'
+                            ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+                            : 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400'
+                        }`}
+                      >
+                        {emprestimo.status}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                      <span className="text-muted-foreground">Valor total:</span>
+                      <span className="font-semibold">{formatCurrency(emprestimo.valor)}</span>
+                      <span className="text-muted-foreground">Parcelas:</span>
+                      <span>{emprestimo.parcelasPagas}/{emprestimo.parcelas} pagas</span>
+                      <span className="text-muted-foreground">Valor parcela:</span>
+                      <span>{formatCurrency(emprestimo.valorParcela)}</span>
+                      <span className="text-muted-foreground">Taxa de juros:</span>
+                      <span>{emprestimo.taxaJuros}% {emprestimo.tipoJuros === 'mensal' ? 'a.m.' : emprestimo.tipoJuros === 'semanal' ? 'a.s.' : 'a.d.'}</span>
+                      <span className="text-muted-foreground">Contrato:</span>
+                      <span>{new Date(emprestimo.dataContrato).toLocaleDateString('pt-BR')}</span>
+                      <span className="text-muted-foreground">Próx. vencimento:</span>
+                      <span>{new Date(emprestimo.proximoVencimento).toLocaleDateString('pt-BR')}</span>
+                    </div>
+                    {/* Barra de progresso das parcelas */}
+                    <div className="mt-2">
+                      <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                        <span>Progresso</span>
+                        <span>{Math.round((emprestimo.parcelasPagas / emprestimo.parcelas) * 100)}%</span>
+                      </div>
+                      <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-green-500 rounded-full transition-all"
+                          style={{ width: `${Math.round((emprestimo.parcelasPagas / emprestimo.parcelas) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : charge.emprestimoId ? (
+                  <div className="rounded-lg border border-dashed p-3 text-center">
+                    <p className="text-xs text-muted-foreground">Empréstimo não encontrado localmente</p>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

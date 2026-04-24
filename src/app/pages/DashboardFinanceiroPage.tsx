@@ -12,7 +12,8 @@ import { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { CalendarDays, DollarSign, Loader2, TrendingDown, TrendingUp } from 'lucide-react';
+import { Skeleton } from '../components/ui/skeleton';
+import { CalendarDays, DollarSign, TrendingDown, TrendingUp } from 'lucide-react';
 import { LWCChart } from '../components/charts/LWCChart';
 import { DonutChart } from '../components/charts/DonutChart';
 import { CategoryBarChart } from '../components/charts/CategoryBarChart';
@@ -88,6 +89,9 @@ function getPeriodicidadeLabel(periodicidade?: string | null, intervaloDias?: nu
   return 'Mensal';
 }
 
+const _currencyFmt = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+const formatCurrency = (value: number) => _currencyFmt.format(value);
+
 export default function DashboardFinanceiroPage() {
   const { data: parcelas = [], isLoading: loadingParcelas } = useParcelas();
   const { data: emprestimos = [] } = useEmprestimos();
@@ -96,16 +100,13 @@ export default function DashboardFinanceiroPage() {
   const [receberInicioCustom, setReceberInicioCustom] = useState(formatDateInput(new Date()));
   const [receberFimCustom, setReceberFimCustom] = useState(formatDateInput(addDays(new Date(), 6)));
 
-  const formatCurrency = (value: number) =>
-    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
-
   const periodoReceber = useMemo(
     () => getReceberRange(receberFiltro, receberInicioCustom, receberFimCustom),
     [receberFiltro, receberInicioCustom, receberFimCustom]
   );
 
   // Parcelas pagas = receita efetiva
-  const parcelasPagas = parcelas.filter((p) => p.status === 'paga');
+  const parcelasPagas = useMemo(() => parcelas.filter((p) => p.status === 'paga'), [parcelas]);
 
   const emprestimosNoPeriodo = useMemo(() => {
     return emprestimos.filter((emprestimo) => {
@@ -157,15 +158,16 @@ export default function DashboardFinanceiroPage() {
   }, [emprestimos, analisesById]);
 
   // KPIs
-  const receitaBruta = parcelasPagas.reduce((sum, p) => sum + (p.valor ?? 0), 0);
-  const totalJuros = parcelasPagas.reduce((sum, p) => sum + (p.juros ?? 0), 0);
-  const totalMultas = parcelasPagas.reduce((sum, p) => sum + (p.multa ?? 0), 0);
-  const totalDescontos = parcelasPagas.reduce((sum, p) => sum + (p.desconto ?? 0), 0);
+  const { receitaBruta, totalJuros, totalMultas, totalDescontos, valorPrincipal } = useMemo(() => ({
+    receitaBruta:   parcelasPagas.reduce((sum, p) => sum + (p.valor ?? 0), 0),
+    totalJuros:     parcelasPagas.reduce((sum, p) => sum + (p.juros ?? 0), 0),
+    totalMultas:    parcelasPagas.reduce((sum, p) => sum + (p.multa ?? 0), 0),
+    totalDescontos: parcelasPagas.reduce((sum, p) => sum + (p.desconto ?? 0), 0),
+    valorPrincipal: parcelasPagas.reduce((sum, p) => sum + (p.valorOriginal ?? p.valor ?? 0), 0),
+  }), [parcelasPagas]);
+
   const receitaLiquida = receitaBruta - totalDescontos;
   const margemPct = receitaBruta > 0 ? ((receitaLiquida / receitaBruta) * 100).toFixed(1) : '0';
-
-  // Composição da receita
-  const valorPrincipal = parcelasPagas.reduce((sum, p) => sum + (p.valorOriginal ?? p.valor ?? 0), 0);
   const composicaoReceita = useMemo(() => [
     { name: 'Principal', value: valorPrincipal - totalJuros - totalMultas, color: 'var(--chart-1)' },
     { name: 'Juros', value: totalJuros, color: 'var(--chart-3)' },
@@ -225,8 +227,70 @@ export default function DashboardFinanceiroPage() {
 
   if (loadingParcelas) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-56" />
+            <Skeleton className="h-4 w-80" />
+          </div>
+        </div>
+
+        {/* 4 KPI cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Card key={i}>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-4 w-4 rounded" />
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Skeleton className="h-8 w-36" />
+                <Skeleton className="h-3 w-24" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* À Receber card */}
+        <Card>
+          <CardHeader className="gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-32" />
+              <Skeleton className="h-4 w-72" />
+            </div>
+            <Skeleton className="h-9 w-48" />
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="rounded-lg border p-4 space-y-3">
+                  <Skeleton className="h-3 w-20" />
+                  <Skeleton className="h-8 w-24" />
+                  <Skeleton className="h-3 w-36" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 2 charts side by side */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <Card key={i}>
+              <CardHeader><Skeleton className="h-5 w-40" /></CardHeader>
+              <CardContent><Skeleton className="h-[300px] w-full" /></CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* 2 bar charts */}
+        {Array.from({ length: 2 }).map((_, i) => (
+          <Card key={i}>
+            <CardHeader><Skeleton className="h-5 w-52" /></CardHeader>
+            <CardContent><Skeleton className="h-[280px] w-full" /></CardContent>
+          </Card>
+        ))}
       </div>
     );
   }

@@ -14,7 +14,7 @@
  * @route /clientes/historico
  * @access Protegido — perfis admin, gerência
  */
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Skeleton } from '../components/ui/skeleton';
 import {
   Search, Download, DollarSign, FileText, AlertTriangle, ClipboardCheck,
-  Clock, CreditCard, Ban, Activity,
+  Clock, CreditCard, Ban, Activity, Loader2,
 } from 'lucide-react';
 import { useParcelas } from '../hooks/useParcelas';
 import { useEmprestimos } from '../hooks/useEmprestimos';
@@ -43,6 +43,45 @@ interface HistoricoItem {
   detalhe?: string;      // informação secundária
 }
 
+/* ── Utils (fora do componente para evitar re-criação) ──────── */
+
+const _currencyFmt = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+const formatCurrency = (value: number) => _currencyFmt.format(value);
+
+const PAGE_SIZE = 20;
+
+const tipoConfig: Record<TipoEvento, {
+  label: string;
+  badgeClass: string;
+  icon: React.ReactNode;
+  iconBg: string;
+}> = {
+  pagamento: {
+    label: 'Pagamento',
+    badgeClass: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    icon: <DollarSign className="w-4 h-4 text-green-600 dark:text-green-400" />,
+    iconBg: 'bg-green-100 dark:bg-green-900/40',
+  },
+  emprestimo: {
+    label: 'Empréstimo',
+    badgeClass: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+    icon: <CreditCard className="w-4 h-4 text-blue-600 dark:text-blue-400" />,
+    iconBg: 'bg-blue-100 dark:bg-blue-900/40',
+  },
+  analise: {
+    label: 'Análise',
+    badgeClass: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
+    icon: <ClipboardCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />,
+    iconBg: 'bg-purple-100 dark:bg-purple-900/40',
+  },
+  vencimento: {
+    label: 'Vencida',
+    badgeClass: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+    icon: <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />,
+    iconBg: 'bg-red-100 dark:bg-red-900/40',
+  },
+};
+
 /* ── Componente ───────────────────────────────────────────── */
 
 export default function HistoricoClientesPage() {
@@ -54,9 +93,8 @@ export default function HistoricoClientesPage() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filtroTipo, setFiltroTipo] = useState<string>('todos');
-
-  const formatCurrency = (value: number) =>
-    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   /* ── Gerar timeline unificada ───────────────────────────── */
 
@@ -137,6 +175,27 @@ export default function HistoricoClientesPage() {
     [timeline, searchTerm, filtroTipo],
   );
 
+  // Resetar paginação ao mudar filtros
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [searchTerm, filtroTipo]);
+
+  const visibleItems = filtered.slice(0, visibleCount);
+  const hasMore = visibleCount < filtered.length;
+
+  // Sentinel IntersectionObserver — carrega mais ao chegar no fim
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisibleCount(c => c + PAGE_SIZE);
+        }
+      },
+      { rootMargin: '120px' },
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore]);
+
   /* ── Métricas ───────────────────────────────────────────── */
 
   const metricas = useMemo(() => {
@@ -169,38 +228,6 @@ export default function HistoricoClientesPage() {
     URL.revokeObjectURL(url);
   }, [filtered]);
   /* ── Config de ícone e badge por tipo ───────────────────── */
-
-  const tipoConfig: Record<TipoEvento, {
-    label: string;
-    badgeClass: string;
-    icon: React.ReactNode;
-    iconBg: string;
-  }> = {
-    pagamento: {
-      label: 'Pagamento',
-      badgeClass: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-      icon: <DollarSign className="w-4 h-4 text-green-600 dark:text-green-400" />,
-      iconBg: 'bg-green-100 dark:bg-green-900/40',
-    },
-    emprestimo: {
-      label: 'Empréstimo',
-      badgeClass: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
-      icon: <CreditCard className="w-4 h-4 text-blue-600 dark:text-blue-400" />,
-      iconBg: 'bg-blue-100 dark:bg-blue-900/40',
-    },
-    analise: {
-      label: 'Análise',
-      badgeClass: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
-      icon: <ClipboardCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />,
-      iconBg: 'bg-purple-100 dark:bg-purple-900/40',
-    },
-    vencimento: {
-      label: 'Vencida',
-      badgeClass: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
-      icon: <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />,
-      iconBg: 'bg-red-100 dark:bg-red-900/40',
-    },
-  };
 
   /* ── Loading ────────────────────────────────────────────── */
 
@@ -342,12 +369,12 @@ export default function HistoricoClientesPage() {
             </div>
           ) : (
             <div className="space-y-0">
-              {filtered.map((item, index) => {
+              {visibleItems.map((item, index) => {
                 const cfg = tipoConfig[item.tipo];
                 return (
                   <div key={item.id} className="flex gap-4 pb-6 relative">
                     {/* Linha de conexão */}
-                    {index < filtered.length - 1 && (
+                    {index < visibleItems.length - 1 && (
                       <div className="absolute left-[19px] top-10 bottom-0 w-0.5 bg-border" />
                     )}
 
@@ -382,6 +409,27 @@ export default function HistoricoClientesPage() {
                   </div>
                 );
               })}
+
+              {/* Sentinel + feedback de carregamento */}
+              {hasMore ? (
+                <div ref={sentinelRef} className="flex flex-col gap-4 pt-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="flex gap-4">
+                      <Skeleton className="h-10 w-10 rounded-full shrink-0" />
+                      <div className="flex-1 space-y-2 pt-1">
+                        <Skeleton className="h-4 w-40" />
+                        <Skeleton className="h-3 w-full" />
+                        <Skeleton className="h-3 w-28" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : filtered.length > 0 && (
+                <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+                  <Loader2 className="w-3 h-3" />
+                  {filtered.length} evento{filtered.length !== 1 ? 's' : ''} exibido{filtered.length !== 1 ? 's' : ''}
+                </div>
+              )}
             </div>
           )}
         </CardContent>
