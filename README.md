@@ -743,8 +743,8 @@ Conversão bidirecional **snake_case (banco)** ↔ **camelCase (frontend)**:
 | `getBloqueiosRede(redeId?)` | Bloqueios de rede (filtro opcional) |
 | `getBloqueiosAtivos()` | Apenas bloqueios ativos |
 | `criarBloqueio(data)` | Criar bloqueio |
-| `desbloquearRede(id)` | Marca bloqueio como inativo |
-| `bloquearRede(redeId, causadoPor, motivo)` | Cria bloqueio manual |
+| `desbloquearRede(id)` | Desativar bloqueio |
+| `bloquearRede(redeId, motivo)` | Bloquear rede inteira |
 
 ### `ticketsService.ts`
 
@@ -1620,7 +1620,7 @@ Cada departamento terá seu próprio número de WhatsApp conectado via Evolution
 │  Supabase Edge      │     │  Evolution API          │
 │  Functions          │────▶│  (Docker / self-hosted) │
 │  (send-message,     │     │  4 instâncias:          │
-│   webhook-handler)  │     │  comercial, cobranca,   │
+│   webhook-handler)  │◀────│  comercial, cobranca,   │
 └────────┬────────────┘     │  atendimento, admin     │
          │                  └────────┬───────────────┘
          ▼                           │
@@ -2812,7 +2812,7 @@ Se não definida, usa sandbox por padrão.
 #### Passo a Passo
 
 **1. Gerar App ID de Produção:**
-   - Acesse [app.woovi.com](https://app.woovi.com) → **API/Plugins** → **Nova API**
+   - Acessar [app.woovi.com](https://app.woovi.com) → **API/Plugins** → **Nova API**
    - Copiar o **token de autorização (AppID)** gerado (só aparece uma vez!)
 
 **2. Atualizar secrets no Supabase:**
@@ -2861,7 +2861,7 @@ supabase secrets set WOOVI_WEBHOOK_SECRET="<webhook_secret_producao>"
 
 **6. Atualizar `.env` do frontend (opcional):**
 ```bash
-VITE_WOOVI_APP_ID=seu_app_id_producao
+VITE_WOOVI_APP_ID=<app_id_producao>
 ```
 
 **7. Rodar migration (se ainda não rodou):**
@@ -3781,7 +3781,8 @@ supabase db push
 | 023 | `023_pix_flow_comissoes.sql`         | Fluxo PIX + comissões + gateways      |
 | 024 | `024_gerencia_comissao.sql`          | Comissão de gerência (incremental)    |
 | 025 | `025_approval_flow_notifications.sql`| Fluxo aprovação + parcelas + notificações |
-| 026 | `027_profissao_pagamento_parcial.sql`| Profissão (clientes/verificação) + obs/conta parcelas |
+| 026 | `026_templates_tipo_notificacao.sql` | Vincula templates a automações        |
+| 027 | `027_profissao_pagamento_parcial.sql`| Profissão (clientes/verificação) + obs/conta parcelas |
 
 > **Nota**: Se a migration 023 já foi aplicada, NÃO rode novamente.  
 > Migrations 024-027 são seguras (usam `IF NOT EXISTS` e `ADD COLUMN IF NOT EXISTS`).
@@ -3959,17 +3960,6 @@ O fluxo completo de aprovação gera empréstimo, parcelas, desembolsa via PIX e
 | `{parcelas}`     | Resumo de parcelas                           | 12x de R$ 150,00     |
 | `{parcelaNum}`   | Número de parcelas (inteiro)                 | 12                   |
 | `{parcelaFmt}`   | Parcela formatada com "R$"                   | R$ 150,00            |
-| `{diasAtraso}`   | Dias em atraso                               | 3                   |
-| `{parcelas}`     | Resumo de parcelas                           | 12x de R$ 150,00     |
-| `{pixCopiaCola}` | Código Pix copia-e-cola                     | 5547989279037        |
-| `{vencimento}`   | Data de vencimento (DD/MM)                   | 15/04/2026          |
-| `{parcela}`      | "X/Y" (ex: 3/12)                             | 3/12                |
-| `{total}`         | Total de parcelas (inteiro)                 | 12                  |
-| `{desconto}`     | Percentual de desconto¹                      | 10%                 |
-
-> ¹ Disponível para templates manuais (negociação/cobrança avançada).  
-> A coluna **Cron (atraso)** se aplica aos tiers `vencida_3dias`, `vencida_7dias`.  
-> **Importante**: templates de aprovação devem usar `{valorNum}` (não `{valor}`) para evitar duplicação "R$ R$ X,XX" quando o template já contém "R$".
 
 ### 35.3. Campos de análise adicionais (migration 025)
 
@@ -3994,32 +3984,6 @@ Ao registrar pagamento de uma parcela individual:
 - `emprestimos.parcelas_pagas` → recontado automaticamente via `syncEmprestimoStatus()`
 - `emprestimos.proximo_vencimento` → atualizado para próxima pendente
 - Recalcula status 3-way: todas pagas → `'quitado'`, alguma vencida → `'inadimplente'`, caso contrário → `'ativo'`
-
-> A função `syncEmprestimoStatus()` garante consistência mesmo após operações em lote. Operações batch são executadas **sequencialmente** (não em paralelo) para evitar race conditions no contador.
-
-### 35.5. SQL para recontabilizar dados legados
-
-Se houver empréstimos com `parcelas_pagas` incorreto:
-
-```sql
-WITH stats AS (
-  SELECT emprestimo_id,
-         COUNT(*) FILTER (WHERE status = 'paga') AS pagas,
-         COUNT(*) AS total,
-         COUNT(*) FILTER (WHERE status = 'vencida') AS vencidas,
-         MIN(data_vencimento) FILTER (WHERE status IN ('pendente','vencida')) AS prox_venc
-  FROM parcelas GROUP BY emprestimo_id
-)
-UPDATE emprestimos e SET
-  parcelas_pagas = s.pagas,
-  proximo_vencimento = COALESCE(s.prox_venc, e.proximo_vencimento),
-  status = CASE
-    WHEN s.pagas >= s.total THEN 'quitado'
-    WHEN s.vencidas > 0 THEN 'inadimplente'
-    ELSE 'ativo'
-  END
-FROM stats s WHERE e.id = s.emprestimo_id;
-```
 
 ---
 
@@ -4389,34 +4353,15 @@ Ao clicar no botão QR Code de uma parcela:
 
 ### 40.4. Comprovantes de pagamento
 
-O sistema exige upload de comprovante para confirmação.
+O sistema exige upload de comprovante para confirmações manuais de pagamento:
 
-#### Fluxo de upload
+1. **Upload**: Operador seleciona imagem na modal "Confirmar Pagamento"
+2. **Storage**: Imagem salva no bucket `comprovantes` do Supabase Storage
+3. **Vinculação**: URL pública salva em `parcelas.comprovante_url`
+4. **Metadados**: `pagamento_tipo: 'manual'`, `confirmado_por` (UUID do operador), `confirmado_em` (timestamp)
+5. **Visualização**: Botão Image (azul) em parcelas pagas → modal com imagem + link "Abrir em nova aba"
 
-```
-1. Operador clica "Confirmar Pagamento" em parcela pendente/vencida
-2. Modal exibe:
-   ├─ Valor e vencimento da parcela
-   ├─ Área de drop/seleção de imagem
-   └─ Preview da imagem selecionada
-3. Ao confirmar:
-   ├─ Upload para Supabase Storage (bucket: comprovantes)
-   ├─ Gera URL pública da imagem
-   ├─ Atualiza parcela:
-   │   ├─ comprovante_url: URL da imagem
-   │   ├─ pagamento_tipo: 'manual'
-   │   ├─ confirmado_por: UUID do operador logado
-   │   └─ confirmado_em: timestamp atual
-   └─ Marca parcela como 'paga'
-```
-
-#### Visualização
-
-Parcelas pagas com `comprovante_url` exibem botão Image (azul) que abre modal com:
-- Imagem do comprovante em tamanho completo
-- Link "Abrir em nova aba"
-
-> Visível para roles `admin` e `gerencia`.
+> Comprovantes são visíveis para roles `admin` e `gerencia`.
 
 ### 40.5. Sincronização de status
 
@@ -5010,54 +4955,8 @@ updateConfig.mutate({ chave: 'mensagens_automaticas_ativas', valor: false });
 
 A página exibe cards com toggles e inputs:
 - **Mensagens automáticas**: Switch on/off → controla se o cron envia mensagens
-- **Cobranças cobv automáticas**: Switch on/off → controla criação de cobranças cobv
+- **Cobranças cobv automáticas**: Switch on/off → controla criação de cobranças EFI
 - **Multa (%)**: Input numérico → percentual aplicado em cobranças cobv
 - **Juros (%/mês)**: Input numérico → percentual de juros mensal
 
 > Acessível apenas para roles `admin` e `gerencia`. Alterações têm efeito imediato (próxima execução do cron).
-````
-This is the description of what the code block changes:
-<changeDescription>
-Documenta auto-update Electron, DownloadPage e publicação de releases v1.2.0
-</changeDescription>
-
-This is the code block that represents the suggested code change:
-````markdown
----
-
-## 50. Desktop: Auto-update, DownloadPage e Publicação de Releases (v1.2.0)
-
-### 50.1 Auto-update automático (Electron)
-
-- O app desktop (Electron) verifica atualizações automaticamente via [electron-updater](https://www.electron.build/auto-update).
-- A cada inicialização (5s após abrir) e a cada 4h, o app consulta o GitHub Releases por uma nova versão.
-- Se houver update, baixa em background e exibe um dialog nativo: "A versão X foi baixada. O app será reiniciado para aplicar a atualização." (botões: Reiniciar agora / Depois)
-- Se o usuário escolher "Depois", a atualização é aplicada ao fechar o app.
-- O preload expõe o evento `onUpdateAvailable` para o renderer (React) via `window.electronAPI.onUpdateAvailable(cb)`.
-- O auto-update usa os arquivos `latest.yml`, `latest-mac.yml`, `latest-linux.yml` publicados automaticamente no GitHub Release.
-- Basta rodar `npm run electron:publish` com `GH_TOKEN` configurado para publicar novas versões.
-
-### 50.2 DownloadPage — Links e Changelog
-
-- A página `/download` detecta o SO do usuário e exibe o botão correto (Windows, macOS, Linux), com link direto para o asset do GitHub Release.
-- O changelog é atualizado automaticamente para a versão mais recente (exemplo: 1.2.0).
-- Os links são do tipo:
-  - Windows: `https://github.com/bonacciniWd/FinanceDigital/releases/download/v1.2.0/Fintech.Digital-1.2.0-win-x64.exe`
-  - macOS: `https://github.com/bonacciniWd/FinanceDigital/releases/download/v1.2.0/Fintech.Digital-1.2.0-mac-x64.dmg`
-  - Linux: `https://github.com/bonacciniWd/FinanceDigital/releases/download/v1.2.0/Fintech.Digital-1.2.0-linux-x86_64.AppImage`
-
-### 50.3 Publicação de Releases (CI manual)
-
-- Para publicar uma nova versão desktop:
-  1. Bump de versão no `package.json` (ex: 1.2.1)
-  2. `npm run electron:build` para gerar os builds
-  3. `GH_TOKEN=... npm run electron:publish` para publicar no GitHub Releases
-  4. Os arquivos `.exe`, `.dmg`, `.AppImage` e os `.yml` de auto-update são enviados automaticamente
-- O auto-update funciona para todos os usuários, sem necessidade de baixar manualmente a cada release.
-- O token `GH_TOKEN` precisa ter permissão `repo` (classic token) e pode ser salvo no `.zshrc` para facilitar:
-  ```sh
-  export GH_TOKEN=ghp_xxx...
-  ```
-
----
-````
