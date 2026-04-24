@@ -699,7 +699,7 @@ export default function KanbanCobrancaPage() {
           {/* Board: altura limitada ao viewport, scroll horizontal visivel na base
               da tela; cada coluna tem scroll vertical interno. */}
           <div
-            className="flex gap-4 overflow-x-auto overflow-y-hidden pb-2"
+            className="flex gap-4 pb-6 overflow-x-auto overflow-y-hidden"
             style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}
           >
           {COLUMNS.map((column) => {
