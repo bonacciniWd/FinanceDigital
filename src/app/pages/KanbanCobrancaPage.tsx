@@ -76,6 +76,7 @@ interface ColumnDef {
 
 /** Virtual column IDs → real DB etapa */
 const VIRTUAL_ETAPA_MAP: Record<string, KanbanCobrancaEtapa> = {
+  vence_hoje: 'a_vencer',
   vencido_n1: 'vencido',
   vencido_n2: 'vencido',
   vencido_n3: 'vencido',
@@ -85,7 +86,8 @@ const columnToEtapa = (colId: string): KanbanCobrancaEtapa =>
   VIRTUAL_ETAPA_MAP[colId] ?? (colId as KanbanCobrancaEtapa);
 
 const COLUMNS: ColumnDef[] = [
-  { id: 'a_vencer',    title: 'A VENCER',         dotColor: '#eab308' },
+  { id: 'vence_hoje',  title: 'VENCE HOJE',       dotColor: '#facc15' },
+  { id: 'a_vencer',    title: 'A VENCER (3d)',    dotColor: '#eab308' },
   { id: 'vencido_n1',  title: 'N1 · 1-15 dias',   dotColor: '#f97316' },
   { id: 'vencido_n2',  title: 'N2 · 16-45 dias',  dotColor: '#ef4444' },
   { id: 'vencido_n3',  title: 'N3 · 46+ dias',     dotColor: '#991b1b' },
@@ -283,14 +285,33 @@ export default function KanbanCobrancaPage() {
 
   const cardsByEtapa = useMemo(() => {
     const map: Record<string, KanbanCobrancaView[]> = {};
+    // Janela de 3 dias para coluna 'A vencer' (a partir de amanhã)
+    const hojeDate = parseISODateLocal(todayStr)!;
+    const limite3d = new Date(hojeDate.getTime() + 3 * 86400000);
+    const limite3dStr = `${limite3d.getFullYear()}-${String(limite3d.getMonth() + 1).padStart(2, '0')}-${String(limite3d.getDate()).padStart(2, '0')}`;
+
+    // Estados "finais" não devem aparecer em vence_hoje/a_vencer mesmo que tenham parcelas pendentes
+    const ETAPAS_FINAIS = new Set(['pago', 'perdido', 'arquivado', 'contatado', 'negociacao', 'acordo']);
+
     for (const col of COLUMNS) {
       let list: KanbanCobrancaView[];
-      if (col.id === 'a_vencer') {
-        // Apenas clientes com PRÓXIMO vencimento === hoje (yyyy-mm-dd local)
+      if (col.id === 'vence_hoje') {
+        // PRÓXIMO vencimento (de qualquer parcela live) === hoje. Não depende mais
+        // do `etapa` armazenado no kanban_cobranca (que pode estar 'vencido' mesmo
+        // com diasAtraso=0 quando o emp.status é 'inadimplente').
         list = filteredCards.filter((c) => {
-          if (c.etapa !== 'a_vencer') return false;
-          const venc = proximoVencDoCliente.get(c.clienteId);
-          return venc === todayStr;
+          if (ETAPAS_FINAIS.has(c.etapa)) return false;
+          const info = parcelasInfoByCliente.get(c.clienteId);
+          return info?.proxVencFuturo === todayStr;
+        });
+      } else if (col.id === 'a_vencer') {
+        // PRÓXIMO vencimento entre amanhã e +3 dias
+        list = filteredCards.filter((c) => {
+          if (ETAPAS_FINAIS.has(c.etapa)) return false;
+          const info = parcelasInfoByCliente.get(c.clienteId);
+          const venc = info?.proxVencFuturo;
+          if (!venc) return false;
+          return venc > todayStr && venc <= limite3dStr;
         });
       } else if (col.id === 'vencido_n1') {
         list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 1 && c.diasAtraso <= 15);

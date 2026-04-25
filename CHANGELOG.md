@@ -6,6 +6,14 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.8] — 2026-04-25
+
+### Corrigido
+- **Kanban Cobrança — coluna VENCE HOJE vazia**: filtro exigia `c.etapa === 'a_vencer'`, mas quando o empréstimo está com `status='inadimplente'` (ou tem qualquer parcela vencida acumulada) o sync marca o card como `vencido` mesmo com a parcela do dia vencendo HOJE (diasAtraso=0). Agora o filtro é baseado direto em `parcelasInfoByCliente.proxVencFuturo === todayStr`, ignorando o `etapa` armazenado (exceto estados finais: pago/perdido/arquivado/contatado/negociacao/acordo). Mesmo critério aplicado a `A VENCER (3d)`.
+- **Ícone do app desatualizado nos builds**: `build/icon.icns/.ico/.png` ainda eram a arte antiga (Apr 11). Regenerados a partir de `public/icon-512.png` (ícone novo, Apr 25) via `sips` + `iconutil` + `png-to-ico`. Agora Mac/Win/Linux exibem o ícone correto.
+
+---
+
 ## [1.4.7] — 2026-04-25
 
 ### Corrigido
