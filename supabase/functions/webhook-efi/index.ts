@@ -12,6 +12,7 @@
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { tentarConciliarPagamento } from "../_shared/conciliacao.ts";
 
 // IP oficial de comunicação de webhooks da EFI
 const EFI_WEBHOOK_IP = "34.193.116.226";
@@ -91,7 +92,21 @@ Deno.serve(async (req: Request) => {
       }
 
       if (!charge) {
-        console.log(`[webhook-efi] Cobrança não encontrada para txid=${txid}`);
+        console.log(`[webhook-efi] Cobrança não encontrada para txid=${txid} — tentando match automático por CPF/valor`);
+        const cpfPagador = pix.pagador?.cpf || pix.pagador?.cnpj || null;
+        const nomePagador = pix.pagador?.nome || null;
+        const result = await tentarConciliarPagamento({
+          adminClient,
+          valor,
+          cpfPagador,
+          nomePagador,
+          e2eId: endToEndId,
+          txid,
+          gateway: "efi",
+          rawPayload: pix,
+        });
+        console.log(`[webhook-efi] Conciliação txid=${txid}: matched=${result.matched} motivo=${result.motivo}`);
+        if (result.matched) processed++;
         continue;
       }
 
@@ -146,7 +161,6 @@ Deno.serve(async (req: Request) => {
         if (parcelaErr) {
           console.error("[webhook-efi] Erro ao atualizar parcela:", parcelaErr.message);
         }
-
         // ── Ajustar score do cliente ─────────────────────
         try {
           const { data: parcelaInfo } = await adminClient
@@ -215,6 +229,23 @@ Deno.serve(async (req: Request) => {
               .eq("id", charge.emprestimo_id);
           }
         }
+      } else {
+        // charge sem parcela_id — tentar match automático
+        console.log(`[webhook-efi] Charge ${charge.id} sem parcela_id — tentando match automático`);
+        const cpfPagador = pix.pagador?.cpf || pix.pagador?.cnpj || null;
+        const nomePagador = pix.pagador?.nome || null;
+        const result = await tentarConciliarPagamento({
+          adminClient,
+          valor,
+          cpfPagador,
+          nomePagador,
+          e2eId: endToEndId,
+          txid,
+          gateway: "efi",
+          clienteIdHint: charge.cliente_id,
+          rawPayload: pix,
+        });
+        console.log(`[webhook-efi] Match charge=${charge.id}: matched=${result.matched} motivo=${result.motivo}`);
       }
 
       // ── Split: registrar repasse para indicador ────────

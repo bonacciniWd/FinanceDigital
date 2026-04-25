@@ -751,7 +751,7 @@ export default function GestaoParcelasPage() {
                                                       const instSistema = instancias.find(i => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
                                                       if (instSistema && cli?.telefone && brCode) {
                                                         const phone = cli.telefone.replace(/\D/g, '').length <= 11 ? '55' + cli.telefone.replace(/\D/g, '') : cli.telefone.replace(/\D/g, '');
-                                                        const msg = `💰 *Cobrança PIX - Parcela ${p.numero}*\n\nOlá ${p.clienteNome}!\n\nValor: *${formatCurrency(valorCob)}*\nVencimento: ${new Date(p.dataVencimento).toLocaleDateString('pt-BR')}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_FinanceDigital_`;
+                                                        const msg = `💰 *Cobrança PIX - Parcela ${p.numero}*\n\nOlá ${p.clienteNome}!\n\nValor: *${formatCurrency(valorCob)}*\nVencimento: ${new Date(p.dataVencimento).toLocaleDateString('pt-BR')}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_CasaDaMoeda_`;
                                                         await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
                                                         // Enviar QR como imagem
                                                         if (qrImage) {

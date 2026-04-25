@@ -167,6 +167,10 @@ export interface Parcela {
   confirmadoPor?: string;
   confirmadoEm?: string;
   wooviChargeId?: string;
+  /** Se vinculada a um acordo formal de renegociação (parcela de recuperação). */
+  acordoId?: string | null;
+  /** Parcela congelada (substituída por acordo) — não gera juros nem notificação. */
+  congelada?: boolean;
 }
 
 /**

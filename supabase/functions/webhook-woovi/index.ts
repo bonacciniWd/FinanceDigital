@@ -23,6 +23,7 @@
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { tentarConciliarPagamento } from "../_shared/conciliacao.ts";
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -221,6 +222,23 @@ Deno.serve(async (req: Request) => {
                   .eq("id", dbCharge.emprestimo_id);
               }
             }
+          } else {
+            // charge sem parcela_id — tentar match automático
+            const customer = (charge.customer || {}) as Record<string, unknown>;
+            const cpfPagador = (customer.taxID as string) || null;
+            const nomePagador = (customer.name as string) || null;
+            const result = await tentarConciliarPagamento({
+              adminClient,
+              valor: Number(dbCharge.valor),
+              cpfPagador,
+              nomePagador,
+              e2eId: (charge.transactionID as string) || null,
+              txid: correlationID,
+              gateway: "woovi",
+              clienteIdHint: dbCharge.cliente_id,
+              rawPayload: charge,
+            });
+            console.log(`[webhook-woovi] Match charge=${dbCharge.id}: matched=${result.matched} motivo=${result.motivo}`);
           }
 
           // ── Registrar transação de recebimento ──────────

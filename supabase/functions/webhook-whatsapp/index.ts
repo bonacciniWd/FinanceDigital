@@ -88,7 +88,7 @@ async function criarCobrancaPix(
       calendario: { expiracao: 86400 },
       valor: { original: valor.toFixed(2) },
       chave: creds.pixKey,
-      solicitacaoPagador: `Parcela ${parcela.numero} - FinanceDigital`.substring(0, 140),
+      solicitacaoPagador: `Parcela ${parcela.numero} - CasaDaMoeda`.substring(0, 140),
     };
     if (clienteCpf) {
       const cpfLimpo = String(clienteCpf).replace(/\D/g, "");

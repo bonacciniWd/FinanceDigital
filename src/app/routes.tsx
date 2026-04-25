@@ -47,6 +47,7 @@ import MonitoramentoAtividadePage from './pages/MonitoramentoAtividadePage';
 import ProdutividadePage from './pages/ProdutividadePage';
 import ClienteAreaPage from './pages/ClienteAreaPage';
 import PagamentosWooviPage from './pages/PagamentosWooviPage';
+import PagamentosOrfaosPage from './pages/PagamentosOrfaosPage';
 import VerifyIdentityPage from './pages/VerifyIdentityPage';
 import IpWhitelistPage from './pages/IpWhitelistPage';
 import DownloadPage from './pages/DownloadPage';
@@ -125,6 +126,7 @@ export const router = createBrowserRouter([
 
       // Pagamentos / Woovi
       { path: 'pagamentos', element: <PagamentosWooviPage /> },
+      { path: 'pagamentos/orfaos', element: <PagamentosOrfaosPage /> },
 
       // Rede de Indicações
       { path: 'rede', element: <RedeIndicacoesPage /> },

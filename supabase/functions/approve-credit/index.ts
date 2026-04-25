@@ -548,7 +548,41 @@ Deno.serve(async (req: Request) => {
 
     // Gerar datas de vencimento
     const hoje = new Date();
-    const datasVencimento = gerarDatasVencimento(numParcelas, periodicidade, diaPagamento, hoje);
+    let datasVencimento = gerarDatasVencimento(numParcelas, periodicidade, diaPagamento, hoje);
+
+    // ── Override por datas_personalizadas ─────────────────
+    // - Se array tiver tamanho == numParcelas → usa todas (uma por parcela)
+    // - Se array tiver tamanho 1 → usa como data da 1ª parcela e desloca demais
+    try {
+      const raw = analise.datas_personalizadas;
+      if (raw) {
+        const arr: string[] = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (Array.isArray(arr) && arr.length > 0) {
+          const valid = arr.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d));
+          if (valid.length === numParcelas) {
+            datasVencimento = [...valid].sort();
+          } else if (valid.length === 1) {
+            const baseManual = new Date(valid[0] + "T00:00:00");
+            datasVencimento = gerarDatasVencimento(numParcelas, periodicidade, diaPagamento, (() => {
+              // recua um período pra que a 1ª iteração caia em baseManual
+              const d = new Date(baseManual);
+              if (periodicidade === "semanal") d.setDate(d.getDate() - 7);
+              else if (periodicidade === "quinzenal") d.setDate(d.getDate() - 15);
+              else d.setMonth(d.getMonth() - 1);
+              return d;
+            })());
+            datasVencimento[0] = valid[0];
+          } else if (valid.length > 1 && valid.length !== numParcelas) {
+            // datas parciais — preenche o que tem e completa
+            const sorted = [...valid].sort();
+            for (let i = 0; i < Math.min(sorted.length, numParcelas); i++) datasVencimento[i] = sorted[i];
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[approve-credit] datas_personalizadas inválido, ignorando:", e);
+    }
+
     const proximoVencimento = datasVencimento[0];
 
     // Mapear periodicidade para tipo_juros
@@ -775,7 +809,7 @@ Deno.serve(async (req: Request) => {
         }
 
         msg += `\n\nEm caso de dúvidas, entre em contato conosco.`;
-        msg += `\n_FinanceDigital_`;
+        msg += `\n_Casa da Moeda_`;
 
         console.log(`[approve-credit][WA] Mensagem final (primeiros 300 chars): ${msg.substring(0, 300)}`);
         await enviarWhatsAppSistema(adminClient, telefone, msg, analise.cliente_id, "aprovacao");

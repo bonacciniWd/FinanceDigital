@@ -276,7 +276,7 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
       latitude: Number(raw.latitude),
       longitude: Number(raw.longitude),
       accuracy: raw.accuracy == null ? null : Number(raw.accuracy),
-      capturedAt: String(raw.captured_at || locationLog?.created_at || ''),
+      capturedAt: String(raw.captured_at || locationLog?.createdAt || ''),
     };
   }, [logs]);
 

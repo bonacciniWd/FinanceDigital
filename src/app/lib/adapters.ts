@@ -179,6 +179,8 @@ export function dbParcelaToView(p: ParcelaComCliente): Parcela {
     confirmadoPor: (p as any).confirmado_por ?? undefined,
     confirmadoEm: (p as any).confirmado_em ?? undefined,
     wooviChargeId: (p as any).woovi_charge_id ?? undefined,
+    acordoId: (p as any).acordo_id ?? null,
+    congelada: (p as any).congelada ?? false,
   };
 }
 

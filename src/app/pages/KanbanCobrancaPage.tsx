@@ -41,6 +41,7 @@ import {
   Upload,
   QrCode,
   Image,
+  ArrowUpDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -56,6 +57,7 @@ import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useCriarCobrancaWoovi, useCriarCobvEfi } from '../hooks/useWoovi';
 import { useRegistrarPagamento } from '../hooks/useParcelas';
 import { useCriarAcordo } from '../hooks/useAcordos';
+import ComprovanteUploader from '../components/ComprovanteUploader';
 import { useConfigSistema } from '../hooks/useConfigSistema';
 import { supabase } from '../lib/supabase';
 import { valorCorrigido } from '../lib/juros';
@@ -101,6 +103,8 @@ export default function KanbanCobrancaPage() {
   const [busca, setBusca] = useState('');
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
   const [contatoObs, setContatoObs] = useState('');
+  // Sort por coluna (toggle asc/desc por dias de atraso/proximidade do vencimento)
+  const [sortByCol, setSortByCol] = useState<Record<string, 'asc' | 'desc'>>({});
 
   // Chat dropdown state
   const [chatMenuCard, setChatMenuCard] = useState<string | null>(null);
@@ -226,23 +230,65 @@ export default function KanbanCobrancaPage() {
     );
   }, [allCards, busca]);
 
+  // Data de hoje em yyyy-mm-dd (timezone local) — usada para filtrar 'A vencer' = hoje
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }, []);
+
+  /** Próximo vencimento (mais antigo) entre os empréstimos ativos/inadimplentes do cliente. */
+  const proximoVencDoCliente = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const [cid, emps] of emprestimosByCliente.entries()) {
+      const datas = emps
+        .filter((e) => e.status === 'ativo' || e.status === 'inadimplente')
+        .map((e) => e.proximoVencimento)
+        .filter(Boolean)
+        .sort();
+      map.set(cid, datas[0] ?? null);
+    }
+    return map;
+  }, [emprestimosByCliente]);
+
   const cardsByEtapa = useMemo(() => {
     const map: Record<string, KanbanCobrancaView[]> = {};
     for (const col of COLUMNS) {
-      if (col.id === 'vencido_n1') {
-        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 1 && c.diasAtraso <= 15);
+      let list: KanbanCobrancaView[];
+      if (col.id === 'a_vencer') {
+        // Apenas clientes com PRÓXIMO vencimento === hoje (yyyy-mm-dd local)
+        list = filteredCards.filter((c) => {
+          if (c.etapa !== 'a_vencer') return false;
+          const venc = proximoVencDoCliente.get(c.clienteId);
+          return venc === todayStr;
+        });
+      } else if (col.id === 'vencido_n1') {
+        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 1 && c.diasAtraso <= 15);
       } else if (col.id === 'vencido_n2') {
-        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 16 && c.diasAtraso <= 45);
+        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 16 && c.diasAtraso <= 45);
       } else if (col.id === 'vencido_n3') {
-        map[col.id] = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 46 && c.diasAtraso <= 365);
+        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 46 && c.diasAtraso <= 365);
       } else if (col.id === 'arquivado') {
-        map[col.id] = filteredCards.filter((c) => c.etapa === 'arquivado' || (c.etapa === 'vencido' && c.diasAtraso > 365));
+        list = filteredCards.filter((c) => c.etapa === 'arquivado' || (c.etapa === 'vencido' && c.diasAtraso > 365));
       } else {
-        map[col.id] = filteredCards.filter((c) => c.etapa === col.id);
+        list = filteredCards.filter((c) => c.etapa === col.id);
       }
+
+      // Ordenação por coluna — default: 'desc' (mais atrasados primeiro)
+      const dir = sortByCol[col.id] ?? 'desc';
+      const sorted = [...list].sort((a, b) => {
+        const diff = a.diasAtraso - b.diasAtraso;
+        return dir === 'desc' ? -diff : diff;
+      });
+      map[col.id] = sorted;
     }
     return map;
-  }, [filteredCards]);
+  }, [filteredCards, proximoVencDoCliente, todayStr, sortByCol]);
+
+  const toggleSortCol = (colId: string) =>
+    setSortByCol((prev) => ({ ...prev, [colId]: (prev[colId] ?? 'desc') === 'desc' ? 'asc' : 'desc' }));
 
   const stats = useMemo(() => {
     const cardsAtivos = allCards.filter((c) => !['pago', 'perdido', 'arquivado'].includes(c.etapa));
@@ -720,7 +766,18 @@ export default function KanbanCobrancaPage() {
                         <span className="kanban-status-dot" style={{ background: column.dotColor, '--dot-color': column.dotColor } as React.CSSProperties} />
                         {column.title}
                       </CardTitle>
-                      <Badge variant="secondary" className="font-semibold">{cards.length}</Badge>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleSortCol(column.id)}
+                          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                          title={`Ordenar por dias (${(sortByCol[column.id] ?? 'desc') === 'desc' ? 'maior→menor' : 'menor→maior'})`}
+                          aria-label="Alternar ordenação"
+                        >
+                          <ArrowUpDown className="w-3.5 h-3.5" />
+                        </button>
+                        <Badge variant="secondary" className="font-semibold">{cards.length}</Badge>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-3 overflow-y-auto flex-1 min-h-0">
@@ -1117,101 +1174,77 @@ export default function KanbanCobrancaPage() {
               Anexe o comprovante de pagamento (imagem) para confirmar a quitação. O comprovante ficará disponível para consulta.
             </p>
 
-            {/* Upload comprovante */}
-            {comprovantePreview ? (
-              <div className="relative rounded-lg overflow-hidden border">
-                <img src={comprovantePreview} alt="Comprovante" className="w-full h-48 object-contain bg-muted" />
-                <button
-                  onClick={() => { setComprovanteFile(null); setComprovantePreview(null); }}
-                  className="absolute top-2 right-2 h-6 w-6 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
-                >
-                  <XCircle className="h-4 w-4" />
-                </button>
-              </div>
-            ) : (
-              <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors">
-                <Upload className="h-8 w-8 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Clique para anexar comprovante</span>
-                <span className="text-xs text-muted-foreground">JPG, PNG ou WebP</span>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      setComprovanteFile(file);
-                      setComprovantePreview(URL.createObjectURL(file));
+            {(() => {
+              const empData = emprestimos.find(e => e.id === quitarEmpId);
+              const saldoEstimado = empData
+                ? Math.max((empData.parcelas - (empData.parcelasPagas || 0)) * empData.valorParcela, 0)
+                : 0;
+              return (
+                <ComprovanteUploader
+                  parcela={{ valor: saldoEstimado }}
+                  submitting={quitarLoading}
+                  onCancel={() => setShowQuitarModal(false)}
+                  confirmLabel="Confirmar Quitação"
+                  onConfirm={async ({ file, ocr, ocrAvaliacao, confirmDivergencia }) => {
+                    if (!quitarEmpId) return;
+                    setQuitarLoading(true);
+                    try {
+                      const ext = file.name.split('.').pop() || 'jpg';
+                      const path = `comprovantes/${quitarEmpId}/${Date.now()}.${ext}`;
+                      const { error: upErr } = await supabase.storage
+                        .from('whatsapp-media')
+                        .upload(path, file, { contentType: file.type });
+                      if (upErr) throw new Error(`Upload falhou: ${upErr.message}`);
+
+                      const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
+                      const comprovanteUrl = urlData.publicUrl;
+
+                      const hoje = new Date().toISOString().split('T')[0];
+                      const { data: parcelasPendentes } = await (supabase
+                        .from('parcelas') as any)
+                        .select('id')
+                        .eq('emprestimo_id', quitarEmpId)
+                        .in('status', ['pendente', 'vencida']);
+
+                      const ocrStatus = ocr
+                        ? (ocrAvaliacao?.aprovado ? 'auto_aprovado' : confirmDivergencia ? 'divergencia' : 'manual')
+                        : 'sem_ocr';
+
+                      for (const p of parcelasPendentes ?? []) {
+                        const updateData: ParcelaUpdate & Record<string, unknown> = {
+                          status: 'paga',
+                          data_pagamento: hoje,
+                          pagamento_tipo: 'manual',
+                          comprovante_url: comprovanteUrl,
+                          confirmado_por: user?.id,
+                          confirmado_em: new Date().toISOString(),
+                          comprovante_valor_ocr: ocr?.valor ?? null,
+                          comprovante_data_ocr: ocr?.data ?? null,
+                          comprovante_chave_ocr: ocr?.chavePix ?? null,
+                          comprovante_ocr_score: ocr?.confidenceMedia ?? null,
+                          comprovante_ocr_status: ocrStatus,
+                        };
+                        await (supabase.from('parcelas') as any).update(updateData).eq('id', p.id);
+                      }
+
+                      if (empData) {
+                        quitarEmprestimo.mutate({ id: quitarEmpId, totalParcelas: empData.parcelas });
+                      }
+
+                      toast.success('Pagamento confirmado com comprovante!');
+                      setShowQuitarModal(false);
+                      setQuitarEmpId(null);
+                      setComprovanteFile(null);
+                      setComprovantePreview(null);
+                    } catch (err) {
+                      toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao confirmar pagamento'}`);
+                    } finally {
+                      setQuitarLoading(false);
                     }
                   }}
                 />
-              </label>
-            )}
-
-            <div className="flex gap-3">
-              <Button
-                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                disabled={!comprovanteFile || quitarLoading}
-                onClick={async () => {
-                  if (!quitarEmpId || !comprovanteFile) return;
-                  setQuitarLoading(true);
-                  try {
-                    // Upload comprovante to Supabase storage
-                    const ext = comprovanteFile.name.split('.').pop() || 'jpg';
-                    const path = `comprovantes/${quitarEmpId}/${Date.now()}.${ext}`;
-                    const { error: upErr } = await supabase.storage
-                      .from('whatsapp-media')
-                      .upload(path, comprovanteFile, { contentType: comprovanteFile.type });
-                    if (upErr) throw new Error(`Upload falhou: ${upErr.message}`);
-
-                    const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
-                    const comprovanteUrl = urlData.publicUrl;
-
-                    // Registrar pagamento em todas as parcelas pendentes do empréstimo
-                    const hoje = new Date().toISOString().split('T')[0];
-                    const { data: parcelasPendentes } = await (supabase
-                      .from('parcelas') as any)
-                      .select('id')
-                      .eq('emprestimo_id', quitarEmpId)
-                      .in('status', ['pendente', 'vencida']);
-
-                    for (const p of parcelasPendentes ?? []) {
-                      const updateData: ParcelaUpdate = {
-                        status: 'paga',
-                        data_pagamento: hoje,
-                        pagamento_tipo: 'manual',
-                        comprovante_url: comprovanteUrl,
-                        confirmado_por: user?.id,
-                        confirmado_em: new Date().toISOString(),
-                      };
-                      await (supabase.from('parcelas') as any).update(updateData).eq('id', p.id);
-                    }
-
-                    // Quitar empréstimo
-                    const empData = emprestimos.find(e => e.id === quitarEmpId);
-                    if (empData) {
-                      quitarEmprestimo.mutate({ id: quitarEmpId, totalParcelas: empData.parcelas });
-                    }
-
-                    toast.success('Pagamento confirmado com comprovante!');
-                    setShowQuitarModal(false);
-                    setQuitarEmpId(null);
-                    setComprovanteFile(null);
-                    setComprovantePreview(null);
-                  } catch (err) {
-                    toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao confirmar pagamento'}`);
-                  } finally {
-                    setQuitarLoading(false);
-                  }
-                }}
-              >
-                {quitarLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-                Confirmar Quitação
-              </Button>
-              <Button variant="outline" className="flex-1" onClick={() => setShowQuitarModal(false)}>
-                Cancelar
-              </Button>
-            </div>
+              );
+            })()}
           </div>
         </DialogContent>
       </Dialog>

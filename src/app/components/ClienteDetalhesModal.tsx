@@ -60,6 +60,7 @@ import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useAdminUsers } from '../hooks/useAdminUsers';
 import { supabase } from '../lib/supabase';
+import AcordoFormModal from './AcordoFormModal';
 import type { ClienteUpdate } from '../lib/database.types';
 
 interface Props {
@@ -530,6 +531,10 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   const updateParcela = useUpdateParcela();
 
   const pendentes = parcelas.filter((p) => p.status !== 'paga' && p.status !== 'cancelada');
+  const temVencidas = pendentes.some((p) => p.status === 'vencida');
+  const saldoPendente = pendentes.reduce((sum, p) => sum + (p.valor + p.juros + p.multa - p.desconto), 0);
+
+  const [showAcordoModal, setShowAcordoModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editJuros, setEditJuros] = useState('');
   const [editMulta, setEditMulta] = useState('');
@@ -562,9 +567,21 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   return (
     <div className="space-y-6">
       <section>
-        <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-          <HandshakeIcon className="w-4 h-4" /> Acordos
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <HandshakeIcon className="w-4 h-4" /> Acordos
+          </h3>
+          {pendentes.length > 0 && (
+            <Button
+              size="sm"
+              className="h-8 bg-green-600 hover:bg-green-700"
+              onClick={() => setShowAcordoModal(true)}
+            >
+              <HandshakeIcon className="w-3.5 h-3.5 mr-1" />
+              Criar acordo {temVencidas ? '(há parcelas vencidas)' : ''}
+            </Button>
+          )}
+        </div>
         {acordos.length === 0 ? (
           <div className="text-xs text-muted-foreground">Nenhum acordo cadastrado</div>
         ) : (
@@ -572,7 +589,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
             {acordos.map((a) => (
               <div key={a.id} className="border rounded p-3 text-xs flex items-center justify-between">
                 <div>
-                  <div className="font-medium">{formatCurrency(a.valor_total)} em {a.num_parcelas}x</div>
+                  <div className="font-medium">{formatCurrency(a.valor_divida_original)} em {a.num_parcelas}x</div>
                   <div className="text-muted-foreground">
                     Criado {formatDate(a.created_at)} · Status: {a.status}
                   </div>
@@ -593,9 +610,18 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
           </div>
         )}
         <p className="text-[11px] text-muted-foreground mt-2">
-          Para criar um novo acordo use o <b>Kanban de Cobrança → Negociação</b> (fluxo completo com PIX).
+          Use <b>Criar acordo</b> para configurar entrada, parcelas, datas individuais e refinanciar a dívida.
         </p>
       </section>
+
+      <AcordoFormModal
+        open={showAcordoModal}
+        onClose={() => setShowAcordoModal(false)}
+        clienteId={clienteId}
+        valorDividaSugerido={saldoPendente}
+        origem="modal-cliente"
+        onCriado={() => setShowAcordoModal(false)}
+      />
 
       <section>
         <h3 className="text-sm font-semibold mb-3">Parcelas pendentes & vencidas</h3>
@@ -808,7 +834,7 @@ function WhatsappTab({ cliente }: { cliente: NonNullable<ReturnType<typeof useCl
         </Button>
         <Button onClick={handleEnviar} disabled={enviar.isPending || !instanciaId || !mensagem.trim()}>
           {enviar.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-          Enviar via {instanciaAtiva?.nome ?? 'WhatsApp'}
+          Enviar via {instanciaAtiva?.instance_name ?? 'WhatsApp'}
         </Button>
       </div>
     </div>

@@ -40,6 +40,7 @@ import { useCriarCobvEfi } from '../hooks/useWoovi';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useClienteModal } from '../contexts/ClienteModalContext';
 import { supabase } from '../lib/supabase';
+import ComprovanteUploader from '../components/ComprovanteUploader';
 import type { Emprestimo, Parcela, Cliente } from '../lib/view-types';
 import { calcularJurosAtraso, diasDeAtraso } from '../lib/juros';
 
@@ -818,7 +819,7 @@ function EmprestimoDetailModal({
                                           if (instSistema && cli?.telefone && brCode) {
                                             const phone = cli.telefone.replace(/\D/g, '').length <= 11 ? '55' + cli.telefone.replace(/\D/g, '') : cli.telefone.replace(/\D/g, '');
                                             // Enviar texto com copia-e-cola
-                                            const msg = `💰 *Cobrança PIX - Parcela ${p.numero}*\n\nOlá ${emprestimo.clienteNome}!\n\nValor: *${formatCurrency(p.valor)}*\nVencimento: ${formatDate(p.dataVencimento)}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_FinanceDigital_`;
+                                            const msg = `💰 *Cobrança PIX - Parcela ${p.numero}*\n\nOlá ${emprestimo.clienteNome}!\n\nValor: *${formatCurrency(p.valor)}*\nVencimento: ${formatDate(p.dataVencimento)}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_CasaDaMoeda_`;
                                             await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
                                             // Enviar QR code como imagem separada
                                             if (qrImage) {
@@ -1413,84 +1414,52 @@ function EmprestimoDetailModal({
               </div>
             </div>
 
-            <div>
-              <Label className="text-xs mb-2 block">Comprovante de pagamento (imagem)</Label>
-              {comprovantePreview ? (
-                <div className="relative rounded-lg overflow-hidden border">
-                  <img src={comprovantePreview} alt="Comprovante" className="w-full h-48 object-contain bg-muted" />
-                  <button
-                    onClick={() => { setComprovanteFile(null); setComprovantePreview(null); }}
-                    className="absolute top-2 right-2 h-6 w-6 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center gap-2 p-6 border-2 border-dashed rounded-lg cursor-pointer hover:border-primary/50 transition-colors">
-                  <Upload className="h-8 w-8 text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Clique para selecionar o comprovante</span>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        setComprovanteFile(file);
-                        const reader = new FileReader();
-                        reader.onload = (ev) => setComprovantePreview(ev.target?.result as string);
-                        reader.readAsDataURL(file);
-                      }
-                    }}
-                  />
-                </label>
-              )}
-            </div>
+            <ComprovanteUploader
+              parcela={{
+                valor: comprovanteParcela.valor,
+                juros: comprovanteParcela.juros,
+                multa: comprovanteParcela.multa,
+                desconto: comprovanteParcela.desconto,
+              }}
+              submitting={comprovanteLoading}
+              onCancel={() => { setShowComprovanteModal(false); setComprovanteParcela(null); }}
+              onConfirm={async ({ file, ocr, ocrAvaliacao, confirmDivergencia }) => {
+                if (!comprovanteParcela) return;
+                setComprovanteLoading(true);
+                try {
+                  const ext = file.name.split('.').pop() || 'png';
+                  const path = `comprovantes/${comprovanteParcela.id}_${Date.now()}.${ext}`;
+                  const { error: upErr } = await supabase.storage.from('whatsapp-media').upload(path, file, { upsert: true });
+                  if (upErr) throw upErr;
+                  const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
 
-            <div className="flex gap-3 justify-end pt-2">
-              <Button variant="outline" onClick={() => { setShowComprovanteModal(false); setComprovanteParcela(null); }}>
-                Cancelar
-              </Button>
-              <Button
-                className="bg-green-600 hover:bg-green-700"
-                disabled={!comprovanteFile || comprovanteLoading}
-                onClick={async () => {
-                  if (!comprovanteFile || !comprovanteParcela) return;
-                  setComprovanteLoading(true);
-                  try {
-                    // Upload comprovante to Supabase Storage
-                    const ext = comprovanteFile.name.split('.').pop() || 'png';
-                    const path = `comprovantes/${comprovanteParcela.id}_${Date.now()}.${ext}`;
-                    const { error: upErr } = await supabase.storage.from('whatsapp-media').upload(path, comprovanteFile, { upsert: true });
-                    if (upErr) throw upErr;
-                    const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
+                  await registrarPagamento.mutateAsync({ id: comprovanteParcela.id, dataPagamento: new Date().toISOString().slice(0, 10) });
+                  await updateParcela.mutateAsync({
+                    id: comprovanteParcela.id,
+                    data: {
+                      comprovante_url: urlData.publicUrl,
+                      pagamento_tipo: 'manual' as const,
+                      comprovante_valor_ocr: ocr?.valor ?? null,
+                      comprovante_data_ocr: ocr?.data ?? null,
+                      comprovante_chave_ocr: ocr?.chavePix ?? null,
+                      comprovante_ocr_score: ocr?.confidenceMedia ?? null,
+                      comprovante_ocr_status: ocr
+                        ? (ocrAvaliacao?.aprovado ? 'auto_aprovado' : confirmDivergencia ? 'divergencia' : 'manual')
+                        : 'sem_ocr',
+                    } as any,
+                  });
 
-                    // Marcar parcela como paga com comprovante
-                    await registrarPagamento.mutateAsync({ id: comprovanteParcela.id, dataPagamento: new Date().toISOString().slice(0, 10) });
-                    await updateParcela.mutateAsync({
-                      id: comprovanteParcela.id,
-                      data: {
-                        comprovante_url: urlData.publicUrl,
-                        pagamento_tipo: 'manual' as const,
-                      },
-                    });
-
-                    toast.success(`Parcela ${comprovanteParcela.numero} confirmada com comprovante!`);
-                    setShowComprovanteModal(false);
-                    setComprovanteParcela(null);
-
-                    if (pendentesCount <= 1) setShowReativarDialog(true);
-                  } catch (err) {
-                    toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao confirmar pagamento'}`);
-                  } finally {
-                    setComprovanteLoading(false);
-                  }
-                }}
-              >
-                {comprovanteLoading ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <CheckCircle className="w-4 h-4 mr-1" />}
-                Confirmar Pagamento
-              </Button>
-            </div>
+                  toast.success(`Parcela ${comprovanteParcela.numero} confirmada com comprovante!`);
+                  setShowComprovanteModal(false);
+                  setComprovanteParcela(null);
+                  if (pendentesCount <= 1) setShowReativarDialog(true);
+                } catch (err) {
+                  toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao confirmar pagamento'}`);
+                } finally {
+                  setComprovanteLoading(false);
+                }
+              }}
+            />
           </div>
         </DialogContent>
       </Dialog>

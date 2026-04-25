@@ -104,7 +104,7 @@ async function criarCobrancaEfi(
         juros: { modalidade: 2, valorPerc: String(creds.jurosPerc.toFixed(2)) },
       },
       chave: creds.pixKey,
-      solicitacaoPagador: `Parcela ${parcela.numero} - FinanceDigital`.substring(0, 140),
+      solicitacaoPagador: `Parcela ${parcela.numero} - Casa da Moeda`.substring(0, 140),
     };
 
     // Devedor (CPF obrigatório para cobv)
@@ -662,7 +662,7 @@ Deno.serve(async (req: Request) => {
           ``,
           `Organize-se para efetuar o pagamento dentro do prazo e evitar juros.`,
           ``,
-          `_FinanceDigital_`,
+          `_Casa da Moeda_`,
         );
         mensagem = lines.join("\n");
       } else if (tipo === "lembrete_vespera") {
@@ -684,7 +684,7 @@ Deno.serve(async (req: Request) => {
           ``,
           `Não se esqueça de efetuar o pagamento para manter seu crédito em dia!`,
           ``,
-          `_FinanceDigital_`,
+          `_Casa da Moeda_`,
         );
         mensagem = lines.join("\n");
       } else if (tipo === "vencida_ontem") {
@@ -708,7 +708,7 @@ Deno.serve(async (req: Request) => {
           ``,
           `Em caso de dúvidas ou para negociar, entre em contato conosco.`,
           ``,
-          `_FinanceDigital_`,
+          `_Casa da Moeda_`,
         );
         mensagem = lines.join("\n");
       }
@@ -871,7 +871,7 @@ Deno.serve(async (req: Request) => {
           ``,
           `Entre em contato para regularizar sua situação.`,
           ``,
-          `_FinanceDigital_`,
+          `_Casa da Moeda_`,
         ].join("\n");
       }
 

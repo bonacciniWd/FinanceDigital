@@ -61,6 +61,7 @@ import {
 } from '../hooks/useEtiquetas';
 import { useCreateTicket, useTicketsByCliente } from '../hooks/useTickets';
 import { useAuth } from '../contexts/AuthContext';
+import ComprovanteUploader from '../components/ComprovanteUploader';
 
 // ── Conversor áudio → WAV 16 kHz mono (via Web Audio API) ─────────────
 // Funciona com QUALQUER formato que o browser grave (WebM/Opus, OGG/Opus, MP4/AAC).
@@ -403,10 +404,17 @@ export default function WhatsAppPage() {
   // Doc assignment to client profile
   const [docAssignOpen, setDocAssignOpen] = useState(false);
   const [docAssignMediaUrl, setDocAssignMediaUrl] = useState<string | null>(null);
-  const [docAssignType, setDocAssignType] = useState<'documento_frente_url' | 'documento_verso_url' | 'comprovante_endereco_url'>('documento_frente_url');
+  const [docAssignType, setDocAssignType] = useState<'documento_frente_url' | 'documento_verso_url' | 'comprovante_endereco_url' | 'comprovante_pagamento'>('documento_frente_url');
   const [docAssignClienteId, setDocAssignClienteId] = useState<string | null>(null);
   const [docAssignSearch, setDocAssignSearch] = useState('');
   const [docAssignLoading, setDocAssignLoading] = useState(false);
+  // Comprovante de pagamento (OCR) — modal de seleção de parcela
+  const [comprovantePagOpen, setComprovantePagOpen] = useState(false);
+  const [comprovantePagFile, setComprovantePagFile] = useState<File | null>(null);
+  const [comprovantePagClienteId, setComprovantePagClienteId] = useState<string | null>(null);
+  const [comprovantePagParcelas, setComprovantePagParcelas] = useState<Array<{id: string; numero: number; valor: number; juros: number; multa: number; desconto: number; data_vencimento: string}>>([]);
+  const [comprovantePagParcelaId, setComprovantePagParcelaId] = useState<string | null>(null);
+  const [comprovantePagLoading, setComprovantePagLoading] = useState(false);
   const [newInstanceForm, setNewInstanceForm] = useState({
     instance_name: '',
     evolution_url: '',
@@ -524,6 +532,30 @@ export default function WhatsAppPage() {
       const res = await fetch(docAssignMediaUrl);
       if (!res.ok) throw new Error('Falha ao baixar mídia');
       const blob = await res.blob();
+
+      // Caso especial: comprovante de pagamento → abre modal de seleção de parcela com OCR
+      if (docAssignType === 'comprovante_pagamento') {
+        const ext = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
+        const file = new File([blob], `comprovante-${Date.now()}.${ext}`, { type: blob.type || 'image/jpeg' });
+        // Carrega parcelas pendentes do cliente
+        const { data: parcelasData } = await (supabase as any)
+          .from('parcelas')
+          .select('id, numero, valor, juros, multa, desconto, data_vencimento, status, emprestimos!inner(cliente_id)')
+          .eq('emprestimos.cliente_id', docAssignClienteId)
+          .in('status', ['pendente', 'vencida'])
+          .order('data_vencimento', { ascending: true });
+        setComprovantePagFile(file);
+        setComprovantePagClienteId(docAssignClienteId);
+        setComprovantePagParcelas((parcelasData ?? []).map((p: any) => ({
+          id: p.id, numero: p.numero, valor: Number(p.valor), juros: Number(p.juros || 0),
+          multa: Number(p.multa || 0), desconto: Number(p.desconto || 0), data_vencimento: p.data_vencimento,
+        })));
+        setComprovantePagParcelaId(null);
+        setDocAssignOpen(false);
+        setComprovantePagOpen(true);
+        return;
+      }
+
       const ext = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
       const fileName = docAssignType === 'documento_frente_url' ? 'doc-frente'
         : docAssignType === 'documento_verso_url' ? 'doc-verso'
@@ -1767,6 +1799,7 @@ export default function WhatsAppPage() {
                 <option value="documento_frente_url">Documento Frente (RG/CNH)</option>
                 <option value="documento_verso_url">Documento Verso</option>
                 <option value="comprovante_endereco_url">Comprovante de Endereço</option>
+                <option value="comprovante_pagamento">Comprovante de Pagamento (OCR)</option>
               </select>
             </div>
             {/* Client search */}
@@ -1808,6 +1841,91 @@ export default function WhatsAppPage() {
               Atribuir
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal Comprovante de Pagamento (OCR + selecionar parcela) */}
+      <Dialog open={comprovantePagOpen} onOpenChange={(o) => { if (!o) { setComprovantePagOpen(false); setComprovantePagFile(null); setComprovantePagParcelaId(null); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Comprovante de Pagamento</DialogTitle>
+            <DialogDescription>Selecione a parcela a quitar com este comprovante. O OCR validará o valor automaticamente.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1 block">Parcela</label>
+              {comprovantePagParcelas.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nenhuma parcela pendente para este cliente.</p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto border rounded-md">
+                  {comprovantePagParcelas.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-accent flex items-center justify-between ${comprovantePagParcelaId === p.id ? 'bg-accent' : ''}`}
+                      onClick={() => setComprovantePagParcelaId(p.id)}
+                    >
+                      <span>Parcela {p.numero} · venc. {new Date(p.data_vencimento).toLocaleDateString('pt-BR')}</span>
+                      <span className="font-medium">{(p.valor + p.juros + p.multa - p.desconto).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {comprovantePagParcelaId && comprovantePagFile && (() => {
+              const parcela = comprovantePagParcelas.find(p => p.id === comprovantePagParcelaId)!;
+              return (
+                <ComprovanteUploader
+                  parcela={{ valor: parcela.valor, juros: parcela.juros, multa: parcela.multa, desconto: parcela.desconto }}
+                  initialFile={comprovantePagFile}
+                  submitting={comprovantePagLoading}
+                  onCancel={() => setComprovantePagOpen(false)}
+                  confirmLabel="Confirmar Pagamento"
+                  onConfirm={async ({ file, ocr, ocrAvaliacao, confirmDivergencia }) => {
+                    setComprovantePagLoading(true);
+                    try {
+                      const ext = file.name.split('.').pop() || 'jpg';
+                      const path = `comprovantes/${parcela.id}/${Date.now()}.${ext}`;
+                      const { error: upErr } = await supabase.storage
+                        .from('whatsapp-media')
+                        .upload(path, file, { contentType: file.type });
+                      if (upErr) throw new Error(`Upload falhou: ${upErr.message}`);
+                      const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
+                      const ocrStatus = ocr
+                        ? (ocrAvaliacao?.aprovado ? 'auto_aprovado' : confirmDivergencia ? 'divergencia' : 'manual')
+                        : 'sem_ocr';
+                      const updateData: Record<string, unknown> = {
+                        status: 'paga',
+                        data_pagamento: new Date().toISOString().split('T')[0],
+                        pagamento_tipo: 'manual',
+                        comprovante_url: urlData.publicUrl,
+                        confirmado_por: user?.id,
+                        confirmado_em: new Date().toISOString(),
+                        comprovante_valor_ocr: ocr?.valor ?? null,
+                        comprovante_data_ocr: ocr?.data ?? null,
+                        comprovante_chave_ocr: ocr?.chavePix ?? null,
+                        comprovante_ocr_score: ocr?.confidenceMedia ?? null,
+                        comprovante_ocr_status: ocrStatus,
+                      };
+                      const { error: dbErr } = await (supabase.from('parcelas') as any).update(updateData).eq('id', parcela.id);
+                      if (dbErr) throw dbErr;
+                      toast.success(`Parcela ${parcela.numero} marcada como paga`);
+                      setComprovantePagOpen(false);
+                      setComprovantePagFile(null);
+                      setComprovantePagParcelaId(null);
+                      queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+                      queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+                    } catch (err) {
+                      toast.error(`Erro: ${err instanceof Error ? err.message : String(err)}`);
+                    } finally {
+                      setComprovantePagLoading(false);
+                    }
+                  }}
+                />
+              );
+            })()}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

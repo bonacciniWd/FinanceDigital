@@ -61,6 +61,10 @@ export default function AnaliseCreditoPage() {
     intervaloDias: '',
     diaUtil: false,
     datasPersonalizadas: [] as Date[],
+    /** Data manual da 1ª parcela (opcional). Sobrescreve o cálculo. */
+    dataPrimeiraParcela: '',
+    /** Datas individuais por parcela (opcional, paralelo a valoresParcelas). */
+    datasParcelas: [] as string[],
     skipVerification: false,
     skipVerificationReason: '',
   });
@@ -289,16 +293,29 @@ export default function AnaliseCreditoPage() {
         dia_pagamento: formNova.diaPagamento ? parseInt(formNova.diaPagamento) : null,
         intervalo_dias: formNova.intervaloDias ? parseInt(formNova.intervaloDias) : null,
         dia_util: formNova.diaUtil,
-        datas_personalizadas: formNova.datasPersonalizadas.length > 0
-          ? JSON.stringify(formNova.datasPersonalizadas.map(d => d.toISOString().split('T')[0]).sort())
-          : null,
+        datas_personalizadas: (() => {
+          // Prioridade 1: datas individuais por parcela (uma por linha)
+          const nP = parseInt(formNova.numeroParcelas) || 0;
+          if (nP > 0 && formNova.datasParcelas.length > 0 && formNova.datasParcelas.slice(0, nP).every((d) => d && /^\d{4}-\d{2}-\d{2}$/.test(d))) {
+            return JSON.stringify(formNova.datasParcelas.slice(0, nP).sort());
+          }
+          // Prioridade 2: datas do calendário "personalizado"
+          if (formNova.datasPersonalizadas.length > 0) {
+            return JSON.stringify(formNova.datasPersonalizadas.map((d) => d.toISOString().split('T')[0]).sort());
+          }
+          // Prioridade 3: apenas a 1ª parcela manual — backend gera as demais a partir dela
+          if (formNova.dataPrimeiraParcela) {
+            return JSON.stringify([formNova.dataPrimeiraParcela]);
+          }
+          return null;
+        })(),
       },
       {
         onSuccess: async (created: { id: string } | undefined) => {
           const skipAutoApprove = formNova.skipVerification;
           toast.success(skipAutoApprove ? 'Análise criada — auto-aprovando (verificação pulada)...' : 'Análise criada com sucesso!');
           setShowNovaAnalise(false);
-          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', valorTotalReceber: '', valorParcela: '', valoresParcelas: [], rendaMensal: '', scoreSerasa: '0', numeroParcelas: '', periodicidade: 'mensal', diaPagamento: '', intervaloDias: '', diaUtil: false, datasPersonalizadas: [], skipVerification: false, skipVerificationReason: '' });
+          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', valorTotalReceber: '', valorParcela: '', valoresParcelas: [], rendaMensal: '', scoreSerasa: '0', numeroParcelas: '', periodicidade: 'mensal', diaPagamento: '', intervaloDias: '', diaUtil: false, datasPersonalizadas: [], dataPrimeiraParcela: '', datasParcelas: [], skipVerification: false, skipVerificationReason: '' });
           setPendenciaCliente(null);
           setBuscaCliente('');
 
@@ -881,6 +898,20 @@ export default function AnaliseCreditoPage() {
                 </div>
               )}
 
+              {/* Data manual da 1ª parcela (opcional, sobrescreve cálculo) */}
+              {formNova.periodicidade !== 'personalizado' && (
+                <div className="mt-3">
+                  <Label htmlFor="dataPrimeiraParcela" className="text-sm">Data da 1ª parcela <span className="font-normal text-muted-foreground">(opcional — sobrescreve o cálculo)</span></Label>
+                  <Input
+                    id="dataPrimeiraParcela"
+                    type="date"
+                    value={formNova.dataPrimeiraParcela}
+                    onChange={(e) => setFormNova({ ...formNova, dataPrimeiraParcela: e.target.value })}
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">Se vazio, o sistema gera a partir da data atual + periodicidade.</p>
+                </div>
+              )}
+
               {/* Valores individuais por parcela (opcional) */}
               {formNova.numeroParcelas && parseInt(formNova.numeroParcelas) > 0 && parseInt(formNova.numeroParcelas) <= 60 && (() => {
                 const n = parseInt(formNova.numeroParcelas);
@@ -891,36 +922,53 @@ export default function AnaliseCreditoPage() {
                 return (
                   <div className="mt-4 p-3 rounded-lg border border-dashed">
                     <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs font-medium text-muted-foreground">Valores individuais por parcela <span className="font-normal">(opcional — permite cobrar valores diferentes em cada parcela)</span></p>
+                      <p className="text-xs font-medium text-muted-foreground">Valores individuais por parcela <span className="font-normal">(opcional — permite cobrar valores e datas diferentes em cada parcela)</span></p>
                       <button
                         type="button"
                         className="text-[11px] text-muted-foreground hover:text-foreground underline"
-                        onClick={() => setFormNova({ ...formNova, valoresParcelas: [] })}
+                        onClick={() => setFormNova({ ...formNova, valoresParcelas: [], datasParcelas: [] })}
                       >
                         Resetar
                       </button>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                       {valores.map((v, i) => (
-                        <div key={i}>
-                          <Label htmlFor={`parcela-${i}`} className="text-[11px]">Parcela {i + 1}</Label>
-                          <div className="relative">
-                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R$</span>
+                        <div key={i} className="grid grid-cols-[1fr_1fr] gap-2 items-end">
+                          <div>
+                            <Label htmlFor={`parcela-${i}`} className="text-[11px]">Parcela {i + 1} — valor</Label>
+                            <div className="relative">
+                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R$</span>
+                              <Input
+                                id={`parcela-${i}`}
+                                className="pl-8 h-8 text-sm"
+                                placeholder="0,00"
+                                value={v}
+                                onChange={(e) => {
+                                  const novo = formatBRL(e.target.value);
+                                  const novoArray = [...valores];
+                                  novoArray[i] = novo;
+                                  const novaSoma = novoArray.reduce((s, x) => s + parseBRL(x || '0'), 0);
+                                  setFormNova({
+                                    ...formNova,
+                                    valoresParcelas: novoArray,
+                                    valorTotalReceber: novaSoma > 0 ? novaSoma.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : formNova.valorTotalReceber,
+                                  });
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <Label htmlFor={`parcela-data-${i}`} className="text-[11px]">Vencimento</Label>
                             <Input
-                              id={`parcela-${i}`}
-                              className="pl-8 h-8 text-sm"
-                              placeholder="0,00"
-                              value={v}
+                              id={`parcela-data-${i}`}
+                              type="date"
+                              className="h-8 text-sm"
+                              value={formNova.datasParcelas[i] ?? ''}
                               onChange={(e) => {
-                                const novo = formatBRL(e.target.value);
-                                const novoArray = [...valores];
-                                novoArray[i] = novo;
-                                const novaSoma = novoArray.reduce((s, x) => s + parseBRL(x || '0'), 0);
-                                setFormNova({
-                                  ...formNova,
-                                  valoresParcelas: novoArray,
-                                  valorTotalReceber: novaSoma > 0 ? novaSoma.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : formNova.valorTotalReceber,
-                                });
+                                const novoArray = [...formNova.datasParcelas];
+                                while (novoArray.length < n) novoArray.push('');
+                                novoArray[i] = e.target.value;
+                                setFormNova({ ...formNova, datasParcelas: novoArray.slice(0, n) });
                               }}
                             />
                           </div>

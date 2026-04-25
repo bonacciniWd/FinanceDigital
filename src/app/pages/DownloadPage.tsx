@@ -56,7 +56,7 @@ const PLATFORMS = [
     os: 'Windows',
     icon: Laptop,
     url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-win-x64.exe`,
-    size: '107 MB',
+    size: '116 MB',
     note: 'Windows 10/11 (64-bit)',
     ext: '.exe',
     color: 'from-blue-500 to-cyan-500',
@@ -68,7 +68,7 @@ const PLATFORMS = [
     os: 'macOS',
     icon: Apple,
     url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-mac-x64.dmg`,
-    size: '136 MB',
+    size: '149 MB',
     note: 'macOS 12+ (Intel & Apple Silicon)',
     ext: '.dmg',
     color: 'from-purple-500 to-pink-500',
@@ -80,7 +80,7 @@ const PLATFORMS = [
     os: 'Linux',
     icon: Monitor,
     url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-linux-x86_64.AppImage`,
-    size: '139 MB',
+    size: '152 MB',
     note: 'Ubuntu / Debian / Fedora (64-bit)',
     ext: '.AppImage',
     color: 'from-orange-500 to-yellow-500',
@@ -123,7 +123,23 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.2', date: '23 Abr 2026', isLatest: true, items: [
+  { version: '1.4.4', date: '25 Abr 2026', isLatest: true, items: [
+    'OCR de comprovantes de pagamento com Tesseract.js (extração de valor, data e remetente)',
+    'Conciliação automática de pagamentos órfãos (PIX/Woovi/EFI) com lançamento em parcelas',
+    'Tela de Pagamentos Órfãos para revisão e vínculo manual',
+    'Acordos formais com entrada %, parcelamento e congelamento das parcelas originais',
+    'Refinanciamento de empréstimos diretamente do modal do cliente',
+    'Edição inline de valor e vencimento por parcela em Gestão de Parcelas',
+    'Análise de Crédito: dados completos no card do Kanban (renda, score, parcela)',
+    'Filtro de UI refinado, scroll interno em todos os Kanbans',
+    'Skeletons "liquidmetal" no Dashboard, Histórico e Cobranças',
+    'Lazy loading do Histórico (20 itens por rolagem)',
+    'Página de Perfis de Acesso clicável e customizável por admin',
+    'Cobranças → link direto para parcela vinculada',
+    'Modal de Negociação disponível em todas as telas que listam inadimplentes',
+    'Restauração do ordenador por dias e filtro "A Vencer = hoje" no Kanban Cobrança',
+  ]},
+  { version: '1.4.2', date: '23 Abr 2026', isLatest: false, items: [
     'Juros automáticos por atraso agora configuráveis em Configurações do Sistema',
     'Parâmetros editáveis: juro fixo (R$/dia), juro percentual (%/dia), limiar e teto de dias',
     'Juros congelam automaticamente para clientes em Kanban Arquivado ou Perdido',

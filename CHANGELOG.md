@@ -6,6 +6,50 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.4] — 2026-04-25
+
+### Adicionado
+- **OCR de comprovantes** com Tesseract.js: extrai valor, data e remetente automaticamente ao anexar imagem em pagamentos manuais.
+- **Conciliação automática de pagamentos órfãos**: webhooks Woovi/EFI tentam vincular pagamento a parcela; se não houver match, registra em `pagamentos_orfaos` para revisão manual.
+- **Tela `/pagamentos-orfaos`**: lista pagamentos sem vínculo, permite vincular manualmente a uma parcela existente ou descartar.
+- **Acordos formais**: modal de Negociação no Kanban Cobrança gera cobrança Pix (Woovi 24h), envia WhatsApp ao cliente, congela parcelas vencidas e cria parcelas novas com entrada %, parcelamento e dia de pagamento configuráveis.
+- **Refinanciamento**: novo fluxo no `ClienteDetalhesModal` para refinanciar empréstimo ativo (quita atual + cria novo).
+- **Edição inline** de valor e vencimento por parcela em `GestaoParcelasPage`.
+- **Modal de Negociação universal**: disponível em todas as telas que listam inadimplentes.
+- **Lazy loading** do Histórico (20 itens por rolagem) — fix de travamento ao abrir a tela.
+- **Página de Perfis de Acesso** clicável e editável pelo admin (persistido em Supabase).
+- **Cobranças → parcela**: clicar no card de cobrança abre o detalhe da parcela vinculada.
+
+### Melhorado
+- Cards do Kanban de Análise de Crédito agora exibem renda mensal, valor da parcela e score.
+- Scroll vertical interno em todos os Kanbans (atendimento, cobrança, análise).
+- Skeletons "liquidmetal" no Dashboard, Histórico e Cobranças.
+- Filtro de UI refinado.
+- **Restaurado** ordenador por dias (`ArrowUpDown` por coluna) e filtro "A Vencer = hoje" no Kanban Cobrança.
+- **Restaurados** estilos do Kanban Cobrança: largura da coluna `w-[500px]`, botão Chat `secondary`, dropdown amplo com hover verde.
+
+### Banco de Dados
+- Migration `050_conciliacao_ocr_orfaos.sql`: tabela `pagamentos_orfaos`, colunas em `acordos`, `parcelas.refinanciada_em`, helpers de conciliação.
+
+### Edge Functions
+- `_shared/conciliacao.ts`: lógica compartilhada de match Woovi/EFI → parcela.
+- `webhook-woovi`, `webhook-efi`, `approve-credit` republicados.
+
+---
+
+## [1.4.3] - 24-04-2026
+
+
+### Melhorias no Desempenho e Fixes
+
+- Charge detail modal com dados de parcela e empréstimo
+- Perfis de acesso editáveis pelo admin (persistido em Supabase)
+- Histórico de clientes com lazy-load (20 por scroll)
+- Skeletons liquid-metal em todas as páginas
+- Dashboard Financeiro: performance otimizada, skeleton completo
+- Fix: Intl.NumberFormat singleton em HistoricoClientesPage e DashboardFinanceiroPage
+---
+
 ## [1.4.2] — 2026-04-23
 
 ### Adicionado — Juros automáticos configuráveis via ConfigSistema

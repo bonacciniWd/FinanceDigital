@@ -115,9 +115,20 @@ export default function DashboardCobrancaPage() {
     const valorEntradasPagas = acordosAtivos.filter(a => a.entrada_paga).reduce((s, a) => s + Number(a.valor_entrada), 0);
     const valorRecuperadoAcordos = acordosQuitados.reduce((s, a) => s + Number(a.valor_divida_original), 0);
 
-    // Pagamento limpo = valor recuperado (pago) que NÃO veio de acordo
-    // Para simplificar: valor total recuperado - valor quitado via acordos
-    const valorRecuperadoLimpo = Math.max(0, valorRecuperado - valorRecuperadoAcordos);
+    // ── Faturamento real por origem (parcelas pagas) ─────────────
+    // Pagamento Limpo: parcelas pagas SEM acordo_id (faturamento direto)
+    // Recuperação Acordo: parcelas pagas COM acordo_id (renegociação)
+    const parcelasPagas = allParcelas.filter(p => p.status === 'paga');
+    const valorPagamentoLimpo = parcelasPagas
+      .filter(p => !p.acordoId)
+      .reduce((s, p) => s + (p.valor || 0), 0);
+    const valorRecuperadoViaParcelasAcordo = parcelasPagas
+      .filter(p => !!p.acordoId)
+      .reduce((s, p) => s + (p.valor || 0), 0);
+
+    // Recuperação total via acordos = entradas + parcelas pagas vinculadas a acordos
+    const valorRecuperadoLimpo = valorPagamentoLimpo;
+    const valorRecuperadoAcordosTotal = valorRecuperadoViaParcelasAcordo + valorEntradasPagas;
 
     return {
       totalInadimplentes: clientesDados.length,
@@ -133,7 +144,7 @@ export default function DashboardCobrancaPage() {
       acordosAtivos: acordosAtivos.length,
       valorTotalAcordos,
       valorEntradasPagas,
-      valorRecuperadoAcordos,
+      valorRecuperadoAcordos: valorRecuperadoAcordosTotal,
       valorRecuperadoLimpo,
     };
   }, [allClientes, emprestimos, allParcelas, cardsCobranca, acordos]);
@@ -223,7 +234,7 @@ export default function DashboardCobrancaPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{formatCurrency(dados.valorRecuperadoAcordos)}</div>
-            <p className="text-xs text-muted-foreground mt-1">acordos quitados integralmente</p>
+            <p className="text-xs text-muted-foreground mt-1">parcelas de acordo + entradas pagas</p>
           </CardContent>
         </Card>
       </div>

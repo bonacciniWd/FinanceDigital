@@ -60,6 +60,7 @@ import {
   Monitor,
   Gauge,
   QrCode,
+  AlertTriangle,
   Percent,
   Settings2,
 } from 'lucide-react';
@@ -173,6 +174,7 @@ export function MainLayout() {
       title: 'PAGAMENTOS',
       items: [
         { name: 'Pagamentos Pix', href: '/pagamentos', icon: QrCode, roles: ['admin', 'gerencia'] },
+        { name: 'Pagamentos Órfãos', href: '/pagamentos/orfaos', icon: AlertTriangle, roles: ['admin', 'gerencia', 'cobranca'] },
       ],
     },
     {

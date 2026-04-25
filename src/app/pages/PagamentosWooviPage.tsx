@@ -483,7 +483,7 @@ export default function PagamentosWooviPage() {
           const phone = cliente.telefone.replace(/\D/g, '').length <= 11
             ? '55' + cliente.telefone.replace(/\D/g, '')
             : cliente.telefone.replace(/\D/g, '');
-          const msg = `💰 *Cobrança PIX - Parcela ${parcelaSelecionada.numero}*\n\nOlá ${parcelaSelecionada.clienteNome}!\n\nValor: *${formatCurrency(valorFinal)}*\nVencimento: ${new Date(parcelaSelecionada.dataVencimento).toLocaleDateString('pt-BR')}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_FinanceDigital_`;
+          const msg = `💰 *Cobrança PIX - Parcela ${parcelaSelecionada.numero}*\n\nOlá ${parcelaSelecionada.clienteNome}!\n\nValor: *${formatCurrency(valorFinal)}*\nVencimento: ${new Date(parcelaSelecionada.dataVencimento).toLocaleDateString('pt-BR')}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_CasaDaMoeda_`;
           await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
           if (qrImage) {
             const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
