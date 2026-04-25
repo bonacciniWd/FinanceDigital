@@ -340,7 +340,13 @@ export default function KanbanCobrancaPage() {
     setSortByCol((prev) => ({ ...prev, [colId]: (prev[colId] ?? 'desc') === 'desc' ? 'asc' : 'desc' }));
 
   const stats = useMemo(() => {
-    const cardsAtivos = allCards.filter((c) => !['pago', 'perdido', 'arquivado'].includes(c.etapa));
+    // Exclui pago/perdido/arquivado E também os "vencidos" antigos (>365 dias)
+    // que são exibidos na coluna ARQUIVADOS por regra de negócio.
+    const cardsAtivos = allCards.filter((c) => {
+      if (['pago', 'perdido', 'arquivado'].includes(c.etapa)) return false;
+      if (c.etapa === 'vencido' && c.diasAtraso > 365) return false;
+      return true;
+    });
     const total = cardsAtivos.reduce((sum, c) => sum + c.valorDivida, 0);
     const negociacao = cardsAtivos
       .filter((c) => c.etapa === 'negociacao')

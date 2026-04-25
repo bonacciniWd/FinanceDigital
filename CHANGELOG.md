@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.9] — 2026-04-25
+
+### Corrigido
+- **Kanban Cobrança — Total em Cobrança contabilizava arquivados**: o card de estatísticas "Total em Cobrança" e a contagem de clientes incluíam cards exibidos na coluna ARQUIVADOS (cards com `etapa='vencido'` e `diasAtraso > 365`). Agora o cálculo de `stats.total`/`stats.totalClientes` exclui também esses casos, refletindo apenas a carteira ativa de cobrança.
+
+---
+
 ## [1.4.8] — 2026-04-25
 
 ### Corrigido
