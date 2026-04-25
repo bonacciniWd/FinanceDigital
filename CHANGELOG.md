@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.7] — 2026-04-25
+
+### Corrigido
+- **Sidebar/MainLayout**: logo voltou para "FINTECH" (estava "CALCULADORA").
+
+---
+
 ## [1.4.6] — 2026-04-25
 
 ### Corrigido
