@@ -6,6 +6,24 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.5] — 2026-04-25
+
+### Adicionado
+- **Editor completo de empréstimo** (`EmprestimoEditModal`): clicar em um empréstimo na aba "Empréstimos" do `ClienteDetalhesModal` abre janela com 3 abas — **Dados** (valor, parcelas, taxa, tipo de juros, datas, status), **Parcelas** (edição inline de valor, vencimento e status por parcela) e **Auditoria** (aprovado por/quando, desembolsado em, vendedor, cobrador, gateway, skip verification).
+- **Code-splitting** em todas as 40+ páginas via `React.lazy` + `Suspense` em `routes.tsx` — bundle inicial reduzido drasticamente, navegação entre abas do MainLayout muito mais leve.
+
+### Corrigido
+- **Kanban A Vencer** mostrando cards com vencimento de ontem: `proximoVencDoCliente` agora filtra apenas datas `>= todayStr` e re-recalcula ao virar o dia.
+- **Modal do cliente estreitando** com muitos empréstimos: `DialogContent` agora `w-[96vw] sm:max-w-5xl lg:max-w-6xl xl:max-w-7xl h-[92vh]`.
+
+### Alterado
+- **Renomeação da aplicação**: "Fintech Digital" → **"Calculadora"** em todas as superfícies visíveis (Electron window title, PWA manifest, `<title>` HTML, meta tags OG/Twitter, sidebar `MainLayout`, `LoginPage`, `ClienteAreaPage`, `DocsPage`, `DownloadPage`).
+- `electron-builder.json`: `productName` → `Calculadora`; `artifactName` → `Calculadora-${version}-${os}-${arch}.${ext}`.
+- URLs de download dos artefatos atualizadas em `DownloadPage`.
+- Ícones do PWA atualizados em `public/`.
+
+---
+
 ## [1.4.4] — 2026-04-25
 
 ### Adicionado

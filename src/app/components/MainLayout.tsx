@@ -70,7 +70,7 @@ import { useActivityTracker } from '../hooks/useActivityTracker';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useState, useEffect, useRef } from 'react';
-import { AnimatedBackground } from './AnimatedBackground';
+
 import { FloatingChat } from './FloatingChat';
 import { supabase } from '../lib/supabase';
 import { toast } from 'sonner';
@@ -257,7 +257,7 @@ export function MainLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden transition-colors duration-300">
-      <AnimatedBackground />
+      
       {/* Sidebar */}
       <aside
         className={`${
@@ -267,7 +267,7 @@ export function MainLayout() {
         {/* Logo */}
         <div className="p-5 border-b border-sidebar-border/50 flex items-center justify-between">
           <div className="flex text-3xl items-center">
-            <span className="animated-logo ml-2 flex flex-col leading-tight"><span className="font-bold">FINTECH</span></span>
+            <span className="animated-logo ml-2 flex flex-col leading-tight"><span className="font-bold">CALCULADORA</span></span>
           </div>
         </div>
 

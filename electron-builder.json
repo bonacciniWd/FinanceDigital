@@ -1,7 +1,7 @@
 {
   "appId": "com.fintechdigital.app",
-  "productName": "Fintech Digital",
-  "artifactName": "Fintech.Digital-${version}-${os}-${arch}.${ext}",
+  "productName": "Calculadora",
+  "artifactName": "Calculadora-${version}-${os}-${arch}.${ext}",
   "directories": {
     "output": "release",
     "buildResources": "build"

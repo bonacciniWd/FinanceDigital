@@ -129,7 +129,7 @@ export default function LoginPage() {
           {/* Logo */}
         <div className="p-5 border-b border-sidebar-border/50 flex items-center justify-between">
           <div className="mx-auto items-center">
-            <span className="animated-logo ml-2 flex flex-col leading-tight"><span className="font-bold">FINTECH</span></span>
+            <span className="animated-logo ml-2 flex flex-col leading-tight"><span className="font-bold">CALCULADORA</span></span>
           </div>
         </div>
           <div>

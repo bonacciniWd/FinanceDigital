@@ -55,7 +55,7 @@ const PLATFORMS = [
     id: 'windows',
     os: 'Windows',
     icon: Laptop,
-    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-win-x64.exe`,
+    url: `${GITHUB_RELEASE}/Calculadora-${APP_VERSION}-win-x64.exe`,
     size: '116 MB',
     note: 'Windows 10/11 (64-bit)',
     ext: '.exe',
@@ -67,7 +67,7 @@ const PLATFORMS = [
     id: 'macos',
     os: 'macOS',
     icon: Apple,
-    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-mac-x64.dmg`,
+    url: `${GITHUB_RELEASE}/Calculadora-${APP_VERSION}-mac-x64.dmg`,
     size: '149 MB',
     note: 'macOS 12+ (Intel & Apple Silicon)',
     ext: '.dmg',
@@ -79,7 +79,7 @@ const PLATFORMS = [
     id: 'linux',
     os: 'Linux',
     icon: Monitor,
-    url: `${GITHUB_RELEASE}/Fintech.Digital-${APP_VERSION}-linux-x86_64.AppImage`,
+    url: `${GITHUB_RELEASE}/Calculadora-${APP_VERSION}-linux-x86_64.AppImage`,
     size: '152 MB',
     note: 'Ubuntu / Debian / Fedora (64-bit)',
     ext: '.AppImage',
@@ -308,7 +308,7 @@ export default function DownloadPage() {
           >
             <div className="relative">
               <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-2xl blur-2xl opacity-50" />
-              <img src={logo} alt="Fintech Digital" className="relative w-[80vh] h-auto drop-shadow-2xl" />
+              <img src={logo} alt="Calculadora" className="relative w-[80vh] h-auto drop-shadow-2xl" />
             </div>
           </motion.div>
 
@@ -479,7 +479,7 @@ export default function DownloadPage() {
         
       </div>
       <div className="min-h-[600px] min-w-[100vw] flex items-center justify-center mt-12 mb-28">  
-       <img src={logo2} alt="Fintech Digital" className="w-[90%] h-auto" /> 
+       <img src={logo2} alt="Calculadora" className="w-[90%] h-auto" /> 
       </div> 
 
       {/* Features Grid */}
@@ -491,7 +491,7 @@ export default function DownloadPage() {
             viewport={{ once: true }}
             className="text-center mb-12"
           >
-            <h2 className="text-5xl font-bold mb-4">Por que escolher o Fintech Digital?</h2>
+            <h2 className="text-5xl font-bold mb-4">Por que escolher a Calculadora?</h2>
             <p className="text-slate-400">Uma experiência completa para gestão financeira</p>
           </motion.div>
           
@@ -614,7 +614,7 @@ export default function DownloadPage() {
                   </div>
                   <div>
                     <h2 className="text-3xl font-bold text-white">Documentação & FAQ</h2>
-                    <p className="text-slate-400 text-sm mt-1">Tudo que você precisa saber sobre o Fintech Digital</p>
+                    <p className="text-slate-400 text-sm mt-1">Tudo que você precisa saber sobre a Calculadora</p>
                   </div>
                 </div>
 
@@ -669,7 +669,7 @@ export default function DownloadPage() {
             Requisitos mínimos: Windows 10+ (64-bit) · macOS 12+ · Ubuntu 20.04+ / Fedora 36+ / Debian 11+
           </p>
           <p className="text-xs text-slate-600">
-            © {new Date().getFullYear()} Fintech Digital · Seu IP foi verificado e autorizado para download
+            © {new Date().getFullYear()} Calculadora · Seu IP foi verificado e autorizado para download
           </p>
         </div>
       </div>

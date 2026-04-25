@@ -61,6 +61,7 @@ import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useAdminUsers } from '../hooks/useAdminUsers';
 import { supabase } from '../lib/supabase';
 import AcordoFormModal from './AcordoFormModal';
+import EmprestimoEditModal from './EmprestimoEditModal';
 import type { ClienteUpdate } from '../lib/database.types';
 
 interface Props {
@@ -89,7 +90,7 @@ export default function ClienteDetalhesModal({ clienteId, tab, onTabChange, onCl
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-5xl max-h-[92vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="w-[96vw] sm:max-w-5xl lg:max-w-6xl xl:max-w-7xl h-[92vh] max-h-[92vh] overflow-hidden flex flex-col p-0 gap-0">
         {clienteId ? (
           <ModalBody
             clienteId={clienteId}
@@ -136,8 +137,8 @@ function ModalBody({ clienteId, tab, onTabChange, onClose }: Props & { clienteId
               {cliente.nome}
             </DialogTitle>
             <div className="flex flex-wrap gap-2 mt-2 text-xs">
-              <Badge variant="outline">{cliente.telefone}</Badge>
-              {cliente.cpf && <Badge variant="outline">CPF: {cliente.cpf}</Badge>}
+              <Badge variant="secondary">{cliente.telefone}</Badge>
+              {cliente.cpf && <Badge variant="secondary">CPF: {cliente.cpf}</Badge>}
               <Badge
                 className={
                   cliente.status === 'vencido'
@@ -312,7 +313,7 @@ function DadosTab({ cliente, onClose }: { cliente: ReturnType<typeof useCliente>
       <DocumentosSection clienteId={cliente.id} cliente={cliente} />
 
       <div className="flex justify-end gap-2 pt-2">
-        <Button variant="outline" onClick={onClose}>Fechar</Button>
+        <Button variant="secondary" onClick={onClose}>Fechar</Button>
         <Button onClick={handleSave} disabled={updateCliente.isPending}>
           {updateCliente.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
           Salvar cadastro
@@ -399,7 +400,7 @@ function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente:
                   }}
                 />
                 <Button
-                  variant="outline"
+                  variant="secondary"
                   size="sm"
                   className="w-full cursor-pointer"
                   asChild
@@ -427,6 +428,7 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
   const { data: emprestimos = [], isLoading } = useEmprestimosByCliente(clienteId);
   const { data: allUsers = [] } = useAdminUsers();
   const updateEmprestimo = useUpdateEmprestimo();
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const cobradores = useMemo(
     () => allUsers.filter((u: any) => ['cobranca', 'gerencia', 'admin'].includes(u.role)),
@@ -461,14 +463,19 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
       {emprestimos.map((e) => {
         const progresso = e.parcelas > 0 ? (e.parcelasPagas / e.parcelas) * 100 : 0;
         return (
-          <div key={e.id} className="border rounded-lg p-4 space-y-3">
+          <div key={e.id} className="border rounded-lg p-4 space-y-3 hover:border-primary/50 transition-colors">
             <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div>
+              <button
+                type="button"
+                className="text-left hover:text-primary transition-colors"
+                onClick={() => setEditingId(e.id)}
+                title="Clique para editar empréstimo e parcelas"
+              >
                 <div className="text-sm font-semibold">{formatCurrency(e.valor)} · {e.parcelas}x {formatCurrency(e.valorParcela)}</div>
                 <div className="text-xs text-muted-foreground mt-0.5">
                   Contrato {formatDate(e.dataContrato)} · Juros {e.taxaJuros}% {e.tipoJuros} · Próx. venc. {formatDate(e.proximoVencimento)}
                 </div>
-              </div>
+              </button>
               <Badge
                 className={
                   e.status === 'quitado'
@@ -502,13 +509,16 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
                 </Select>
               </div>
               <div className="flex items-end gap-2">
+                <Button size="sm" variant="secondary" onClick={() => setEditingId(e.id)}>
+                  Editar
+                </Button>
                 {e.status !== 'quitado' && (
-                  <Button size="sm" variant="outline" onClick={() => handleStatusChange(e.id, 'quitado')}>
+                  <Button size="sm" variant="secondary" onClick={() => handleStatusChange(e.id, 'quitado')}>
                     <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Marcar quitado
                   </Button>
                 )}
                 {e.status !== 'inadimplente' && e.status !== 'quitado' && (
-                  <Button size="sm" variant="outline" onClick={() => handleStatusChange(e.id, 'inadimplente')}>
+                  <Button size="sm" variant="secondary" onClick={() => handleStatusChange(e.id, 'inadimplente')}>
                     <AlertCircle className="w-3.5 h-3.5 mr-1" /> Inadimplente
                   </Button>
                 )}
@@ -517,6 +527,7 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
           </div>
         );
       })}
+      <EmprestimoEditModal emprestimoId={editingId} onClose={() => setEditingId(null)} />
     </div>
   );
 }
@@ -706,7 +717,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                             <Button size="sm" onClick={() => saveEdit(p.id)} disabled={updateParcela.isPending}>
                               <Save className="w-3 h-3" />
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>X</Button>
+                            <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>X</Button>
                           </div>
                         ) : (
                           <Button
@@ -827,7 +838,7 @@ function WhatsappTab({ cliente }: { cliente: NonNullable<ReturnType<typeof useCl
 
       <div className="flex justify-end gap-2">
         <Button
-          variant="outline"
+          variant="secondary"
           onClick={() => window.open(`https://wa.me/${normalizePhoneBR(cliente.telefone)}`, '_blank')}
         >
           <ExternalLink className="w-3.5 h-3.5 mr-1" /> Abrir wa.me
@@ -928,7 +939,7 @@ function HistoricoTab({ clienteId }: { clienteId: string }) {
             {cards.map((c) => (
               <div key={c.id} className="border rounded p-3 text-xs space-y-1">
                 <div className="flex items-center justify-between">
-                  <Badge variant="outline">{c.etapa}</Badge>
+                  <Badge variant="secondary">{c.etapa}</Badge>
                   <span className="text-muted-foreground">
                     {formatDate(c.updated_at ?? c.created_at)}
                   </span>

@@ -1,6 +1,6 @@
 {
-  "name": "Fintech Digital",
-  "short_name": "Fintech",
+  "name": "Calculadora",
+  "short_name": "Calculadora",
   "description": "Plataforma de gestão financeira — empréstimos, cobranças, análise de crédito e atendimento via WhatsApp.",
   "start_url": "/",
   "display": "standalone",

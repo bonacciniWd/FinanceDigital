@@ -239,19 +239,19 @@ export default function KanbanCobrancaPage() {
     return `${yyyy}-${mm}-${dd}`;
   }, []);
 
-  /** Próximo vencimento (mais antigo) entre os empréstimos ativos/inadimplentes do cliente. */
+  /** Próximo vencimento FUTURO (>= hoje) entre os empréstimos ativos/inadimplentes do cliente. */
   const proximoVencDoCliente = useMemo(() => {
     const map = new Map<string, string | null>();
     for (const [cid, emps] of emprestimosByCliente.entries()) {
       const datas = emps
         .filter((e) => e.status === 'ativo' || e.status === 'inadimplente')
         .map((e) => e.proximoVencimento)
-        .filter(Boolean)
+        .filter((d): d is string => Boolean(d) && d >= todayStr)
         .sort();
       map.set(cid, datas[0] ?? null);
     }
     return map;
-  }, [emprestimosByCliente]);
+  }, [emprestimosByCliente, todayStr]);
 
   const cardsByEtapa = useMemo(() => {
     const map: Record<string, KanbanCobrancaView[]> = {};

@@ -97,7 +97,7 @@ export default function ClienteAreaPage() {
             <div className="w-10 h-10 bg-secondary rounded flex items-center justify-center font-bold text-lg">
               F
             </div>
-            <span className="font-semibold text-lg">Fintech</span>
+            <span className="font-semibold text-lg">Calculadora</span>
           </div>
           <div className="flex items-center gap-4">
             <Select value={clienteId} onValueChange={setSelectedClienteId}>

@@ -54,7 +54,7 @@ const DOCS: DocSection[] = [
     description: 'Visão geral do sistema, stack tecnológica e fluxo de dados.',
     items: [
       {
-        q: 'Quais tecnologias o Fintech Digital usa?',
+        q: 'Quais tecnologias a Calculadora usa?',
         a: 'React 18 com TypeScript 5, Vite 6, Tailwind CSS v4 para UI, Supabase (PostgreSQL 15) para banco de dados, autenticação e Realtime, e TanStack React Query para gerenciamento de estado do servidor.',
       },
       {
@@ -344,7 +344,7 @@ export default function DocsPage() {
             </div>
             <div>
               <h1 className="text-lg font-bold">Documentação</h1>
-              <p className="text-xs text-muted-foreground">Tutorial & FAQ — Fintech Digital</p>
+              <p className="text-xs text-muted-foreground">Tutorial & FAQ — Calculadora</p>
             </div>
           </div>
 
@@ -498,7 +498,7 @@ export default function DocsPage() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-white">Documentação</h1>
-              <p className="text-xs text-slate-500">Tutorial & FAQ — Fintech Digital</p>
+              <p className="text-xs text-slate-500">Tutorial & FAQ — Calculadora</p>
             </div>
           </div>
 
@@ -642,7 +642,7 @@ export default function DocsPage() {
             Documentação gerada a partir do README.md do projeto — v0.0.1
           </p>
           <p className="text-xs text-slate-600">
-            © {new Date().getFullYear()} Fintech Digital
+            © {new Date().getFullYear()} Calculadora
           </p>
         </div>
       </div>
