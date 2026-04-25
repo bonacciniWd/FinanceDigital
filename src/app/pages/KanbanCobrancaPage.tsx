@@ -55,12 +55,13 @@ import { useEmprestimos, useUpdateEmprestimo, useQuitarEmprestimo } from '../hoo
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useCriarCobrancaWoovi, useCriarCobvEfi } from '../hooks/useWoovi';
-import { useRegistrarPagamento } from '../hooks/useParcelas';
+import { useRegistrarPagamento, useParcelas } from '../hooks/useParcelas';
 import { useCriarAcordo } from '../hooks/useAcordos';
 import ComprovanteUploader from '../components/ComprovanteUploader';
 import { useConfigSistema } from '../hooks/useConfigSistema';
 import { supabase } from '../lib/supabase';
 import { valorCorrigido } from '../lib/juros';
+import { formatDateBR, todayISO, parseISODateLocal } from '../lib/date-utils';
 import { useAuth } from '../contexts/AuthContext';
 import { useClienteModal } from '../contexts/ClienteModalContext';
 import type { ParcelaUpdate } from '../lib/database.types';
@@ -141,6 +142,8 @@ export default function KanbanCobrancaPage() {
 
   const { data: allCards = [], isLoading, error, refetch } = useCardsCobranca();
   const { data: emprestimos = [] } = useEmprestimos();
+  const { data: parcelasPendentes = [] } = useParcelas('pendente');
+  const { data: parcelasVencidasList = [] } = useParcelas('vencida');
   const { data: instancias = [] } = useInstancias();
   const { data: templatesCobranca = [] } = useTemplatesByCategoria('cobranca');
   const { data: templatesNegociacao = [] } = useTemplatesByCategoria('negociacao');
@@ -219,39 +222,64 @@ export default function KanbanCobrancaPage() {
     return digits;
   };
 
+  // Data de hoje em yyyy-mm-dd (timezone local) — usada para filtrar 'A vencer' = hoje
+  const todayStr = useMemo(() => todayISO(), []);
+
+  /**
+   * Próximo vencimento FUTURO (>= hoje) e dias de atraso REAIS por cliente,
+   * calculados a partir das parcelas pendentes/vencidas (fonte de verdade).
+   */
+  const parcelasInfoByCliente = useMemo(() => {
+    const map = new Map<string, { proxVencFuturo: string | null; diasAtrasoReal: number; vencimentoMaisAntigo: string | null }>();
+    const allParcelas = [...parcelasPendentes, ...parcelasVencidasList].filter((p) => !p.congelada);
+    const byCliente = new Map<string, typeof allParcelas>();
+    for (const p of allParcelas) {
+      if (!byCliente.has(p.clienteId)) byCliente.set(p.clienteId, []);
+      byCliente.get(p.clienteId)!.push(p);
+    }
+    for (const [cid, parts] of byCliente) {
+      const datas = parts.map((p) => p.dataVencimento).filter(Boolean).sort();
+      const futuras = datas.filter((d) => d >= todayStr);
+      const passadas = datas.filter((d) => d < todayStr);
+      const proxVencFuturo = futuras[0] ?? null;
+      const vencimentoMaisAntigo = passadas[0] ?? null;
+      let diasAtrasoReal = 0;
+      if (vencimentoMaisAntigo) {
+        const venc = parseISODateLocal(vencimentoMaisAntigo)!;
+        const hoje = parseISODateLocal(todayStr)!;
+        diasAtrasoReal = Math.max(0, Math.floor((hoje.getTime() - venc.getTime()) / 86400000));
+      }
+      map.set(cid, { proxVencFuturo, diasAtrasoReal, vencimentoMaisAntigo });
+    }
+    return map;
+  }, [parcelasPendentes, parcelasVencidasList, todayStr]);
+
   const filteredCards = useMemo(() => {
-    if (!busca.trim()) return allCards;
+    // Enriquece cada card com diasAtraso REAL (recalculado a partir de parcelas live).
+    // Garante que o badge "8d" reflita a realidade mesmo se o sync da DB estiver atrasado.
+    const enriched = allCards.map((c) => {
+      const info = parcelasInfoByCliente.get(c.clienteId);
+      if (!info) return c;
+      return { ...c, diasAtraso: info.diasAtrasoReal };
+    });
+    if (!busca.trim()) return enriched;
     const lower = busca.toLowerCase();
-    return allCards.filter(
+    return enriched.filter(
       (c) =>
         c.clienteNome.toLowerCase().includes(lower) ||
         c.clienteEmail.toLowerCase().includes(lower) ||
         c.responsavelNome.toLowerCase().includes(lower)
     );
-  }, [allCards, busca]);
+  }, [allCards, busca, parcelasInfoByCliente]);
 
-  // Data de hoje em yyyy-mm-dd (timezone local) — usada para filtrar 'A vencer' = hoje
-  const todayStr = useMemo(() => {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  }, []);
-
-  /** Próximo vencimento FUTURO (>= hoje) entre os empréstimos ativos/inadimplentes do cliente. */
+  /** Próximo vencimento FUTURO entre os empréstimos ativos/inadimplentes do cliente (legado, mantido p/ filtro 'A vencer'). */
   const proximoVencDoCliente = useMemo(() => {
     const map = new Map<string, string | null>();
-    for (const [cid, emps] of emprestimosByCliente.entries()) {
-      const datas = emps
-        .filter((e) => e.status === 'ativo' || e.status === 'inadimplente')
-        .map((e) => e.proximoVencimento)
-        .filter((d): d is string => Boolean(d) && d >= todayStr)
-        .sort();
-      map.set(cid, datas[0] ?? null);
+    for (const [cid, info] of parcelasInfoByCliente) {
+      map.set(cid, info.proxVencFuturo);
     }
     return map;
-  }, [emprestimosByCliente, todayStr]);
+  }, [parcelasInfoByCliente]);
 
   const cardsByEtapa = useMemo(() => {
     const map: Record<string, KanbanCobrancaView[]> = {};
@@ -826,10 +854,9 @@ export default function KanbanCobrancaPage() {
                                 if (ativos.length === 0) return null;
                                 const totalParcelas = ativos.reduce((s, e) => s + e.parcelas, 0);
                                 const totalPagas = ativos.reduce((s, e) => s + e.parcelasPagas, 0);
-                                const proxVenc = ativos
-                                  .map((e) => e.proximoVencimento)
-                                  .filter(Boolean)
-                                  .sort()[0];
+                                // Próximo vencimento REAL: futuro mais próximo > vencimento mais antigo (atrasado)
+                                const info = parcelasInfoByCliente.get(card.clienteId);
+                                const proxVenc = info?.proxVencFuturo ?? info?.vencimentoMaisAntigo ?? null;
                                 return (
                                   <>
                                     <div className="flex justify-between">
@@ -843,7 +870,7 @@ export default function KanbanCobrancaPage() {
                                     {proxVenc && (
                                       <div className="flex justify-between">
                                         <span className="text-muted-foreground">Próx. venc.:</span>
-                                        <span className="font-medium text-foreground">{new Date(proxVenc).toLocaleDateString('pt-BR')}</span>
+                                        <span className="font-medium text-foreground">{formatDateBR(proxVenc)}</span>
                                       </div>
                                     )}
                                   </>
@@ -1041,7 +1068,7 @@ export default function KanbanCobrancaPage() {
                             </div>
                             <div className="flex justify-between">  
                               <span className="text-muted-foreground">Venc.:</span>
-                              <span className="font-medium">{new Date(emp.proximoVencimento).toLocaleDateString('pt-BR')}</span>
+                              <span className="font-medium">{formatDateBR(emp.proximoVencimento)}</span>
                             </div>
                           </div>
                           {(emp.status === 'ativo' || emp.status === 'inadimplente') && (

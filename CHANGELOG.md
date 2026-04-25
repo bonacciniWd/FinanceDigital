@@ -6,6 +6,17 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.6] — 2026-04-25
+
+### Corrigido
+- **Kanban Cobrança — datas/dias incorretos**: card mostrava "10/04/2026" e "8d" simultaneamente em 25/04. Causa raiz dupla:
+  1. **Timezone shift**: `new Date("2026-04-10").toLocaleDateString('pt-BR')` em UTC-3 retornava "09/04". Novo helper `lib/date-utils.ts` (`parseISODateLocal`, `formatDateBR`, `todayISO`) trata strings ISO `yyyy-mm-dd` como datas locais.
+  2. **Dados stale**: `kanban_cobranca.dias_atraso` e `emprestimos.proximo_vencimento` ficavam desatualizados. Agora o card recalcula ao vivo a partir da tabela `parcelas` (fonte de verdade) via novo `parcelasInfoByCliente` memo.
+- **`diasDeAtraso()` em `lib/juros.ts`** corrigido com mesmo parsing local — afeta cálculo automático de juros em todas as parcelas vencidas.
+- **BadRequest 400 ao Sincronizar Kanban**: query `parcelas.in('emprestimo_id', ...)` excedia limite de URL do PostgREST quando havia muitos empréstimos. Solução: chunks de 100 IDs por request. Erros do Supabase deixam de ser silenciados (propaga `error.message` + `console.error` com payload).
+
+---
+
 ## [1.4.5] — 2026-04-25
 
 ### Adicionado

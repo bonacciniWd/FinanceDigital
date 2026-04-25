@@ -74,11 +74,21 @@ export function calcularJurosAtraso(valorOriginal: number, diasAtraso: number): 
 
 /**
  * Calcula dias de atraso de uma parcela a partir da data de vencimento.
+ * Trata strings ISO yyyy-mm-dd como datas LOCAIS (evita shift de timezone
+ * que faria "2026-04-10" virar "09/04" em UTC-3).
  * @param dataVencimento ISO date string ou Date
  * @returns Número de dias de atraso (0 se não vencida)
  */
 export function diasDeAtraso(dataVencimento: string | Date): number {
-  const venc = typeof dataVencimento === 'string' ? new Date(dataVencimento) : dataVencimento;
+  let venc: Date;
+  if (typeof dataVencimento === 'string') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dataVencimento);
+    venc = m
+      ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+      : new Date(dataVencimento);
+  } else {
+    venc = new Date(dataVencimento);
+  }
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   venc.setHours(0, 0, 0, 0);

@@ -192,7 +192,7 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
     parcelas_pagas: number; valor_parcela: number; proximo_vencimento: string; status: string;
   }>;
 
-  // 2) Buscar parcelas pendentes e vencidas desses empréstimos
+  // 2) Buscar parcelas pendentes e vencidas desses empréstimos (em chunks para evitar URL > 6KB)
   const empIds = emprestimos.map((e) => e.id);
   let parcelasVencidas: Array<{
     id: string; emprestimo_id: string; cliente_id: string;
@@ -200,15 +200,22 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
     data_vencimento: string; status: string; congelada: boolean;
   }> = [];
   if (empIds.length > 0) {
-    const { data: parcelas, error: parErr } = await supabase
-      .from('parcelas')
-      .select('id, emprestimo_id, cliente_id, valor, valor_original, juros, multa, desconto, data_vencimento, status, congelada')
-      .in('emprestimo_id', empIds)
-      .in('status', ['pendente', 'vencida'])
-      .eq('congelada', false)
-      .order('data_vencimento');
-    if (parErr) throw new Error(parErr.message);
-    parcelasVencidas = (parcelas ?? []) as typeof parcelasVencidas;
+    const CHUNK = 100;
+    for (let i = 0; i < empIds.length; i += CHUNK) {
+      const slice = empIds.slice(i, i + CHUNK);
+      const { data: parcelas, error: parErr } = await supabase
+        .from('parcelas')
+        .select('id, emprestimo_id, cliente_id, valor, valor_original, juros, multa, desconto, data_vencimento, status, congelada')
+        .in('emprestimo_id', slice)
+        .in('status', ['pendente', 'vencida'])
+        .eq('congelada', false)
+        .order('data_vencimento');
+      if (parErr) {
+        console.error('[syncCobrancas] parcelas query error', { sliceLen: slice.length, parErr });
+        throw new Error(`select parcelas: ${parErr.message}`);
+      }
+      if (parcelas) parcelasVencidas.push(...(parcelas as typeof parcelasVencidas));
+    }
   }
 
   // 3) Agregar díivida por cliente
@@ -318,7 +325,11 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
           ...(etapaPreservada ? {} : { etapa: debt.etapa }),
         } as KanbanCobrancaUpdate)
         .eq('id', existing.id);
-      if (!error) updated++;
+      if (error) {
+        console.error('[syncCobrancas] update error', { clienteId, debt, error });
+        throw new Error(`update kanban_cobranca: ${error.message}`);
+      }
+      updated++;
       existingByCliente.delete(clienteId);
     } else {
       const { error } = await supabase
@@ -330,7 +341,11 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
           valor_divida: debt.valorTotal,
           dias_atraso: debt.diasAtraso,
         } as KanbanCobrancaInsert);
-      if (!error) created++;
+      if (error) {
+        console.error('[syncCobrancas] insert error', { clienteId, debt, error });
+        throw new Error(`insert kanban_cobranca: ${error.message}`);
+      }
+      created++;
     }
   }
 
@@ -342,7 +357,11 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
       .from('kanban_cobranca')
       .delete()
       .eq('id', card.id);
-    if (!error) removed++;
+    if (error) {
+      console.error('[syncCobrancas] delete error', { card, error });
+      throw new Error(`delete kanban_cobranca: ${error.message}`);
+    }
+    removed++;
   }
 
   return { created, updated, removed };
