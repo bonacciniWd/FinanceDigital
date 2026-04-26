@@ -185,8 +185,8 @@ export const router = createBrowserRouter([
         element: (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <h2 className="text-2xl font-semibold mb-2">Bem vindo à Fintech</h2>
-              <Lottie animationData={welcomeAnimation} loop={true} />
+              <h2 className="text-2xl font-semibold mb-2">Pagina em Desenvolvimento...</h2>
+              <Lottie animationData={welcomeAnimation}  width={150} height={150} loop={true} />
             </div>
           </div>
         ),

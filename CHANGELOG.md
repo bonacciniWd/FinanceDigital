@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.14] — 2026-04-26
+
+### Alterado
+- **Rota fallback (`*`)**: texto atualizado para "Pagina em Desenvolvimento..." e animação Lottie redimensionada (150×150).
+
+---
+
 ## [1.4.13] — 2026-04-26
 
 ### Corrigido
