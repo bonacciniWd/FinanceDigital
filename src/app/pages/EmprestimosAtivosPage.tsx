@@ -346,7 +346,12 @@ export default function EmprestimosAtivosPage() {
                         ) : <span className="text-muted-foreground text-xs">—</span>}
                       </td>
                       <td className="py-3 text-center">
-                        <Button size="sm" variant="outline" onClick={() => setSelectedEmprestimo(e)}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          title="Abrir detalhes do cliente (Cobrança)"
+                          onClick={() => openClienteModal(e.clienteId, { tab: 'cobranca' })}
+                        >
                           <Eye className="w-4 h-4" />
                         </Button>
                       </td>

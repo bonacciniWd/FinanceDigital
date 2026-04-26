@@ -13,12 +13,14 @@ import type {
 } from '../lib/database.types';
 // ── Queries ────────────────────────────────────────────────
 
-/** Buscar todos os empréstimos com nome do cliente */
+/** Buscar todos os empréstimos com nome do cliente.
+ *  Usa range explícito para evitar o limite default de 1000 linhas do PostgREST. */
 export async function getEmprestimos(status?: string): Promise<EmprestimoComCliente[]> {
   let query = supabase
     .from('emprestimos')
     .select('*, clientes(nome)')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .range(0, 49999);
 
   if (status) query = query.eq('status', status);
 

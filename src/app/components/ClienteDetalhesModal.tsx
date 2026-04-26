@@ -42,10 +42,16 @@ import {
   HandshakeIcon,
   DollarSign,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   CheckCircle2,
+  CheckCircle,
   Eye,
   ExternalLink,
+  Percent,
+  Image as ImageIcon,
+  Copy,
+  QrCode,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -54,15 +60,19 @@ import {
   useUpdateCliente,
 } from '../hooks/useClientes';
 import { useEmprestimosByCliente, useUpdateEmprestimo } from '../hooks/useEmprestimos';
-import { useParcelasByCliente, useUpdateParcela } from '../hooks/useParcelas';
+import { useParcelasByCliente, useUpdateParcela, useRegistrarPagamento } from '../hooks/useParcelas';
 import { useAcordosByCliente } from '../hooks/useAcordos';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useAdminUsers } from '../hooks/useAdminUsers';
+import { useContasBancarias } from '../hooks/useContasBancarias';
+import { useCriarCobvEfi } from '../hooks/useWoovi';
 import { supabase } from '../lib/supabase';
 import AcordoFormModal from './AcordoFormModal';
 import EmprestimoEditModal from './EmprestimoEditModal';
+import ComprovanteUploader from './ComprovanteUploader';
 import type { ClienteUpdate } from '../lib/database.types';
+import type { Parcela } from '../lib/view-types';
 
 interface Props {
   clienteId: string | null;
@@ -533,23 +543,61 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   TAB 3 — COBRANÇA (acordos, multa/juros por parcela)
+   TAB 3 — COBRANÇA (acordos, multa/juros, pagar, pix, comprovante)
    ═══════════════════════════════════════════════════════════ */
 
 function CobrancaTab({ clienteId }: { clienteId: string }) {
   const { data: parcelas = [] } = useParcelasByCliente(clienteId);
+  const { data: emprestimos = [] } = useEmprestimosByCliente(clienteId);
   const { data: acordos = [] } = useAcordosByCliente(clienteId);
+  const { data: contasBancarias = [] } = useContasBancarias();
+  const { data: instancias = [] } = useInstancias();
   const updateParcela = useUpdateParcela();
+  const registrarPagamento = useRegistrarPagamento();
+  const criarCobvEfi = useCriarCobvEfi();
+  const enviarWhatsapp = useEnviarWhatsapp();
+
+  // Map emprestimoId -> emprestimo (para gateway/clienteNome)
+  const emprestimoById = useMemo(() => {
+    const m = new Map<string, (typeof emprestimos)[number]>();
+    emprestimos.forEach((e) => m.set(e.id, e));
+    return m;
+  }, [emprestimos]);
 
   const pendentes = parcelas.filter((p) => p.status !== 'paga' && p.status !== 'cancelada');
+  const pendentesCount = pendentes.length;
   const temVencidas = pendentes.some((p) => p.status === 'vencida');
   const saldoPendente = pendentes.reduce((sum, p) => sum + (p.valor + p.juros + p.multa - p.desconto), 0);
 
+  // Edit juros/multa/desconto inline
   const [showAcordoModal, setShowAcordoModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editJuros, setEditJuros] = useState('');
   const [editMulta, setEditMulta] = useState('');
   const [editDesconto, setEditDesconto] = useState('');
+
+  // Pagar modal
+  const [pagamentoParcelaId, setPagamentoParcelaId] = useState<string | null>(null);
+  const [pagamentoTab, setPagamentoTab] = useState<'completo' | 'parcial'>('completo');
+  const [pagamentoObs, setPagamentoObs] = useState('');
+  const [pagamentoData, setPagamentoData] = useState(() => new Date().toISOString().slice(0, 10));
+  const [pagamentoDesconto, setPagamentoDesconto] = useState('0');
+  const [pagamentoValorParcial, setPagamentoValorParcial] = useState('');
+  const [pagamentoConta, setPagamentoConta] = useState('');
+
+  // Comprovante manual
+  const [comprovanteParcela, setComprovanteParcela] = useState<Parcela | null>(null);
+  const [showComprovanteModal, setShowComprovanteModal] = useState(false);
+  const [comprovanteLoading, setComprovanteLoading] = useState(false);
+
+  // Pix dialog state
+  const [gerandoPixId, setGerandoPixId] = useState<string | null>(null);
+  const [pixResultDialog, setPixResultDialog] = useState<{ qrImage?: string; brCode?: string; parcelaNumero: number } | null>(null);
+
+  // Visualizar comprovante (parcelas pagas)
+  const [viewComprovanteUrl, setViewComprovanteUrl] = useState<string | null>(null);
+
+  const isBusy = updateParcela.isPending || registrarPagamento.isPending;
 
   const startEdit = (id: string, juros: number, multa: number, desconto: number) => {
     setEditingId(id);
@@ -574,6 +622,120 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
       toast.error('Erro: ' + (err as Error).message);
     }
   };
+
+  const openPagamentoModal = (parcela: Parcela) => {
+    setPagamentoParcelaId(parcela.id);
+    setPagamentoTab('completo');
+    setPagamentoObs('');
+    setPagamentoData(new Date().toISOString().slice(0, 10));
+    setPagamentoDesconto('0');
+    setPagamentoValorParcial('');
+    const emp = emprestimoById.get(parcela.emprestimoId);
+    const gw = emp?.gateway;
+    const contaGateway = gw ? contasBancarias.find((c) => c.tipo === 'gateway' && c.nome.toLowerCase().includes(gw)) : null;
+    const contaPadrao = contasBancarias.find((c) => c.padrao);
+    setPagamentoConta(contaGateway?.nome ?? contaPadrao?.nome ?? (gw === 'efi' ? 'EFI BANK' : 'CONTA PRINCIPAL'));
+  };
+
+  const closePagamentoModal = () => setPagamentoParcelaId(null);
+
+  const handleEfetuarPagamento = (parcela: Parcela) => {
+    const desconto = parseFloat(pagamentoDesconto) || 0;
+    const valorCorrigido = parcela.valorOriginal + parcela.juros + parcela.multa;
+    const totalPagar = Math.max(valorCorrigido - desconto, 0);
+
+    if (pagamentoTab === 'parcial') {
+      const valorPago = parseFloat(pagamentoValorParcial) || 0;
+      if (valorPago <= 0 || valorPago >= totalPagar) {
+        toast.error('Valor parcial deve ser maior que zero e menor que o total.');
+        return;
+      }
+      const restante = totalPagar - valorPago;
+      updateParcela.mutate(
+        {
+          id: parcela.id,
+          data: {
+            valor: Math.max(restante, 0),
+            desconto,
+            observacao: pagamentoObs || null,
+            conta_bancaria: pagamentoConta || null,
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success(`Amortização registrada · Pago: ${formatCurrency(valorPago)} · Restante: ${formatCurrency(restante)}`);
+            closePagamentoModal();
+          },
+          onError: (err) => toast.error(`Erro: ${err.message}`),
+        },
+      );
+    } else {
+      registrarPagamento.mutate(
+        { id: parcela.id, dataPagamento: pagamentoData },
+        {
+          onSuccess: () => {
+            updateParcela.mutate({
+              id: parcela.id,
+              data: {
+                desconto,
+                observacao: pagamentoObs || null,
+                conta_bancaria: pagamentoConta || null,
+              },
+            });
+            toast.success(`Parcela ${parcela.numero} quitada com sucesso!`);
+            closePagamentoModal();
+          },
+          onError: (err) => toast.error(`Erro: ${err.message}`),
+        },
+      );
+    }
+  };
+
+  const handleGerarPix = async (parcela: Parcela) => {
+    const emp = emprestimoById.get(parcela.emprestimoId);
+    const clienteNome = emp?.clienteNome || 'Cliente';
+    setGerandoPixId(parcela.id);
+    try {
+      const { data: cli } = await supabase.from('clientes').select('cpf, nome, telefone').eq('id', parcela.clienteId).single() as { data: { cpf: string | null; nome: string; telefone: string } | null };
+      const result = await criarCobvEfi.mutateAsync({
+        parcela_id: parcela.id,
+        emprestimo_id: parcela.emprestimoId,
+        cliente_id: parcela.clienteId,
+        valor: parcela.valor,
+        descricao: `Parcela ${parcela.numero} - ${clienteNome}`,
+        cliente_nome: clienteNome,
+        cliente_cpf: cli?.cpf || undefined,
+        data_vencimento: parcela.dataVencimento,
+      });
+      const charge = (result as any)?.charge;
+      const brCode = charge?.br_code || '';
+      const qrImage = charge?.qr_code_image || '';
+      if (brCode || qrImage) {
+        setPixResultDialog({ qrImage, brCode, parcelaNumero: parcela.numero });
+      }
+      const instSistema = instancias.find((i: any) => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
+      if (instSistema && cli?.telefone && brCode) {
+        const phone = cli.telefone.replace(/\D/g, '').length <= 11 ? '55' + cli.telefone.replace(/\D/g, '') : cli.telefone.replace(/\D/g, '');
+        const msg = `💰 *Cobrança PIX - Parcela ${parcela.numero}*\n\nOlá ${clienteNome}!\n\nValor: *${formatCurrency(parcela.valor)}*\nVencimento: ${formatDate(parcela.dataVencimento)}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_CasaDaMoeda_`;
+        await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
+        if (qrImage) {
+          const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
+          await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: `QR Code - Parcela ${parcela.numero}`, tipo: 'image', media_base64: base64Data });
+        }
+        toast.success('Cobrança PIX gerada e enviada ao cliente!');
+      } else if (!instSistema || !cli?.telefone) {
+        toast.success('Cobrança PIX gerada! Sem WhatsApp conectado para envio automático.');
+      } else {
+        toast.success('Cobrança PIX gerada!');
+      }
+    } catch (err) {
+      toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao gerar PIX'}`);
+    } finally {
+      setGerandoPixId(null);
+    }
+  };
+
+  const pagamentoParcela = pagamentoParcelaId ? pendentes.find((p) => p.id === pagamentoParcelaId) || null : null;
 
   return (
     <div className="space-y-6">
@@ -639,7 +801,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         {pendentes.length === 0 ? (
           <div className="text-xs text-muted-foreground">Sem parcelas pendentes</div>
         ) : (
-          <div className="border rounded-lg overflow-hidden">
+          <div className="border rounded-lg overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-muted/50">
                 <tr>
@@ -648,10 +810,10 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                   <th className="px-2 py-2 text-right">Original</th>
                   <th className="px-2 py-2 text-right">Juros</th>
                   <th className="px-2 py-2 text-right">Multa</th>
-                  <th className="px-2 py-2 text-right">Desconto</th>
+                  <th className="px-2 py-2 text-right">Desc.</th>
                   <th className="px-2 py-2 text-right">Total</th>
                   <th className="px-2 py-2 text-center">Status</th>
-                  <th className="px-2 py-2"></th>
+                  <th className="px-2 py-2 text-center">Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -662,8 +824,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                     <tr key={p.id} className="border-t">
                       <td className="px-2 py-2">{p.numero}</td>
                       <td className="px-2 py-2">{formatDate(p.dataVencimento)}</td>
-                      <td className="px-2 py-2 text-right">{formatCurrency(p.valorOriginal)}</td>
-                      <td className="px-2 py-2 text-right">
+                      <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(p.valorOriginal)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">
                         {isEdit ? (
                           <Input
                             type="number"
@@ -675,7 +837,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                           formatCurrency(p.juros)
                         )}
                       </td>
-                      <td className="px-2 py-2 text-right">
+                      <td className="px-2 py-2 text-right tabular-nums">
                         {isEdit ? (
                           <Input
                             type="number"
@@ -687,7 +849,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                           formatCurrency(p.multa)
                         )}
                       </td>
-                      <td className="px-2 py-2 text-right">
+                      <td className="px-2 py-2 text-right tabular-nums">
                         {isEdit ? (
                           <Input
                             type="number"
@@ -699,7 +861,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                           formatCurrency(p.desconto)
                         )}
                       </td>
-                      <td className="px-2 py-2 text-right font-semibold">{formatCurrency(total)}</td>
+                      <td className="px-2 py-2 text-right font-semibold tabular-nums">{formatCurrency(total)}</td>
                       <td className="px-2 py-2 text-center">
                         <Badge
                           className={
@@ -711,22 +873,58 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                           {p.status}
                         </Badge>
                       </td>
-                      <td className="px-2 py-2 text-right">
+                      <td className="px-2 py-2">
                         {isEdit ? (
-                          <div className="flex gap-1 justify-end">
+                          <div className="flex gap-1 justify-center">
                             <Button size="sm" onClick={() => saveEdit(p.id)} disabled={updateParcela.isPending}>
                               <Save className="w-3 h-3" />
                             </Button>
                             <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>X</Button>
                           </div>
                         ) : (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => startEdit(p.id, p.juros, p.multa, p.desconto)}
-                          >
-                            Editar
-                          </Button>
+                          <div className="flex flex-wrap gap-1 justify-center">
+                            <Button
+                              size="sm"
+                              className="h-7 text-xs px-2 bg-green-600 hover:bg-green-700 text-white"
+                              title="Efetuar pagamento"
+                              onClick={() => openPagamentoModal(p)}
+                              disabled={isBusy}
+                            >
+                              <DollarSign className="w-3.5 h-3.5 mr-1" />Pagar
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs px-2 text-blue-600 border-blue-200"
+                              title="Gerar PIX e enviar via WhatsApp"
+                              disabled={gerandoPixId === p.id || criarCobvEfi.isPending}
+                              onClick={() => handleGerarPix(p)}
+                            >
+                              {gerandoPixId === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <QrCode className="w-3.5 h-3.5" />}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs px-2 text-orange-600 border-orange-200"
+                              title="Confirmar pagamento manual com comprovante"
+                              onClick={() => {
+                                setComprovanteParcela(p);
+                                setShowComprovanteModal(true);
+                              }}
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs px-2"
+                              title="Editar juros/multa/desconto"
+                              onClick={() => startEdit(p.id, p.juros, p.multa, p.desconto)}
+                              disabled={isBusy}
+                            >
+                              <Percent className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -737,6 +935,303 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
           </div>
         )}
       </section>
+
+      {/* ── Modal: Efetuar Pagamento (completo / parcial) ── */}
+      {pagamentoParcela && (() => {
+        const parcela = pagamentoParcela;
+        const desconto = parseFloat(pagamentoDesconto) || 0;
+        const valorCorrigido = parcela.valorOriginal + parcela.juros + parcela.multa;
+        const totalPagar = Math.max(valorCorrigido - desconto, 0);
+        const diasAtraso = (() => {
+          const venc = new Date(parcela.dataVencimento);
+          const pagDt = new Date(pagamentoData);
+          const diff = Math.floor((pagDt.getTime() - venc.getTime()) / 86400000);
+          return Math.max(diff, 0);
+        })();
+        const isUltima = pendentesCount <= 1;
+
+        return (
+          <Dialog open onOpenChange={closePagamentoModal}>
+            <DialogContent className="max-w-lg sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-green-500" />
+                  Efetuar Pagamento — Parcela {parcela.numero}
+                </DialogTitle>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {isUltima && (
+                  <div className="flex items-center gap-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-700 dark:text-yellow-400">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    Última parcela pendente deste cliente
+                  </div>
+                )}
+
+                <div>
+                  <Label className="text-xs mb-1 block">Observação</Label>
+                  <Textarea
+                    placeholder="Observação sobre o pagamento..."
+                    className="resize-none h-16 text-sm"
+                    value={pagamentoObs}
+                    onChange={(e) => setPagamentoObs(e.target.value)}
+                  />
+                </div>
+
+                <Tabs value={pagamentoTab} onValueChange={(v) => setPagamentoTab(v as 'completo' | 'parcial')}>
+                  <TabsList className="w-full grid grid-cols-2">
+                    <TabsTrigger value="completo">Pagamento Completo</TabsTrigger>
+                    <TabsTrigger value="parcial">Pagamento Parcial</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="completo" className="space-y-3 mt-3">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <Label className="text-xs">Vencimento</Label>
+                        <Input value={parcela.dataVencimento} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Pagamento</Label>
+                        <Input type="date" value={pagamentoData} onChange={(e) => setPagamentoData(e.target.value)} className="h-8 text-xs" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Dias</Label>
+                        <Input value={diasAtraso} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-xs">Valor Parcela</Label>
+                        <Input value={formatCurrency(parcela.valorOriginal)} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Valor Corrigido</Label>
+                        <Input value={formatCurrency(valorCorrigido)} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-xs">Desconto (R$)</Label>
+                        <Input type="number" min="0" step="0.01" value={pagamentoDesconto} onChange={(e) => setPagamentoDesconto(e.target.value)} className="h-8 text-xs" />
+                      </div>
+                      <div>
+                        <Label className="text-xs font-semibold">Total a pagar</Label>
+                        <Input value={formatCurrency(totalPagar)} readOnly className="h-8 text-xs bg-muted font-bold" />
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="parcial" className="space-y-3 mt-3">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <Label className="text-xs">Vencimento</Label>
+                        <Input value={parcela.dataVencimento} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Pagamento</Label>
+                        <Input type="date" value={pagamentoData} onChange={(e) => setPagamentoData(e.target.value)} className="h-8 text-xs" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Dias</Label>
+                        <Input value={diasAtraso} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-xs">Valor Total</Label>
+                        <Input value={formatCurrency(totalPagar)} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Valor a Pagar</Label>
+                        <Input type="number" min="0.01" step="0.01" max={totalPagar - 0.01} placeholder="0,00" value={pagamentoValorParcial} onChange={(e) => setPagamentoValorParcial(e.target.value)} className="h-8 text-xs" autoFocus />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-xs">Desconto (R$)</Label>
+                        <Input type="number" min="0" step="0.01" value={pagamentoDesconto} onChange={(e) => setPagamentoDesconto(e.target.value)} className="h-8 text-xs" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Restante</Label>
+                        <Input value={formatCurrency(Math.max(totalPagar - (parseFloat(pagamentoValorParcial) || 0), 0))} readOnly className="h-8 text-xs bg-muted" />
+                      </div>
+                    </div>
+                  </TabsContent>
+                </Tabs>
+
+                <div>
+                  <Label className="text-xs">Conta Bancária</Label>
+                  <Select value={pagamentoConta} onValueChange={setPagamentoConta}>
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {contasBancarias.length > 0 ? (
+                        contasBancarias.map((c) => (
+                          <SelectItem key={c.id} value={c.nome}>
+                            {c.nome}{c.padrao ? ' — Padrão' : ''}
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <>
+                          <SelectItem value="EFI BANK">EFI Bank (Gateway PIX)</SelectItem>
+                          <SelectItem value="CONTA PRINCIPAL">CONTA PRINCIPAL</SelectItem>
+                          <SelectItem value="CONTA SECUNDÁRIA">CONTA SECUNDÁRIA</SelectItem>
+                          <SelectItem value="CAIXA">CAIXA</SelectItem>
+                        </>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex gap-3 justify-end pt-2">
+                  <Button variant="outline" onClick={closePagamentoModal}>Cancelar</Button>
+                  <Button className="bg-green-600 hover:bg-green-700" onClick={() => handleEfetuarPagamento(parcela)} disabled={isBusy}>
+                    {isBusy ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <CheckCircle className="w-4 h-4 mr-1" />}
+                    Efetuar Pagamento
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
+
+      {/* ── Modal: Confirmar Pagamento Manual com Comprovante ── */}
+      {showComprovanteModal && comprovanteParcela && (
+        <Dialog open onOpenChange={() => { setShowComprovanteModal(false); setComprovanteParcela(null); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Upload className="w-5 h-5 text-orange-500" />
+                Confirmar Pagamento — Parcela {comprovanteParcela.numero}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <Label className="text-xs">Valor</Label>
+                  <p className="font-semibold">{formatCurrency(comprovanteParcela.valor)}</p>
+                </div>
+                <div>
+                  <Label className="text-xs">Vencimento</Label>
+                  <p className="font-semibold">{formatDate(comprovanteParcela.dataVencimento)}</p>
+                </div>
+              </div>
+
+              <ComprovanteUploader
+                parcela={{
+                  valor: comprovanteParcela.valor,
+                  juros: comprovanteParcela.juros,
+                  multa: comprovanteParcela.multa,
+                  desconto: comprovanteParcela.desconto,
+                }}
+                submitting={comprovanteLoading}
+                onCancel={() => { setShowComprovanteModal(false); setComprovanteParcela(null); }}
+                onConfirm={async ({ file, ocr, ocrAvaliacao, confirmDivergencia }) => {
+                  if (!comprovanteParcela) return;
+                  setComprovanteLoading(true);
+                  try {
+                    const ext = file.name.split('.').pop() || 'png';
+                    const path = `comprovantes/${comprovanteParcela.id}_${Date.now()}.${ext}`;
+                    const { error: upErr } = await supabase.storage.from('whatsapp-media').upload(path, file, { upsert: true });
+                    if (upErr) throw upErr;
+                    const { data: urlData } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
+
+                    await registrarPagamento.mutateAsync({ id: comprovanteParcela.id, dataPagamento: new Date().toISOString().slice(0, 10) });
+                    await updateParcela.mutateAsync({
+                      id: comprovanteParcela.id,
+                      data: {
+                        comprovante_url: urlData.publicUrl,
+                        pagamento_tipo: 'manual' as const,
+                        comprovante_valor_ocr: ocr?.valor ?? null,
+                        comprovante_data_ocr: ocr?.data ?? null,
+                        comprovante_chave_ocr: ocr?.chavePix ?? null,
+                        comprovante_ocr_score: ocr?.confidenceMedia ?? null,
+                        comprovante_ocr_status: ocr
+                          ? (ocrAvaliacao?.aprovado ? 'auto_aprovado' : confirmDivergencia ? 'divergencia' : 'manual')
+                          : 'sem_ocr',
+                      } as any,
+                    });
+
+                    toast.success(`Parcela ${comprovanteParcela.numero} confirmada com comprovante!`);
+                    setShowComprovanteModal(false);
+                    setComprovanteParcela(null);
+                  } catch (err) {
+                    toast.error(`Erro: ${err instanceof Error ? err.message : 'Falha ao confirmar pagamento'}`);
+                  } finally {
+                    setComprovanteLoading(false);
+                  }
+                }}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* ── Modal: Resultado PIX ── */}
+      {pixResultDialog && (
+        <Dialog open onOpenChange={() => setPixResultDialog(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <QrCode className="w-5 h-5 text-blue-600" />
+                Cobrança PIX — Parcela {pixResultDialog.parcelaNumero}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              {pixResultDialog.qrImage && (
+                <div className="flex justify-center">
+                  <img src={pixResultDialog.qrImage} alt="QR Code PIX" className="w-48 h-48 rounded-lg border" />
+                </div>
+              )}
+              {pixResultDialog.brCode && (
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">PIX Copia e Cola</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={pixResultDialog.brCode}
+                      readOnly
+                      className="text-xs font-mono flex-1"
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0"
+                      onClick={() => {
+                        navigator.clipboard.writeText(pixResultDialog.brCode!);
+                        toast.success('Código PIX copiado!');
+                      }}
+                    >
+                      <Copy className="w-4 h-4 mr-1" />
+                      Copiar
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground text-center">
+                O QR Code e o código foram enviados ao cliente via WhatsApp (se conectado).
+              </p>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* ── Modal: Visualizar Comprovante ── */}
+      {viewComprovanteUrl && (
+        <Dialog open onOpenChange={() => setViewComprovanteUrl(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <ImageIcon className="w-5 h-5" />
+                Comprovante de Pagamento
+              </DialogTitle>
+            </DialogHeader>
+            <img src={viewComprovanteUrl} alt="Comprovante" className="w-full rounded-lg border" />
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

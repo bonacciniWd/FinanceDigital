@@ -6,6 +6,21 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.11] — 2026-04-26
+
+### Corrigido
+- **Clientes desaparecendo a partir do 1001º registro** (crítico): consultas em `clientesService.getClientes`, `emprestimosService.getEmprestimos` e `analiseCreditoService.getAnalises` não usavam `range()` e estavam sujeitas ao limite default de 1000 linhas do PostgREST. Como a lista de clientes é ordenada por `nome`, registros que caíam após a posição 1000 alfabeticamente (ex.: VANIA…) **não apareciam em ClientesPage, não eram encontrados na busca de "Nova Análise" (AnaliseCreditoPage), nem listados em EmprestimosAtivosPage**. Adicionado `.range(0, 49999)` nos três services para subir o teto.
+
+### Melhorado (UX)
+- **Empréstimos Ativos — botão `Eye` unificado**: agora abre o `ClienteDetalhesModal` direto na aba **Cobrança** (via `openClienteModal(clienteId, { tab: 'cobranca' })`) em vez do antigo `EmprestimoDetailModal`. Centraliza o ponto de entrada de cobrança no modal do cliente.
+- **ClienteDetalhesModal — aba Cobrança enriquecida**: ports completos das ações por parcela que antes só existiam no `EmprestimoDetailModal`:
+  - **Pagar** (modal completo/parcial com observação, data, desconto, conta bancária, auto-seleção de gateway).
+  - **Gerar PIX + WhatsApp** (cria cobrança EFI, envia copia-e-cola + QR para a instância conectada).
+  - **Confirmar pagamento manual com comprovante** (upload + OCR + auto-aprovação/divergência).
+  - **Editar juros/multa/desconto** inline (já existia, agora ao lado das demais ações).
+
+---
+
 ## [1.4.10] — 2026-04-25
 
 ### Melhorado

@@ -13,13 +13,15 @@ import type {
 
 // ── Queries ────────────────────────────────────────────────
 
-/** Buscar todas as análises, opcionalmente filtradas por status */
+/** Buscar todas as análises, opcionalmente filtradas por status.
+ *  Usa range explícito para evitar o limite default de 1000 linhas do PostgREST. */
 export async function getAnalises(status?: string): Promise<AnaliseCredito[]> {
 
   let query = supabase
     .from('analises_credito')
     .select('*')
-    .order('data_solicitacao', { ascending: false });
+    .order('data_solicitacao', { ascending: false })
+    .range(0, 49999);
 
   if (status && status !== 'todos') {
     query = query.eq('status', status);

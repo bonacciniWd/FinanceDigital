@@ -13,13 +13,15 @@ import type {
 } from '../lib/database.types';
 // ── Queries ────────────────────────────────────────────────
 
-/** Buscar todos os clientes com empréstimos ativos, opcionalmente filtrados por status */
+/** Buscar todos os clientes com empréstimos ativos, opcionalmente filtrados por status.
+ *  Usa range explícito para evitar o limite default de 1000 linhas do PostgREST. */
 export async function getClientes(status?: string) {
 
   let query = supabase
     .from('clientes')
     .select('*, emprestimos(id, valor, parcelas, parcelas_pagas, proximo_vencimento, status)')
-    .order('nome');
+    .order('nome')
+    .range(0, 49999);
   if (status) query = query.eq('status', status);
 
   const { data, error } = await query;
