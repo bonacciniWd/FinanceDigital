@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.13] — 2026-04-26
+
+### Corrigido
+- **Crash do app na rota fallback (`*`)**: `routes.tsx` usava `require('../assets/animations/welcome.json')` dentro de JSX, o que não funciona em bundle ESM/Vite — `require is not defined` quebrava todo o roteador ao montar (tela branca no app empacotado). Substituído por `import welcomeAnimation from '../assets/animations/welcome.json'` no topo do módulo.
+
+---
+
 ## [1.4.12] — 2026-04-26
 
 ### Corrigido
