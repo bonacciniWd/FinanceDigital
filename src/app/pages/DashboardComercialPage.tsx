@@ -11,12 +11,13 @@
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import { Users, Target, TrendingUp, UserPlus, ArrowUpRight, Loader2 } from 'lucide-react';
+import { Users, Target, TrendingUp, UserPlus, ArrowUpRight } from 'lucide-react';
 import { CategoryBarChart } from '../components/charts/CategoryBarChart';
 import { useAnalises } from '../hooks/useAnaliseCredito';
 import { useMembrosRede } from '../hooks/useRedeIndicacoes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useClientes } from '../hooks/useClientes';
+import { DashboardSkeleton } from '../components/DashboardSkeleton';
 
 export default function DashboardComercialPage() {
   const { data: analises = [], isLoading: loadingAnalises } = useAnalises();
@@ -84,11 +85,7 @@ export default function DashboardComercialPage() {
   }, [membros, clientes]);
 
   if (loadingAnalises) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <DashboardSkeleton kpis={4} />;
   }
 
   return (

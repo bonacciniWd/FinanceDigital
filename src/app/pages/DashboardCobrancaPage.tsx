@@ -21,32 +21,61 @@ import { useParcelas } from '../hooks/useParcelas';
 import { useCardsCobranca } from '../hooks/useKanbanCobranca';
 import { useAcordos } from '../hooks/useAcordos';
 import { valorCorrigido } from '../lib/juros';
+import { DashboardSkeleton } from '../components/DashboardSkeleton';
 
 export default function DashboardCobrancaPage() {
   const navigate = useNavigate();
-  const { data: allClientes = [] } = useClientes();
-  const { data: emprestimos = [] } = useEmprestimos();
-  const { data: allParcelas = [] } = useParcelas();
-  const { data: cardsCobranca = [] } = useCardsCobranca();
-  const { data: acordos = [] } = useAcordos();
+  const { data: allClientes = [], isLoading: loadingClientes } = useClientes();
+  const { data: emprestimos = [], isLoading: loadingEmp } = useEmprestimos();
+  const { data: allParcelas = [], isLoading: loadingParc } = useParcelas();
+  const { data: cardsCobranca = [], isLoading: loadingCards } = useCardsCobranca();
+  const { data: acordos = [], isLoading: loadingAcordos } = useAcordos();
+
+  const isLoading = loadingClientes || loadingEmp || loadingParc || loadingCards || loadingAcordos;
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 
   // ── Derivar dados reais dos empréstimos + parcelas com juros ──
   const dados = useMemo(() => {
-    // Empréstimos inadimplentes
-    const inadimplentes = emprestimos.filter(e => e.status === 'inadimplente');
-    const ativos = emprestimos.filter(e => e.status === 'ativo');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const MS_DIA = 86400000;
+
+    // Clientes considerados ARQUIVADOS na régua de cobrança:
+    //   - card no kanban com etapa 'arquivado' OU 'perdido'
+    //   - card 'vencido' com diasAtraso > 365 (mesma convenção do KanbanCobrancaPage)
+    const clienteIdsArquivados = new Set<string>(
+      cardsCobranca
+        .filter((c) => {
+          if (c.etapa === 'arquivado' || c.etapa === 'perdido') return true;
+          if (c.etapa === 'vencido' && (c.diasAtraso ?? 0) > 365) return true;
+          return false;
+        })
+        .map((c) => c.clienteId)
+        .filter(Boolean) as string[],
+    );
+
+    // Empréstimos ativos/inadimplentes excluindo clientes arquivados
+    const emprestimosVivos = emprestimos.filter((e) => !clienteIdsArquivados.has(e.clienteId));
+    const inadimplentes = emprestimosVivos.filter((e) => e.status === 'inadimplente');
+    const ativos = emprestimosVivos.filter((e) => e.status === 'ativo');
 
     // Set de clientes inadimplentes (via empréstimos)
-    const clienteIdsInadimplentes = new Set(inadimplentes.map(e => e.clienteId));
-    const clientesInadimplentes = allClientes.filter(c => clienteIdsInadimplentes.has(c.id));
+    const clienteIdsInadimplentes = new Set(inadimplentes.map((e) => e.clienteId));
+    const clientesInadimplentes = allClientes.filter((c) => clienteIdsInadimplentes.has(c.id));
 
-    // Parcelas pendentes/vencidas (não pagas) indexadas por empréstimo e cliente
-    const parcelasAbertas = allParcelas.filter(p => p.status !== 'paga' && p.status !== 'cancelada');
+    // Parcelas pendentes/vencidas (não pagas) — exclui clientes arquivados
+    // e parcelas com mais de 365 dias de atraso (juros congelados pela régua).
+    const parcelasAbertas = allParcelas.filter((p) => {
+      if (p.status === 'paga' || p.status === 'cancelada') return false;
+      if (clienteIdsArquivados.has(p.clienteId)) return false;
+      const diasAtraso = Math.floor((today.getTime() - new Date(p.dataVencimento).getTime()) / MS_DIA);
+      if (diasAtraso > 365) return false;
+      return true;
+    });
 
-    // Calcular valor corrigido de cada parcela (com juros automáticos)
+    // Calcular valor corrigido de cada parcela (com juros automáticos, capados em 365d pelo lib)
     const valorCorrigidoParcela = (p: typeof parcelasAbertas[0]) => {
       const { total } = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto);
       return total;
@@ -72,8 +101,7 @@ export default function DashboardCobrancaPage() {
       return acc + ps.reduce((s, p) => s + valorCorrigidoParcela(p), 0);
     }, 0);
 
-    // Dias de atraso real por cliente (baseado em próximoVencimento dos inadimplentes)
-    const today = new Date();
+    // Dias de atraso real por cliente
     const clientesDados = clientesInadimplentes.map(c => {
       const empsCliente = inadimplentes.filter(e => e.clienteId === c.id);
 
@@ -83,15 +111,17 @@ export default function DashboardCobrancaPage() {
         return s + ps.reduce((sum, p) => sum + valorCorrigidoParcela(p), 0);
       }, 0);
 
-      // Dias de atraso = max entre todos os empréstimos inadimplentes do cliente
+      // Dias de atraso = max entre todos os empréstimos inadimplentes do cliente (cap 365)
       const diasAtraso = empsCliente.reduce((max, e) => {
         const venc = new Date(e.proximoVencimento);
-        const dias = Math.max(0, Math.floor((today.getTime() - venc.getTime()) / (1000 * 60 * 60 * 24)));
-        return Math.max(max, dias);
+        const dias = Math.max(0, Math.floor((today.getTime() - venc.getTime()) / MS_DIA));
+        return Math.max(max, Math.min(dias, 365));
       }, 0);
 
       return { ...c, diasAtrasoReal: diasAtraso, valorDevido: totalDevido, qtdEmprestimos: empsCliente.length };
-    }).sort((a, b) => b.diasAtrasoReal - a.diasAtrasoReal);
+    })
+      .filter((c) => c.valorDevido > 0) // sem parcelas abertas elegíveis -> não conta
+      .sort((a, b) => b.diasAtrasoReal - a.diasAtrasoReal);
 
     const mediaDiasAtraso = clientesDados.length > 0
       ? Math.round(clientesDados.reduce((acc, c) => acc + c.diasAtrasoReal, 0) / clientesDados.length)
@@ -148,6 +178,10 @@ export default function DashboardCobrancaPage() {
       valorRecuperadoLimpo,
     };
   }, [allClientes, emprestimos, allParcelas, cardsCobranca, acordos]);
+
+  if (isLoading) {
+    return <DashboardSkeleton kpis={4} />;
+  }
 
   return (
     <div className="space-y-6">

@@ -16,6 +16,7 @@ import { createBrowserRouter, Navigate } from 'react-router';
 import { MainLayout } from './components/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
+import Lottie from 'lottie-react';
 
 // Lazy-loaded pages — code-splitting para reduzir bundle inicial e acelerar navegação
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
@@ -183,10 +184,8 @@ export const router = createBrowserRouter([
         element: (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <h2 className="text-2xl font-semibold mb-2">Página em Desenvolvimento</h2>
-              <p className="text-muted-foreground">
-                Esta funcionalidade será implementada em breve.
-              </p>
+              <h2 className="text-2xl font-semibold mb-2">Bem vindo à Fintech</h2>
+              <Lottie animationData={require('../assets/animations/welcome.json')} loop={true} />
             </div>
           </div>
         ),

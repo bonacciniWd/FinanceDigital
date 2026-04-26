@@ -14,19 +14,28 @@ import type {
 // ── Queries ────────────────────────────────────────────────
 
 /** Buscar todos os empréstimos com nome do cliente.
- *  Usa range explícito para evitar o limite default de 1000 linhas do PostgREST. */
+ *  Pagina em chunks de 1000 para contornar o `db-max-rows` do PostgREST. */
 export async function getEmprestimos(status?: string): Promise<EmprestimoComCliente[]> {
-  let query = supabase
-    .from('emprestimos')
-    .select('*, clientes(nome)')
-    .order('created_at', { ascending: false })
-    .range(0, 49999);
+  const PAGE = 1000;
+  const all: EmprestimoComCliente[] = [];
 
-  if (status) query = query.eq('status', status);
+  for (let from = 0; ; from += PAGE) {
+    let query = supabase
+      .from('emprestimos')
+      .select('*, clientes(nome)')
+      .order('created_at', { ascending: false })
+      .range(from, from + PAGE - 1);
 
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-  return (data ?? []) as EmprestimoComCliente[];
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) break;
+    all.push(...(data as EmprestimoComCliente[]));
+    if (data.length < PAGE) break;
+  }
+
+  return all;
 }
 
 /** Buscar empréstimos de um cliente específico */

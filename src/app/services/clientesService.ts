@@ -14,19 +14,27 @@ import type {
 // ── Queries ────────────────────────────────────────────────
 
 /** Buscar todos os clientes com empréstimos ativos, opcionalmente filtrados por status.
- *  Usa range explícito para evitar o limite default de 1000 linhas do PostgREST. */
+ *  Pagina em chunks de 1000 para contornar o `db-max-rows` do PostgREST. */
 export async function getClientes(status?: string) {
+  const PAGE = 1000;
+  const all: any[] = [];
 
-  let query = supabase
-    .from('clientes')
-    .select('*, emprestimos(id, valor, parcelas, parcelas_pagas, proximo_vencimento, status)')
-    .order('nome')
-    .range(0, 49999);
-  if (status) query = query.eq('status', status);
+  for (let from = 0; ; from += PAGE) {
+    let query = supabase
+      .from('clientes')
+      .select('*, emprestimos(id, valor, parcelas, parcelas_pagas, proximo_vencimento, status)')
+      .order('nome')
+      .range(from, from + PAGE - 1);
+    if (status) query = query.eq('status', status);
 
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-  return data ?? [];
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+  }
+
+  return all;
 }
 
 /** Buscar um cliente por ID */

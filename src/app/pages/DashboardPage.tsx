@@ -26,6 +26,7 @@ import { useDashboardStats } from '../hooks/useDashboardStats';
 import { valorCorrigido } from '../lib/juros';
 import { StatusBadge } from '../components/StatusBadge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { DashboardSkeleton } from '../components/DashboardSkeleton';
 
 const DONUT_COLORS = ['#22c55e', '#eab308', '#ef4444'];
 
@@ -38,11 +39,13 @@ export default function DashboardPage() {
   const [grupoFilter, setGrupoFilter] = useState('todos');
   const [busca, setBusca] = useState('');
 
-  const { data: clientes = [] } = useClientes();
-  const { data: emprestimos = [] } = useEmprestimos();
-  const { data: parcelasPagas = [] } = useParcelas('paga');
-  const { data: todasParcelas = [] } = useParcelas();
+  const { data: clientes = [], isLoading: loadingClientes } = useClientes();
+  const { data: emprestimos = [], isLoading: loadingEmp } = useEmprestimos();
+  const { data: parcelasPagas = [], isLoading: loadingPagas } = useParcelas('paga');
+  const { data: todasParcelas = [], isLoading: loadingParc } = useParcelas();
   const { data: stats, isLoading: loadingStats } = useDashboardStats();
+
+  const isLoadingDashboard = loadingClientes || loadingEmp || loadingPagas || loadingParc || loadingStats;
 
   // Derivar inadimplência real a partir dos empréstimos
   const clienteIdsInadimplentes = new Set(
@@ -184,6 +187,10 @@ export default function DashboardPage() {
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('pt-BR');
   };
+
+  if (isLoadingDashboard) {
+    return <DashboardSkeleton kpis={4} />;
+  }
 
   return (
     <div className="space-y-6">

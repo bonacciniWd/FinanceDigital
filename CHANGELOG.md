@@ -6,6 +6,19 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.12] — 2026-04-26
+
+### Corrigido
+- **Dashboard de Cobrança com valores absurdos** (R$ 171M): juros não eram congelados para clientes arquivados/perdidos nem para parcelas com >365 dias de atraso, criando totais irreais. `DashboardCobrancaPage` agora aplica a mesma régua do Kanban de Cobrança:
+  - exclui empréstimos de clientes cujo card está em `arquivado`, `perdido` ou `vencido > 365d`;
+  - exclui parcelas individuais com `diasAtraso > 365` (juros congelados);
+  - cap de 365d no `diasAtrasoReal` por cliente exibido na tabela.
+
+### Melhorado (UX)
+- **Loading dos dashboards**: novo componente `DashboardSkeleton` substitui o estado "tudo zerado" enquanto os hooks do React Query ainda estão hidratando. Aplicado em `DashboardPage`, `DashboardCobrancaPage` e `DashboardComercialPage` agregando o `isLoading` de todos os hooks consumidos (clientes, empréstimos, parcelas, cards, acordos, stats). Antes apenas alguns dashboards tinham fallback parcial.
+
+---
+
 ## [1.4.11] — 2026-04-26
 
 ### Corrigido

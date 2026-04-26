@@ -14,22 +14,30 @@ import type {
 // ── Queries ────────────────────────────────────────────────
 
 /** Buscar todas as análises, opcionalmente filtradas por status.
- *  Usa range explícito para evitar o limite default de 1000 linhas do PostgREST. */
+ *  Pagina em chunks de 1000 para contornar o `db-max-rows` do PostgREST. */
 export async function getAnalises(status?: string): Promise<AnaliseCredito[]> {
+  const PAGE = 1000;
+  const all: AnaliseCredito[] = [];
 
-  let query = supabase
-    .from('analises_credito')
-    .select('*')
-    .order('data_solicitacao', { ascending: false })
-    .range(0, 49999);
+  for (let from = 0; ; from += PAGE) {
+    let query = supabase
+      .from('analises_credito')
+      .select('*')
+      .order('data_solicitacao', { ascending: false })
+      .range(from, from + PAGE - 1);
 
-  if (status && status !== 'todos') {
-    query = query.eq('status', status);
+    if (status && status !== 'todos') {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) break;
+    all.push(...(data as AnaliseCredito[]));
+    if (data.length < PAGE) break;
   }
 
-  const { data, error } = await query;
-  if (error) throw new Error(error.message);
-  return data ?? [];
+  return all;
 }
 
 /** Buscar uma análise por ID */
