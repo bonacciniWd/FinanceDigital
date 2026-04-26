@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.10] — 2026-04-25
+
+### Melhorado
+- **Ícone do app em alta qualidade**: substituído por arte 1024×1024 nova. Regenerados `build/icon.icns` (macOS), `build/icon.ico` (Windows), `build/icon.png` (Linux) e todo o `build/icon.iconset/`.
+
+---
+
 ## [1.4.9] — 2026-04-25
 
 ### Corrigido
