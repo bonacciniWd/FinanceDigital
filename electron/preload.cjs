@@ -35,4 +35,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   getUpdateStatus: () => ipcRenderer.invoke('update:getStatus'),
   quitAndInstall: () => ipcRenderer.invoke('update:quitAndInstall'),
+
+  // Window facade (Calculadora trigger)
+  appReveal: () => ipcRenderer.invoke('app:reveal'),
+  appHide: () => ipcRenderer.invoke('app:hide'),
 });

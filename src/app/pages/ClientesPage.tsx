@@ -11,7 +11,7 @@
  * @route /clientes
  * @access Protegido — todos os perfis autenticados
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -22,7 +22,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
-import { Search, Grid, List, Edit, History, Ban, Eye, Phone, Loader2, Plus, ChevronsUpDown, Check, MapPin, Upload, X, FileImage, Users } from 'lucide-react';
+import { Search, Edit, History, Ban, Eye, Phone, Loader2, Plus, ChevronsUpDown, Check, MapPin, Upload, X, FileImage, Users } from 'lucide-react';
 import { useClientes, useIndicados, useCreateCliente, useUpdateCliente } from '../hooks/useClientes';
 import { useParcelasByCliente } from '../hooks/useParcelas';
 import { StatusBadge } from '../components/StatusBadge';
@@ -32,8 +32,6 @@ import { cn } from '../components/ui/utils';
 import { supabase } from '../lib/supabase';
 import type { Cliente } from '../lib/view-types';
 import type { ClienteInsert, ClienteUpdate, Sexo } from '../lib/database.types';
-
-type ViewMode = 'table' | 'cards';
 
 type ClienteFormData = {
   nome: string;
@@ -73,12 +71,13 @@ const ESTADOS_BR = [
 export default function ClientesPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
   const [mapStateFilter, setMapStateFilter] = useState('');
   const [mapCityFilter, setMapCityFilter] = useState('');
-  const [showMap, setShowMap] = useState(false);
+  const [showMap, setShowMap] = useState(true);
+  // Letra inicial selecionada para paginar (A-Z, '#' = sem letra/número)
+  const [letraFiltro, setLetraFiltro] = useState<string>('A');
   const [selectedClient, setSelectedClient] = useState<Cliente | null>(null);
 
   // Create / Edit modal
@@ -288,31 +287,80 @@ export default function ClientesPage() {
 
   const isSaving = createCliente.isPending || updateCliente.isPending || uploadingDocs;
 
-  const filteredClientes = clientes.filter((cliente) => {
-    const matchesSearch = cliente.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      cliente.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'todos' || cliente.status === statusFilter;
-    const matchesState = !mapStateFilter || cliente.estado === mapStateFilter;
-    const matchesCity = !mapCityFilter || cliente.cidade === mapCityFilter;
-    return matchesSearch && matchesStatus && matchesState && matchesCity;
-  });
+  // ── Filtros memoizados ─────────────────────────────────────────
+  // Sem useMemo, com 1140 clientes esses .filter/.reduce rodavam a cada
+  // keystroke + cada re-render do parent (ex.: abrir modal).
+  const filteredClientes = useMemo(() => {
+    const term = searchTerm.toLowerCase();
+    return clientes.filter((cliente) => {
+      const matchesSearch =
+        !term ||
+        cliente.nome.toLowerCase().includes(term) ||
+        cliente.email.toLowerCase().includes(term);
+      const matchesStatus = statusFilter === 'todos' || cliente.status === statusFilter;
+      const matchesState = !mapStateFilter || cliente.estado === mapStateFilter;
+      const matchesCity = !mapCityFilter || cliente.cidade === mapCityFilter;
+      return matchesSearch && matchesStatus && matchesState && matchesCity;
+    });
+  }, [clientes, searchTerm, statusFilter, mapStateFilter, mapCityFilter]);
+
+  // ── Paginação por letra inicial ────────────────────────────────
+  // Cada cliente é indexado pela primeira letra do nome (A-Z). Nomes que
+  // começam com número/símbolo caem em '#'. Se há termo de busca, ignoramos
+  // o filtro de letra (resultado completo).
+  const ALFABETO = useMemo(() => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').concat('#'), []);
+
+  // Conta quantos clientes há por letra (respeitando demais filtros menos a letra)
+  const contagemPorLetra = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const c of filteredClientes) {
+      const ch = (c.nome.trim()[0] || '#').toUpperCase();
+      const letra = /[A-Z]/.test(ch) ? ch : '#';
+      map[letra] = (map[letra] ?? 0) + 1;
+    }
+    return map;
+  }, [filteredClientes]);
+
+  // Lista exibida: filtra por letra (a menos que esteja buscando)
+  const paginatedClientes = useMemo(() => {
+    if (searchTerm.trim()) return filteredClientes;
+    return filteredClientes.filter((c) => {
+      const ch = (c.nome.trim()[0] || '#').toUpperCase();
+      const letra = /[A-Z]/.test(ch) ? ch : '#';
+      return letra === letraFiltro;
+    });
+  }, [filteredClientes, letraFiltro, searchTerm]);
 
   // Contagem de clientes por estado para o mapa
-  const clientCountByState = clientes.reduce<Record<string, number>>((acc, c) => {
-    if (c.estado) acc[c.estado] = (acc[c.estado] ?? 0) + 1;
-    return acc;
-  }, {});
+  const clientCountByState = useMemo(
+    () =>
+      clientes.reduce<Record<string, number>>((acc, c) => {
+        if (c.estado) acc[c.estado] = (acc[c.estado] ?? 0) + 1;
+        return acc;
+      }, {}),
+    [clientes],
+  );
 
   // Cidades com clientes no estado selecionado e suas contagens
-  const citiesInState = mapStateFilter
-    ? [...new Set(clientes.filter(c => c.estado === mapStateFilter && c.cidade).map(c => c.cidade!))].sort()
-    : [];
-  const clientCountByCity = mapStateFilter
-    ? clientes.filter(c => c.estado === mapStateFilter && c.cidade).reduce<Record<string, number>>((acc, c) => {
-        acc[c.cidade!] = (acc[c.cidade!] ?? 0) + 1;
-        return acc;
-      }, {})
-    : {};
+  const citiesInState = useMemo(
+    () =>
+      mapStateFilter
+        ? [...new Set(clientes.filter((c) => c.estado === mapStateFilter && c.cidade).map((c) => c.cidade!))].sort()
+        : [],
+    [clientes, mapStateFilter],
+  );
+  const clientCountByCity = useMemo(
+    () =>
+      mapStateFilter
+        ? clientes
+            .filter((c) => c.estado === mapStateFilter && c.cidade)
+            .reduce<Record<string, number>>((acc, c) => {
+              acc[c.cidade!] = (acc[c.cidade!] ?? 0) + 1;
+              return acc;
+            }, {})
+        : {},
+    [clientes, mapStateFilter],
+  );
 
   const openCreateModal = useCallback(() => {
     setEditingId(null);
@@ -457,6 +505,21 @@ export default function ClientesPage() {
           setModalOpen(false);
           setForm(EMPTY_FORM);
           resetDocState();
+          // Encadeamento UX: ao criar um cliente, abre direto Nova Análise
+          // de Crédito com os dados pré-preenchidos.
+          if (newId) {
+            navigate('/clientes/analise', {
+              state: {
+                openNovaAnalise: true,
+                prefill: {
+                  clienteId: newId,
+                  clienteNome: form.nome,
+                  cpf: form.cpf,
+                  rendaMensal: form.renda_mensal,
+                },
+              },
+            });
+          }
         },
         onError: (err) => toast.error(`Erro: ${err.message}`),
       });
@@ -539,20 +602,6 @@ export default function ClientesPage() {
               >
                 <MapPin className="w-4 h-4" />
               </Button>
-              <Button
-                variant={viewMode === 'table' ? 'default' : 'outline'}
-                size="icon"
-                onClick={() => setViewMode('table')}
-              >
-                <List className="w-4 h-4" />
-              </Button>
-              <Button
-                variant={viewMode === 'cards' ? 'default' : 'outline'}
-                size="icon"
-                onClick={() => setViewMode('cards')}
-              >
-                <Grid className="w-4 h-4" />
-              </Button>
             </div>
           </div>
         </CardContent>
@@ -581,107 +630,37 @@ export default function ClientesPage() {
         </Card>
       )}
 
-      {/* Visualização em Tabela */}
-      {viewMode === 'table' && (
+      {/* Barra de paginação alfabética — oculta durante busca */}
+      {!searchTerm.trim() && (
         <Card>
-          <CardContent className="pt-6">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-3 px-4 font-medium">Cliente</th>
-                    <th className="text-left py-3 px-4 font-medium">Status</th>
-                    <th className="text-left py-3 px-4 font-medium">Empréstimo</th>
-                    <th className="text-left py-3 px-4 font-medium">Próx. Vencimento</th>
-                    <th className="text-left py-3 px-4 font-medium">Parcelas</th>
-                    <th className="text-left py-3 px-4 font-medium">Score</th>
-                    <th className="text-left py-3 px-4 font-medium">Ações</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredClientes.map((cliente) => (
-                    <tr key={cliente.id} className="border-b hover:bg-muted/50">
-                      <td className="py-3 px-4">
-                        <div>
-                          <div className="font-medium">{cliente.nome}</div>
-                          <div className="text-sm text-muted-foreground flex items-center gap-2">
-                            📧 {cliente.email}
-                          </div>
-                          <div className="text-sm text-muted-foreground flex items-center gap-2">
-                            📱 {cliente.telefone}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <StatusBadge status={cliente.status} />
-                      </td>
-                      <td className="py-3 px-4 font-medium">
-                        {cliente.valor > 0 ? formatCurrency(cliente.valor) : <span className="text-muted-foreground text-sm">—</span>}
-                      </td>
-                      <td className="py-3 px-4">
-                        {cliente.totalParcelas ? formatDate(cliente.vencimento) : <span className="text-muted-foreground text-sm">—</span>}
-                      </td>
-                      <td className="py-3 px-4">
-                        {cliente.totalParcelas ? (
-                          <span className="text-sm">
-                            <span className="font-medium">{cliente.parcelasPagas}</span>
-                            <span className="text-muted-foreground">/{cliente.totalParcelas}</span>
-                          </span>
-                        ) : <span className="text-muted-foreground text-sm">—</span>}
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
-                            <div
-                              className="h-full bg-secondary"
-                              style={{ width: `${(cliente.scoreInterno / 1000) * 100}%` }}
-                            />
-                          </div>
-                          <span className="text-sm font-medium w-12">
-                            {cliente.scoreInterno}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <div className="flex gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            title="WhatsApp"
-                            className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                            onClick={() => navigate(`/whatsapp?telefone=${encodeURIComponent(cliente.telefone)}`)}
-                          >
-                            <Phone className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            title="Ver detalhes"
-                            onClick={() => setSelectedClient(cliente)}
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" title="Editar" onClick={() => openEditModal(cliente)}>
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" title="Histórico" onClick={() => navigate('/clientes/historico')}>
-                            <History className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <CardContent className="py-3">
+            <div className="flex flex-wrap gap-1 items-center justify-center">
+              {ALFABETO.map((letra) => {
+                const count = contagemPorLetra[letra] ?? 0;
+                const ativo = letraFiltro === letra;
+                return (
+                  <Button
+                    key={letra}
+                    size="sm"
+                    variant={ativo ? 'default' : 'outline'}
+                    disabled={count === 0}
+                    onClick={() => setLetraFiltro(letra)}
+                    className="h-8 min-w-9 px-2 font-semibold"
+                    title={`${count} cliente(s)`}
+                  >
+                    {letra}
+                    <span className="ml-1 text-[10px] opacity-70">{count || ''}</span>
+                  </Button>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Visualização em Cards */}
-      {viewMode === 'cards' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredClientes.map((cliente) => (
+      {/* Visualização em Cards (única) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {paginatedClientes.map((cliente) => (
             <Card key={cliente.id} className="hover:shadow-lg transition-shadow">
               <CardHeader>
                 <div className="flex items-start justify-between">
@@ -750,7 +729,6 @@ export default function ClientesPage() {
             </Card>
           ))}
         </div>
-      )}
 
       {/* Modal de Detalhes */}
       <Dialog open={!!selectedClient} onOpenChange={() => setSelectedClient(null)}>

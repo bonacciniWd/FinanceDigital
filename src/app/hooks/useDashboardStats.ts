@@ -40,7 +40,9 @@ export function useDashboardStats() {
       if (error) throw error;
       return data as DashboardStats;
     },
-    staleTime: 30_000, // 30s cache
+    // KPIs são exibidos em várias rotas; mutações invalidam essa key.
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 }
 
@@ -55,6 +57,8 @@ export function useFinancialSummary(meses = 6) {
       if (error) throw error;
       return (data as FinancialMonth[]) ?? [];
     },
-    staleTime: 60_000,
+    // Histórico mensal varia pouco no curto prazo.
+    staleTime: 1000 * 60 * 10,
+    gcTime: 1000 * 60 * 60,
   });
 }

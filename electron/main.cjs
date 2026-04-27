@@ -27,11 +27,17 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 function createWindow() {
+  // Inicia no tamanho de uma calculadora real (fachada). Quando o usuário
+  // ativa o trigger secreto, o renderer chama `app:reveal` via IPC e a
+  // janela cresce para o tamanho normal do app.
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 700,
+    width: 340,
+    height: 560,
+    minWidth: 320,
+    minHeight: 500,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     title: 'Calculadora',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -86,6 +92,30 @@ ipcMain.handle('storage:decrypt', (_event, { name }) => {
 
 ipcMain.handle('storage:delete', (_event, { name }) => {
   return encryptedStorage.deleteEncrypted(name);
+});
+
+// --- App Reveal: expande a janela ao sair da fachada Calculadora ---
+ipcMain.handle('app:reveal', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  mainWindow.setResizable(true);
+  mainWindow.setMaximizable(true);
+  mainWindow.setFullScreenable(true);
+  mainWindow.setMinimumSize(1024, 700);
+  mainWindow.setSize(1400, 900);
+  mainWindow.center();
+  return true;
+});
+
+// Volta para o tamanho de calculadora (logout / exit)
+ipcMain.handle('app:hide', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  mainWindow.setMinimumSize(320, 500);
+  mainWindow.setSize(340, 560);
+  mainWindow.setResizable(false);
+  mainWindow.setMaximizable(false);
+  mainWindow.setFullScreenable(false);
+  mainWindow.center();
+  return true;
 });
 
 // --- Updater IPC (manual check/download/install) ---

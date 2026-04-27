@@ -1,7 +1,7 @@
 {
   "name": "digital-finance-dashboard",
   "private": true,
-  "version": "1.4.14",
+  "version": "1.4.15",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -44,7 +44,10 @@
     "@radix-ui/react-toggle-group": "1.1.2",
     "@radix-ui/react-tooltip": "1.1.8",
     "@supabase/supabase-js": "^2.97.0",
+    "@tanstack/query-sync-storage-persister": "^5.100.5",
     "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-query-persist-client": "^5.100.5",
+    "@tanstack/react-virtual": "^3.13.24",
     "@xyflow/react": "^12.10.1",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",

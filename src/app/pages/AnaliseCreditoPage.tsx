@@ -11,7 +11,8 @@
  * @route /clientes/analise-credito
  * @access Protegido — perfis admin, gerente, analista
  */
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -132,6 +133,32 @@ export default function AnaliseCreditoPage() {
       setVerificandoPendencia(false);
     }
   }, []);
+
+  // ── Prefill vindo de ClientesPage (após criar cliente) ───
+  // Quando o operador acaba de cadastrar um cliente em /clientes, o ClientesPage
+  // navega para cá com `state.openNovaAnalise = true` e os dados em `state.prefill`.
+  // Aqui populamos o form da Nova Análise e abrimos o modal automaticamente.
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const st = location.state as
+      | { openNovaAnalise?: boolean; prefill?: { clienteId?: string; clienteNome?: string; cpf?: string; rendaMensal?: string } }
+      | null;
+    if (!st?.openNovaAnalise) return;
+    const p = st.prefill || {};
+    setFormNova((prev) => ({
+      ...prev,
+      clienteId: p.clienteId || '',
+      clienteNome: p.clienteNome || '',
+      cpf: p.cpf || '',
+      rendaMensal: p.rendaMensal || '',
+    }));
+    setBuscaCliente(p.clienteNome || '');
+    setShowNovaAnalise(true);
+    if (p.clienteId) verificarPendencias(p.clienteId);
+    // Limpa o state da rota para não reabrir o modal em refresh/voltar.
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location, navigate, verificarPendencias]);
 
   // ── Enviar Link de Verificação via WhatsApp ──────────────
   const [sendingLink, setSendingLink] = useState(false);
@@ -909,6 +936,26 @@ export default function AnaliseCreditoPage() {
                     onChange={(e) => setFormNova({ ...formNova, dataPrimeiraParcela: e.target.value })}
                   />
                   <p className="text-[11px] text-muted-foreground mt-1">Se vazio, o sistema gera a partir da data atual + periodicidade.</p>
+                  {/* Preview da 1ª parcela calculada (hoje + dias da periodicidade) */}
+                  {!formNova.dataPrimeiraParcela && (() => {
+                    const offsetByPeriod: Record<string, number> = {
+                      diario: 1,
+                      semanal: 7,
+                      quinzenal: 15,
+                      mensal: 30,
+                    };
+                    const dias = offsetByPeriod[formNova.periodicidade];
+                    if (!dias) return null;
+                    const d = new Date();
+                    d.setDate(d.getDate() + dias);
+                    const fmt = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                    return (
+                      <p className="text-[11px] text-primary mt-1">
+                        Próximo pagamento previsto: <strong>{fmt}</strong>{' '}
+                        <span className="text-muted-foreground">(hoje + {dias} dias)</span>
+                      </p>
+                    );
+                  })()}
                 </div>
               )}
 

@@ -2775,6 +2775,93 @@ Hooks utilizados para extratos:
 
 > **Nota:** O campo `horario` retornado pela EFI é um **objeto** `{ solicitacao, liquidacao }`, não uma string ISO. O helper `extractDate()` trata ambos os formatos.
 
+##### Auto-confirmação de desembolso por extrato (v1.4.5)
+
+Quando um Pix **enviado** aparece no extrato com a mesma chave PIX e o mesmo valor de um empréstimo aprovado em "Aguardando envio", o sistema marca `desembolsado=true` automaticamente — eliminando o passo manual "Marcar Enviado".
+
+**Algoritmo (`PagamentosWooviPage.tsx`):**
+
+1. `normalizePixKey(k)` — normaliza chaves PIX p/ comparação robusta:
+   - E-mail: lowercase, formato preservado
+   - CPF / telefone / chave aleatória: lowercase + remove tudo que não é alfanumérico
+     (ex: `123.456.789-00` ↔ `12345678900`; `+55 11 9...` ↔ `5511...`)
+2. `extratoMatchByEmprestimo` (`useMemo`) — para cada empréstimo de `aguardandoEnvio` com `pixKey` definido, procura uma saída em `extratoItemsMerged` onde:
+   - `normalizePixKey(saida.descricao) === normalizePixKey(emp.pixKey)`
+   - `Math.abs(saida.valor - emp.valor) < 0.01`
+   - Cada saída só pode casar com um empréstimo (Set `usados`).
+3. `useEffect` dispara `handleMarcarDesembolsado(empId)` para cada match novo. Um `useRef<Set<string>>` (`autoConfirmedRef`) impede re-disparo em re-renders.
+4. Toast: _"Desembolso de {cliente} auto-confirmado pelo extrato (e2e…)"_.
+5. Card em "Aguardando envio" recebe badge verde **"✓ Detectado no extrato — confirmando…"** enquanto o update roda.
+
+##### Detalhe e vinculação manual de itens do extrato (v1.4.5)
+
+Cada card do extrato é **clicável** (`cursor-pointer + hover:bg-muted/40`) e abre um modal com:
+
+- Direção, valor, data/hora, pagador/favorecido, txid/chave PIX, end-to-end, status.
+- Botão "Copiar End-to-End ID".
+- **Entrada vinculada**: se houver `woovi_charge` (gateway=efi, status=COMPLETED) com `wooviChargeId`/`e2eId` igual, exibe a cobrança e oferece "Ver detalhes da cobrança" (abre o modal de cobrança existente).
+- **Saída vinculada**: se houver empréstimo com mesma chave PIX + valor (≈), exibe os dados do empréstimo e seu status de desembolso.
+
+**Vinculação manual** (saída sem match automático, apenas admin/gerência com `controle_desembolso_ativo`):
+
+Seção "Vincular a um empréstimo" no modal lista os empréstimos em `aguardandoEnvio`:
+- Sem busca: mostra apenas candidatos com **mesma chave** ou **|Δ valor| ≤ R$ 10**.
+- Com busca: filtra por `clienteNome`, `clienteCpf` ou `pixKey`.
+- Ordenação: mesma chave primeiro → menor diferença de valor.
+- Badges: **"mesma chave"** (verde), **"mesmo valor"** (azul), **"Δ R$ X"** (âmbar quando diverge).
+- Botão **Vincular** chama `handleMarcarDesembolsado(emp.id)` e adiciona o ID a `autoConfirmedRef` (evita o auto-match disparar de novo no próximo render).
+
+> **Diferença vs `pagamentos_orfaos`:** A tabela `pagamentos_orfaos` é populada pelo webhook EFI **apenas para Pix recebidos** sem match com parcela. **Saídas (desembolsos) nunca entram nessa tabela** — a conciliação manual de envios → empréstimo é feita exclusivamente pelo modal de detalhe do extrato.
+
+##### Saídas Órfãs e Gastos Internos por categoria (v1.4.6)
+
+A página _Pagamentos Órfãos_ cobre apenas **recebimentos sem parcela vinculada**. Para **saídas** (Pix Enviados) há um caminho dedicado, alimentado por um cron próprio.
+
+**Tabelas (migration `051_saidas_orfas_e_gastos_internos.sql`):**
+
+- `categorias_gastos` — `nome`, `termo` (palavra-chave para casar com favorecido), `cor`, `ativo`, `observacao`. Cadastrada pelo admin.
+- `gastos_internos` — gastos efetivamente classificados. `categoria_id`, `e2e_id` (UNIQUE), `valor`, `horario`, `chave_favorecido`, `nome_favorecido`, `descricao`, `gateway`, `raw_payload`, `match_origem ∈ {auto, manual}`.
+- `saidas_orfas` — saídas pendentes de classificação. `e2e_id` (UNIQUE), `valor`, `horario`, favorecido, `gateway`, `status ∈ {pendente, vinculada_emprestimo, vinculada_gasto, ignorada}`, `candidatas_emprestimo` JSONB (top 10 sugestões: mesma chave OU |Δvalor| ≤ R$10).
+
+**RPCs (SECURITY DEFINER, restritas a admin/gerencia):**
+
+- `vincular_saida_orfa_emprestimo(p_orfa_id, p_emprestimo_id, p_marcar_desembolsado)` — atualiza `saidas_orfas.status='vinculada_emprestimo'` e, se `p_marcar_desembolsado=true`, marca `emprestimos.desembolsado=true` com `desembolsado_em=horario`.
+- `vincular_saida_orfa_categoria(p_orfa_id, p_categoria_id)` — cria registro em `gastos_internos` com `match_origem='manual'` e marca a órfã como `vinculada_gasto`.
+- `ignorar_saida_orfa(p_orfa_id, p_observacao)` — marca como `ignorada` (ex: estornos, ajustes manuais não relevantes).
+
+**Edge function `cron-saidas-orfas`:**
+
+Busca Pix Enviados na EFI (janela default 48h, configurável via `?hours=N`), deduplica por `e2e_id` em `gastos_internos`+`saidas_orfas` e classifica em ordem:
+
+1. **Empréstimo** — empréstimo com análise aprovada, `desembolsado=false`, `normalizePixKey(cliente.pix_key) === normalizePixKey(favorecido.chave)` E `|Δvalor| < R$0,01` → marca desembolsado automaticamente.
+2. **Categoria de gasto** — algum `categorias_gastos.termo` (case-insensitive) é substring de `${nome_favorecido} ${chave_favorecido}` → grava em `gastos_internos` com `match_origem='auto'`.
+3. **Sem match** — grava em `saidas_orfas` como `pendente` com candidatos pré-calculados em `candidatas_emprestimo`.
+
+```bash
+# Deploy
+supabase functions deploy cron-saidas-orfas --no-verify-jwt
+
+# Agendar com pg_cron (executar a cada 6h)
+SELECT cron.schedule(
+  'saidas-orfas-6h',
+  '0 */6 * * *',
+  $$ SELECT net.http_post(
+       url := 'https://<projeto>.supabase.co/functions/v1/cron-saidas-orfas?hours=12',
+       headers := jsonb_build_object('Authorization','Bearer ' || current_setting('app.settings.service_role_key'))
+     ) $$
+);
+```
+
+**UI:**
+
+- `/configuracoes/gastos-internos` (admin/gerencia) — CRUD de `categorias_gastos` (nome + termo + cor + ativo), listagem dos últimos 100 `gastos_internos`, totais por origem, botão "Rodar conciliação agora", e configuração de gateways de pagamento (EFI/Woovi).
+- `/pagamentos/saidas-orfas` (admin/gerencia) — Lista filtrável por status (pendente/vinculada/ignorada), busca por nome/chave/CPF/e2e, **modal Vincular** com 2 abas:
+  - **Empréstimo**: ranqueia candidatos por mesma chave → menor `|Δvalor|`. Badges _"mesma chave"_ (verde), _"mesmo valor"_ (azul), _"Δ R$ X"_ (âmbar). Botão Vincular chama `vincular_saida_orfa_emprestimo` e marca desembolsado.
+  - **Categoria**: lista categorias ativas. Vincular → grava em `gastos_internos` (manual).
+  - Botão **X** chama `ignorar_saida_orfa`.
+
+> A antiga rota `/configuracoes/comissoes` (`ComissoesConfigPage`) foi removida. O cadastro de agentes de comissão foi descontinuado nessa página — a aba virou pura para **gastos internos**. Relatórios de comissões em `/relatorios/comissoes` permanecem inalterados.
+
 Modais:
 - Nova Cobrança (selecionar cliente → parcela pendente/vencida → valor com juros calculado → ajuste manual opcional → envio automático via WhatsApp)
 - Visualizar QR Code (exibe `PixQRCode` da cobrança ativa)

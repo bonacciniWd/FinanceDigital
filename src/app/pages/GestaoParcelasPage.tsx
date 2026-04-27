@@ -141,6 +141,7 @@ export default function GestaoParcelasPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos');
   const [filtroEmpStatus, setFiltroEmpStatus] = useState('todos');
+  const [letraFiltro, setLetraFiltro] = useState<string>('A');
   const [expandedClientes, setExpandedClientes] = useState<Set<string>>(new Set());
   const [expandedEmps, setExpandedEmps] = useState<Set<string>>(new Set());
 
@@ -249,6 +250,30 @@ export default function GestaoParcelasPage() {
     groups.sort((a, b) => b.totalVencida - a.totalVencida || a.clienteNome.localeCompare(b.clienteNome));
     return groups;
   }, [parcelas, empMap, searchTerm, filtroStatus, filtroEmpStatus]);
+
+  // ── Paginação alfabética ──────────────────────────────────────
+  // Renderizar 1140 cards de cliente trava o navegador. Mesma estratégia da
+  // ClientesPage: barra A-Z, busca anula a letra e mostra tudo.
+  const ALFABETO = useMemo(() => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').concat('#'), []);
+
+  const contagemPorLetra = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const g of clienteGroups) {
+      const ch = (g.clienteNome.trim()[0] || '#').toUpperCase();
+      const letra = /[A-Z]/.test(ch) ? ch : '#';
+      map[letra] = (map[letra] ?? 0) + 1;
+    }
+    return map;
+  }, [clienteGroups]);
+
+  const visibleGroups = useMemo(() => {
+    if (searchTerm.trim()) return clienteGroups;
+    return clienteGroups.filter((g) => {
+      const ch = (g.clienteNome.trim()[0] || '#').toUpperCase();
+      const letra = /[A-Z]/.test(ch) ? ch : '#';
+      return letra === letraFiltro;
+    });
+  }, [clienteGroups, letraFiltro, searchTerm]);
 
   /* ── Métricas globais ───────────────────────────────────── */
 
@@ -540,6 +565,34 @@ export default function GestaoParcelasPage() {
         </CardContent>
       </Card>
 
+      {/* Barra alfabética — oculta durante busca */}
+      {!searchTerm.trim() && clienteGroups.length > 0 && (
+        <Card>
+          <CardContent className="py-3">
+            <div className="flex flex-wrap gap-1 items-center justify-center">
+              {ALFABETO.map((letra) => {
+                const count = contagemPorLetra[letra] ?? 0;
+                const ativo = letraFiltro === letra;
+                return (
+                  <Button
+                    key={letra}
+                    size="sm"
+                    variant={ativo ? 'default' : 'outline'}
+                    disabled={count === 0}
+                    onClick={() => setLetraFiltro(letra)}
+                    className="h-8 min-w-9 px-2 font-semibold"
+                    title={`${count} cliente(s)`}
+                  >
+                    {letra}
+                    <span className="ml-1 text-[10px] opacity-70">{count || ''}</span>
+                  </Button>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Agrupamento: Cliente → Empréstimo → Parcelas */}
       {clienteGroups.length === 0 ? (
         <Card>
@@ -557,7 +610,7 @@ export default function GestaoParcelasPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {clienteGroups.map(grupo => {
+          {visibleGroups.map(grupo => {
             const clienteExpanded = expandedClientes.has(grupo.clienteId);
             return (
               <Card key={grupo.clienteId}>

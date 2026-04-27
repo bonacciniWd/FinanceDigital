@@ -25,6 +25,10 @@ export function useClientes(status?: string) {
     queryKey: [QUERY_KEY, { status }],
     queryFn: () => clientesService.getClientes(status),
     select: (data) => data.map((c) => dbClienteToView(c)),
+    // Lista grande (paging 1000×1000 + JOIN com empréstimos): mantém fresh por
+    // 5 min. Mutações de cliente já invalidam essa queryKey.
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 }
 

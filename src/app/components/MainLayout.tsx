@@ -70,6 +70,9 @@ import { useActivityTracker } from '../hooks/useActivityTracker';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import * as clientesService from '../services/clientesService';
+import * as emprestimosService from '../services/emprestimosService';
 
 import { FloatingChat } from './FloatingChat';
 import { supabase } from '../lib/supabase';
@@ -81,12 +84,32 @@ export function MainLayout() {
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [silencioso, setSilencioso] = useState(() => localStorage.getItem('fd-silencioso') === 'true');
+  const [openSections, setOpenSections] = useState<Set<string>>(() => new Set());
   const silenciosoRef = useRef(silencioso);
 
   // Rastreia atividade do usuário logado (online/offline, sessão, heartbeat)
   useActivityTracker(user?.id);
+
+  // ── Prefetch das listas mais usadas ────────────────────────────
+  // Roda uma vez no login. Como já existe persistência (localStorage), o
+  // primeiro carregamento depois disso é instantâneo (cache quente). Trocar
+  // de aba (clientes ↔ empréstimos ↔ dashboards) não dispara skeleton.
+  useEffect(() => {
+    if (!user) return;
+    queryClient.prefetchQuery({
+      queryKey: ['clientes', { status: undefined }],
+      queryFn: () => clientesService.getClientes(undefined),
+      staleTime: 1000 * 60 * 5,
+    });
+    queryClient.prefetchQuery({
+      queryKey: ['emprestimos'],
+      queryFn: () => emprestimosService.getEmprestimos(),
+      staleTime: 1000 * 60 * 5,
+    });
+  }, [user, queryClient]);
 
   // Manter ref sincronizada com estado silencioso
   useEffect(() => {
@@ -175,6 +198,7 @@ export function MainLayout() {
       items: [
         { name: 'Pagamentos Pix', href: '/pagamentos', icon: QrCode, roles: ['admin', 'gerencia'] },
         { name: 'Pagamentos Órfãos', href: '/pagamentos/orfaos', icon: AlertTriangle, roles: ['admin', 'gerencia', 'cobranca'] },
+        { name: 'Saídas Órfãs', href: '/pagamentos/saidas-orfas', icon: AlertTriangle, roles: ['admin', 'gerencia'] },
       ],
     },
     {
@@ -218,7 +242,7 @@ export function MainLayout() {
         { name: 'Perfis de Acesso', href: '/configuracoes/perfis', icon: KeyRound, roles: ['admin'] },
         { name: 'Gerenciar Usuários', href: '/configuracoes/usuarios', icon: UserCog, roles: ['admin'] },
         { name: 'Integrações', href: '/configuracoes/integracoes', icon: Plug, roles: ['admin'] },
-        { name: 'Comissões', href: '/configuracoes/comissoes', icon: Percent, roles: ['admin'] },
+        { name: 'Gastos Internos', href: '/configuracoes/gastos-internos', icon: Receipt, roles: ['admin', 'gerencia'] },
         { name: 'IP Whitelist', href: '/configuracoes/ip-whitelist', icon: Shield, roles: ['admin'] },
         { name: 'Sistema', href: '/configuracoes/sistema', icon: Settings2, roles: ['admin', 'gerencia'] },
         { name: 'Minha Conta', href: '/configuracoes/conta', icon: UserCircle, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },
@@ -246,6 +270,26 @@ export function MainLayout() {
     return location.pathname.startsWith(href);
   };
 
+  // Auto-open the section that contains the active route
+  useEffect(() => {
+    navigation.forEach((section) => {
+      const hasActive = section.items.some((item) => isActive(item.href));
+      if (hasActive) {
+        setOpenSections((prev) => new Set([...prev, section.title]));
+      }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  const toggleSection = (title: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(title)) next.delete(title);
+      else next.add(title);
+      return next;
+    });
+  };
+
   const canAccess = (roles: string[]) => {
     return user && roles.includes(user.role);
   };
@@ -256,7 +300,7 @@ export function MainLayout() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden transition-colors duration-300">
+    <div className="flex h-full overflow-hidden transition-colors duration-300">
       
       {/* Sidebar */}
       <aside
@@ -272,33 +316,67 @@ export function MainLayout() {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5 sidebar-scrollbar">
+        <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5 sidebar-scrollbar">
           {navigation.map((section) => {
             const visibleItems = section.items.filter((item) => canAccess(item.roles));
             if (visibleItems.length === 0) return null;
+            const isOpen = openSections.has(section.title);
+            const hasActive = visibleItems.some((item) => isActive(item.href));
 
             return (
-              <div key={section.title}>
-                <h3 className="text-[10px] font-semibold text-sidebar-primary/80 uppercase tracking-widest mb-2 px-3">
-                  {section.title}
-                </h3>
-                <ul className="space-y-0.5">
-                  {visibleItems.map((item) => (
-                    <li key={item.name}>
-                      <Link
-                        to={item.href}
-                        className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200 ${
-                          isActive(item.href)
-                            ? 'liquid-metal-btn-active text-sidebar-primary-foreground'
-                            : 'liquid-metal-btn text-sidebar-foreground/60 hover:text-sidebar-foreground'
-                        }`}
-                      >
-                        <item.icon className="w-4 h-4 shrink-0" strokeWidth={isActive(item.href) ? 2.2 : 1.8} />
-                        <span>{item.name}</span>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
+              <div key={section.title} className="rounded-xl overflow-hidden">
+                <button
+                  onClick={() => toggleSection(section.title)}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-widest transition-all duration-200 group ${
+                    hasActive
+                      ? 'liquid-metal-btn-active text-sidebar-primary-foreground'
+                      : 'liquid-metal-btn text-sidebar-foreground/50 hover:text-sidebar-foreground'
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    {hasActive && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-sidebar-primary shadow-[0_0_6px_2px_rgba(99,102,241,0.6)] shrink-0" />
+                    )}
+                    {section.title}
+                  </span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 transition-transform duration-300 ${
+                      isOpen ? 'rotate-0' : '-rotate-90'
+                    } ${hasActive ? 'text-sidebar-primary-foreground/80' : 'text-sidebar-foreground/30 group-hover:text-sidebar-foreground/60'}`}
+                  />
+                </button>
+
+                <div
+                  className={`overflow-hidden transition-all duration-300 ease-in-out ${
+                    isOpen ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'
+                  }`}
+                >
+                  <ul className="px-1 pt-1 pb-2 space-y-0.5 border-l-2 ml-3 border-sidebar-border/40">
+                    {visibleItems.map((item) => (
+                      <li key={item.name}>
+                        <Link
+                          to={item.href}
+                          className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200 ${
+                            isActive(item.href)
+                              ? 'liquid-metal-btn-active text-sidebar-primary-foreground'
+                              : 'liquid-metal-btn text-sidebar-foreground/60 hover:text-sidebar-foreground'
+                          }`}
+                        >
+                          <item.icon
+                            className={`w-4 h-4 shrink-0 transition-colors duration-200 ${
+                              isActive(item.href) ? 'text-sidebar-primary-foreground' : 'text-sidebar-foreground/50'
+                            }`}
+                            strokeWidth={isActive(item.href) ? 2.2 : 1.8}
+                          />
+                          <span>{item.name}</span>
+                          {isActive(item.href) && (
+                            <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white/70 shrink-0" />
+                          )}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             );
           })}

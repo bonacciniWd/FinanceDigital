@@ -123,7 +123,19 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.4', date: '25 Abr 2026', isLatest: true, items: [
+  { version: '1.4.15', date: '27 Abr 2026', isLatest: true, items: [
+    'Fachada Calculadora: app abre como calculadora Win11 em janela 340×560',
+    'Trigger secreto 777÷3== revela o sistema (expande janela + redireciona para login)',
+    'Gastos Internos substitui Configuração de Comissões — admin cadastra categorias com termo de match',
+    'Saídas Órfãs: revisão de saídas do extrato que não casam com gastos cadastrados',
+    'Edge function cron-saidas-orfas processa saídas periodicamente',
+    'Migration 051: schemas gastos_internos + saidas_orfas',
+    'Rebrand: ícone oficial da Calculadora do Windows 11 em todos os builds',
+  ]},
+  { version: '1.4.14', date: '26 Abr 2026', isLatest: false, items: [
+    'Rota fallback "*" com texto e animação Lottie ajustados',
+  ]},
+  { version: '1.4.4', date: '25 Abr 2026', isLatest: false, items: [
     'OCR de comprovantes de pagamento com Tesseract.js (extração de valor, data e remetente)',
     'Conciliação automática de pagamentos órfãos (PIX/Woovi/EFI) com lançamento em parcelas',
     'Tela de Pagamentos Órfãos para revisão e vínculo manual',

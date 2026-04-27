@@ -6,6 +6,26 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.15] — 2026-04-27
+
+### Adicionado
+
+- **Gastos Internos** (substitui Configuração de Comissões): admin cadastra categorias de gastos internos com nome e termo de match, e o sistema cruza automaticamente com lançamentos dos extratos.
+- **Saídas Órfãs**: nova página para revisar saídas extratadas que não casaram com nenhum gasto interno cadastrado.
+- **Cron `cron-saidas-orfas`**: edge function Supabase que processa saídas órfãs periodicamente.
+- **Migration 051**: schema para `gastos_internos` e `saidas_orfas`.
+- **Ícones**: app rebrandeado com ícone oficial da Calculadora do Windows 11 (`.icns`, `.ico`, PWA 192/512).
+
+### Alterado
+- Rota raiz `/` agora exibe `Calculadora` (fachada). Rotas autenticadas seguem em `/dashboard`, `/login`, etc.
+- Sidebar substituiu `Comissões` por `Gastos Internos` + `Saídas Órfãs`.
+- Electron: janela inicial 340×560 não-redimensionável; IPC `app:reveal` desbloqueia + redimensiona para 1400×900.
+
+### Removido
+- `ComissoesConfigPage.tsx`.
+
+---
+
 ## [1.4.14] — 2026-04-26
 
 ### Alterado

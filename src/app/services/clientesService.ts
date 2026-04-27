@@ -13,8 +13,13 @@ import type {
 } from '../lib/database.types';
 // ── Queries ────────────────────────────────────────────────
 
-/** Buscar todos os clientes com empréstimos ativos, opcionalmente filtrados por status.
- *  Pagina em chunks de 1000 para contornar o `db-max-rows` do PostgREST. */
+/** Buscar todos os clientes com empréstimos ATIVOS/INADIMPLENTES embarcados,
+ *  opcionalmente filtrados por status do cliente.
+ *
+ *  Performance: o embed `emprestimos(...)` filtra por status='ativo'|'inadimplente'
+ *  via PostgREST embedded resource filter (`emprestimos.status=in.(...)`), o que
+ *  reduz o payload de ~10mil empréstimos para apenas os relevantes (~centenas).
+ *  Pagina em chunks de 1000 para contornar o `db-max-rows`. */
 export async function getClientes(status?: string) {
   const PAGE = 1000;
   const all: any[] = [];
@@ -23,6 +28,9 @@ export async function getClientes(status?: string) {
     let query = supabase
       .from('clientes')
       .select('*, emprestimos(id, valor, parcelas, parcelas_pagas, proximo_vencimento, status)')
+      // ⚡ filtra a coleção embarcada (não o pai): clientes sem empréstimo ativo
+      // continuam aparecendo, mas com `emprestimos: []`.
+      .in('emprestimos.status', ['ativo', 'inadimplente'])
       .order('nome')
       .range(from, from + PAGE - 1);
     if (status) query = query.eq('status', status);

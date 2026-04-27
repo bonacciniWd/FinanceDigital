@@ -39,6 +39,9 @@ export function useEmprestimos(status?: string) {
     queryKey: [QUERY_KEY, { status }],
     queryFn: () => emprestimosService.getEmprestimos(status),
     select: (data) => data.map(dbEmprestimoToView),
+    // Lista grande (joinada com clientes); mutações invalidam.
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 30,
   });
 }
 

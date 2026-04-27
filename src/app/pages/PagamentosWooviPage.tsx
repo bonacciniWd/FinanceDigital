@@ -3,7 +3,7 @@
  * @description Página de gestão de pagamentos Pix — EFI Bank.
  * Exibe saldo, cobranças e transações EFI (cron + manuais).
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   QrCode,
   ArrowUpRight,
@@ -24,6 +24,8 @@ import {
   ChevronRight,
   CreditCard,
   Receipt,
+  Link2,
+  CheckCircle2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -176,6 +178,7 @@ export default function PagamentosWooviPage() {
   // ── Desembolso manual (migrado de AnaliseCreditoPage) ─────────
   const isAdminGerencia = user?.role === 'admin' || user?.role === 'gerencia';
   const [markingDesembolso, setMarkingDesembolso] = useState<string | null>(null);
+  const autoConfirmedRef = useRef<Set<string>>(new Set());
 
   const handleMarcarDesembolsado = async (emprestimoId: string) => {
     setMarkingDesembolso(emprestimoId);
@@ -359,6 +362,66 @@ export default function PagamentosWooviPage() {
     const saidas = extratoItemsMerged.filter(i => i.direction === 'saida').reduce((s, i) => s + i.valor, 0);
     return { entradas, saidas, saldo: entradas - saidas };
   }, [extratoItemsMerged]);
+
+  // ── Auto-match desembolso: cruza saídas do extrato com aguardandoEnvio ──
+  // Normaliza chave PIX (remove formatação CPF/telefone, lowercase) p/ comparação robusta
+  const normalizePixKey = (k: string | null | undefined): string => {
+    if (!k) return '';
+    const trimmed = String(k).trim().toLowerCase();
+    if (trimmed.includes('@')) return trimmed; // e-mail mantém formato
+    return trimmed.replace(/[^a-z0-9]/g, ''); // CPF/telefone/random → só alfanumérico
+  };
+
+  // Map: emprestimoId → ExtratoItem (saída) que casa (mesma chave + valor)
+  const extratoMatchByEmprestimo = useMemo(() => {
+    const map = new Map<string, ExtratoItem>();
+    if (!aguardandoEnvio.length) return map;
+    const saidas = extratoItemsMerged.filter((i) => i.direction === 'saida');
+    if (!saidas.length) return map;
+    const usados = new Set<string>();
+    for (const emp of aguardandoEnvio) {
+      if (!emp.pixKey) continue;
+      const empKey = normalizePixKey(emp.pixKey);
+      if (!empKey) continue;
+      const match = saidas.find(
+        (s) =>
+          !usados.has(s.id) &&
+          normalizePixKey(s.descricao) === empKey &&
+          Math.abs(s.valor - emp.valor) < 0.01,
+      );
+      if (match) {
+        map.set(emp.id, match);
+        usados.add(match.id);
+      }
+    }
+    return map;
+  }, [aguardandoEnvio, extratoItemsMerged]);
+
+  // Auto-confirma desembolso quando há match no extrato (uma vez por empréstimo)
+  useEffect(() => {
+    if (!extratoMatchByEmprestimo.size) return;
+    for (const [empId, match] of extratoMatchByEmprestimo.entries()) {
+      if (autoConfirmedRef.current.has(empId)) continue;
+      autoConfirmedRef.current.add(empId);
+      const emp = aguardandoEnvio.find((e) => e.id === empId);
+      const nome = emp?.clienteNome ?? 'cliente';
+      handleMarcarDesembolsado(empId).then(() => {
+        toast.success(
+          `Desembolso de ${nome} auto-confirmado pelo extrato (${match.e2eId.slice(0, 12)}…)`,
+        );
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extratoMatchByEmprestimo]);
+
+  // Estado para modal de detalhes de item do extrato
+  const [selectedExtratoItem, setSelectedExtratoItem] = useState<ExtratoItem | null>(null);
+  const [vincularBusca, setVincularBusca] = useState('');
+
+  // Limpa busca quando o modal fecha/troca de item
+  useEffect(() => {
+    setVincularBusca('');
+  }, [selectedExtratoItem?.id]);
 
   // Parcelas pendentes/vencidas do cliente selecionado
   const parcelasDoCliente = useMemo(() => {
@@ -920,6 +983,7 @@ export default function PagamentosWooviPage() {
                         const pixLabel = e.pixKeyType
                           ? `${e.pixKeyType.toUpperCase()}: ${e.pixKey}`
                           : e.pixKey ?? '';
+                        const matchExtrato = extratoMatchByEmprestimo.get(e.id);
                         return (
                           <div key={e.id} className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20 space-y-2">
                             <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -927,6 +991,11 @@ export default function PagamentosWooviPage() {
                                 <span className="font-medium">{e.clienteNome}</span>
                                 {e.skipVerification && (
                                   <Badge variant="outline" className="text-[10px] h-4 px-1 bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-400">sem verificação</Badge>
+                                )}
+                                {matchExtrato && (
+                                  <Badge variant="outline" className="text-[10px] h-4 px-1 bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-400">
+                                    ✓ Detectado no extrato — confirmando…
+                                  </Badge>
                                 )}
                                 <span className="text-muted-foreground text-sm">{formatCurrency(e.valor)}</span>
                                 <span className="text-muted-foreground text-xs">{new Date(e.dataContrato).toLocaleDateString('pt-BR')}</span>
@@ -1092,7 +1161,11 @@ export default function PagamentosWooviPage() {
               {extratoFiltered.map((item) => {
                 const isEntrada = item.direction === 'entrada';
                 return (
-                  <Card key={item.id} className="p-4">
+                  <Card
+                    key={item.id}
+                    className="p-4 cursor-pointer transition-colors hover:bg-muted/40"
+                    onClick={() => setSelectedExtratoItem(item)}
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-4">
                         <div
@@ -1287,6 +1360,284 @@ export default function PagamentosWooviPage() {
               Gerar e Enviar Cobrança
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Dialog: Detalhes do Item do Extrato ──────── */}
+      <Dialog open={!!selectedExtratoItem} onOpenChange={() => setSelectedExtratoItem(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {selectedExtratoItem?.direction === 'entrada' ? (
+                <ArrowDownLeft className="h-5 w-5 text-green-600 dark:text-green-400" />
+              ) : (
+                <ArrowUpRight className="h-5 w-5 text-red-600 dark:text-red-400" />
+              )}
+              Detalhes do Lançamento
+            </DialogTitle>
+          </DialogHeader>
+          {selectedExtratoItem && (() => {
+            const item = selectedExtratoItem;
+            const isEntrada = item.direction === 'entrada';
+            // Tenta vincular saída com empréstimo (match por pixKey + valor)
+            const empVinculado = !isEntrada
+              ? emprestimosAprovados.find(
+                  (e) =>
+                    e.pixKey &&
+                    normalizePixKey(e.pixKey) === normalizePixKey(item.descricao) &&
+                    Math.abs(e.valor - item.valor) < 0.01,
+                )
+              : null;
+            // Para entrada, tenta achar cobrança EFI completed com mesmo txid/e2eId
+            const cobrVinculada = isEntrada
+              ? cobrancas.find(
+                  (c) =>
+                    c.gateway === 'efi' &&
+                    c.status === 'COMPLETED' &&
+                    (c.wooviChargeId === item.descricao ||
+                      c.wooviChargeId === item.e2eId ||
+                      (c as any).e2eId === item.e2eId),
+                )
+              : null;
+            return (
+              <div className="space-y-4">
+                <div className="rounded-lg border p-4 space-y-2">
+                  <div className="flex items-center gap-2 mb-1">
+                    {isEntrada ? (
+                      <ArrowDownLeft className="h-4 w-4 text-green-600" />
+                    ) : (
+                      <ArrowUpRight className="h-4 w-4 text-red-600" />
+                    )}
+                    <span className="text-sm font-semibold">
+                      {isEntrada ? 'Pix Recebido' : 'Pix Enviado'}
+                    </span>
+                    <Badge
+                      className={`ml-auto ${
+                        isEntrada
+                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                          : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                      }`}
+                    >
+                      {isEntrada ? 'Entrada' : 'Saída'}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1.5 text-sm">
+                    <span className="text-muted-foreground">Valor:</span>
+                    <span
+                      className={`font-semibold ${
+                        isEntrada
+                          ? 'text-green-600 dark:text-green-400'
+                          : 'text-red-600 dark:text-red-400'
+                      }`}
+                    >
+                      {isEntrada ? '+' : '-'} {formatCurrency(item.valor)}
+                    </span>
+                    <span className="text-muted-foreground">Data/Hora:</span>
+                    <span>{item.horario ? formatDate(item.horario) : '—'}</span>
+                    <span className="text-muted-foreground">
+                      {isEntrada ? 'Pagador:' : 'Favorecido:'}
+                    </span>
+                    <span className="font-medium">{item.nome || '—'}</span>
+                    <span className="text-muted-foreground">
+                      {isEntrada ? 'TxID:' : 'Chave PIX:'}
+                    </span>
+                    <span className="font-mono text-xs break-all">{item.descricao || '—'}</span>
+                    <span className="text-muted-foreground">End-to-End:</span>
+                    <span className="font-mono text-xs break-all">{item.e2eId || '—'}</span>
+                    <span className="text-muted-foreground">Status:</span>
+                    <span className="text-xs uppercase">{item.status || '—'}</span>
+                  </div>
+                  {(item.descricao || item.e2eId) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full mt-2"
+                      onClick={() => {
+                        navigator.clipboard.writeText(item.e2eId || item.descricao);
+                        toast.success('ID copiado!');
+                      }}
+                    >
+                      <Copy className="w-3 h-3 mr-2" />
+                      Copiar End-to-End ID
+                    </Button>
+                  )}
+                </div>
+
+                {empVinculado && (
+                  <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-4 space-y-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Banknote className="h-4 w-4 text-green-600" />
+                      <span className="text-sm font-semibold">Empréstimo vinculado</span>
+                      <Badge
+                        className={`ml-auto text-xs ${
+                          empVinculado.desembolsado
+                            ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                            : 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400'
+                        }`}
+                      >
+                        {empVinculado.desembolsado ? 'desembolsado' : 'aguardando'}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1 text-sm">
+                      <span className="text-muted-foreground">Cliente:</span>
+                      <span className="font-medium">{empVinculado.clienteNome}</span>
+                      <span className="text-muted-foreground">Valor:</span>
+                      <span>{formatCurrency(empVinculado.valor)}</span>
+                      <span className="text-muted-foreground">Contrato:</span>
+                      <span>
+                        {new Date(empVinculado.dataContrato).toLocaleDateString('pt-BR')}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Vincular saída manualmente a um empréstimo ── */}
+                {!isEntrada && !empVinculado && isAdminGerencia && controleDesembolsoAtivo && (() => {
+                  const buscaNorm = vincularBusca.trim().toLowerCase();
+                  const candidatos = aguardandoEnvio
+                    .map((e) => ({
+                      emp: e,
+                      diff: Math.abs(e.valor - item.valor),
+                      sameKey:
+                        !!e.pixKey && normalizePixKey(e.pixKey) === normalizePixKey(item.descricao),
+                    }))
+                    .filter(({ emp, sameKey, diff }) => {
+                      if (buscaNorm) {
+                        return (
+                          (emp.clienteNome || '').toLowerCase().includes(buscaNorm) ||
+                          (emp.clienteCpf || '').toLowerCase().includes(buscaNorm) ||
+                          (emp.pixKey || '').toLowerCase().includes(buscaNorm)
+                        );
+                      }
+                      // Sem busca: sugere apenas com valor próximo (±R$10) ou mesma chave
+                      return sameKey || diff <= 10;
+                    })
+                    .sort((a, b) => {
+                      if (a.sameKey !== b.sameKey) return a.sameKey ? -1 : 1;
+                      return a.diff - b.diff;
+                    })
+                    .slice(0, 30);
+
+                  return (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Link2 className="h-4 w-4 text-amber-600" />
+                        <span className="text-sm font-semibold">Vincular a um empréstimo</span>
+                        <Badge variant="outline" className="ml-auto text-[10px]">
+                          {aguardandoEnvio.length} aguardando
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Não houve match automático. Escolha um empréstimo abaixo para confirmar este Pix como o desembolso dele.
+                      </p>
+                      <Input
+                        placeholder="Buscar por nome, CPF ou chave PIX..."
+                        value={vincularBusca}
+                        onChange={(ev) => setVincularBusca(ev.target.value)}
+                        className="h-8 text-sm"
+                      />
+                      <div className="max-h-64 overflow-y-auto rounded border bg-background/60 divide-y">
+                        {candidatos.length === 0 ? (
+                          <p className="text-xs text-muted-foreground text-center py-4">
+                            {buscaNorm
+                              ? 'Nenhum empréstimo encontrado.'
+                              : 'Nenhum candidato com valor próximo. Use a busca acima.'}
+                          </p>
+                        ) : (
+                          candidatos.map(({ emp, diff, sameKey }) => (
+                            <div
+                              key={emp.id}
+                              className="flex items-center justify-between gap-2 p-2 text-xs hover:bg-muted/40"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-medium truncate">{emp.clienteNome}</span>
+                                  {sameKey && (
+                                    <Badge className="h-4 text-[9px] px-1 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                      mesma chave
+                                    </Badge>
+                                  )}
+                                  {diff < 0.01 && (
+                                    <Badge className="h-4 text-[9px] px-1 bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                      mesmo valor
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="text-muted-foreground truncate">
+                                  {formatCurrency(emp.valor)}
+                                  {diff >= 0.01 && (
+                                    <span className="text-amber-600 dark:text-amber-400 ml-1">
+                                      (Δ {formatCurrency(diff)})
+                                    </span>
+                                  )}
+                                  {emp.pixKey && (
+                                    <span className="ml-2 font-mono">· {emp.pixKey}</span>
+                                  )}
+                                </div>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-[11px]"
+                                disabled={markingDesembolso === emp.id}
+                                onClick={async () => {
+                                  // Marca como já processado para não disparar auto-confirm de novo
+                                  autoConfirmedRef.current.add(emp.id);
+                                  await handleMarcarDesembolsado(emp.id);
+                                  setSelectedExtratoItem(null);
+                                }}
+                              >
+                                {markingDesembolso === emp.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <>
+                                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                                    Vincular
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {cobrVinculada && (
+                  <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-4 space-y-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      <QrCode className="h-4 w-4 text-orange-500" />
+                      <span className="text-sm font-semibold">Cobrança vinculada</span>
+                      <Badge className="ml-auto bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                        Paga
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-1 text-sm">
+                      <span className="text-muted-foreground">Cliente:</span>
+                      <span className="font-medium">{cobrVinculada.clienteNome || '—'}</span>
+                      <span className="text-muted-foreground">Valor:</span>
+                      <span>{formatCurrency(cobrVinculada.valor)}</span>
+                      <span className="text-muted-foreground">Emitida em:</span>
+                      <span>{formatDate(cobrVinculada.createdAt)}</span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full mt-1"
+                      onClick={() => {
+                        setSelectedExtratoItem(null);
+                        setSelectedChargeDetail(cobrVinculada);
+                      }}
+                    >
+                      <Eye className="w-3 h-3 mr-2" />
+                      Ver detalhes da cobrança
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

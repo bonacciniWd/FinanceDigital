@@ -87,7 +87,6 @@ const columnToEtapa = (colId: string): KanbanCobrancaEtapa =>
 
 const COLUMNS: ColumnDef[] = [
   { id: 'vence_hoje',  title: 'VENCE HOJE',       dotColor: '#facc15' },
-  { id: 'a_vencer',    title: 'A VENCER (3d)',    dotColor: '#eab308' },
   { id: 'vencido_n1',  title: 'N1 · 1-15 dias',   dotColor: '#f97316' },
   { id: 'vencido_n2',  title: 'N2 · 16-45 dias',  dotColor: '#ef4444' },
   { id: 'vencido_n3',  title: 'N3 · 46+ dias',     dotColor: '#991b1b' },
@@ -102,15 +101,23 @@ export default function KanbanCobrancaPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { openClienteModal } = useClienteModal();
-  const [selectedCard, setSelectedCard] = useState<KanbanCobrancaView | null>(null);
   const [busca, setBusca] = useState('');
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
-  const [contatoObs, setContatoObs] = useState('');
+  // Menu "mover para" por card (id do card aberto)
+  const [moveMenuCard, setMoveMenuCard] = useState<string | null>(null);
   // Sort por coluna (toggle asc/desc por dias de atraso/proximidade do vencimento)
   const [sortByCol, setSortByCol] = useState<Record<string, 'asc' | 'desc'>>({});
 
   // Chat dropdown state
   const [chatMenuCard, setChatMenuCard] = useState<string | null>(null);
+
+  // Fechar menus ao clicar fora
+  useEffect(() => {
+    if (!chatMenuCard && !moveMenuCard) return;
+    const close = () => { setChatMenuCard(null); setMoveMenuCard(null); };
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [chatMenuCard, moveMenuCard]);
 
   // Negociação modal state
   const [showNegociacao, setShowNegociacao] = useState(false);
@@ -285,33 +292,21 @@ export default function KanbanCobrancaPage() {
 
   const cardsByEtapa = useMemo(() => {
     const map: Record<string, KanbanCobrancaView[]> = {};
-    // Janela de 3 dias para coluna 'A vencer' (a partir de amanhã)
-    const hojeDate = parseISODateLocal(todayStr)!;
-    const limite3d = new Date(hojeDate.getTime() + 3 * 86400000);
-    const limite3dStr = `${limite3d.getFullYear()}-${String(limite3d.getMonth() + 1).padStart(2, '0')}-${String(limite3d.getDate()).padStart(2, '0')}`;
-
-    // Estados "finais" não devem aparecer em vence_hoje/a_vencer mesmo que tenham parcelas pendentes
+    // Estados "finais" não devem aparecer em vence_hoje mesmo que tenham parcelas pendentes
     const ETAPAS_FINAIS = new Set(['pago', 'perdido', 'arquivado', 'contatado', 'negociacao', 'acordo']);
 
     for (const col of COLUMNS) {
       let list: KanbanCobrancaView[];
       if (col.id === 'vence_hoje') {
-        // PRÓXIMO vencimento (de qualquer parcela live) === hoje. Não depende mais
-        // do `etapa` armazenado no kanban_cobranca (que pode estar 'vencido' mesmo
-        // com diasAtraso=0 quando o emp.status é 'inadimplente').
+        // PRÓXIMO vencimento (de qualquer parcela live) === hoje E o cliente NÃO
+        // pode ter parcelas em atraso. Se tiver parcela vencida, ele aparece na
+        // coluna correspondente aos dias de atraso (N1/N2/N3), não em "vence hoje".
         list = filteredCards.filter((c) => {
           if (ETAPAS_FINAIS.has(c.etapa)) return false;
           const info = parcelasInfoByCliente.get(c.clienteId);
-          return info?.proxVencFuturo === todayStr;
-        });
-      } else if (col.id === 'a_vencer') {
-        // PRÓXIMO vencimento entre amanhã e +3 dias
-        list = filteredCards.filter((c) => {
-          if (ETAPAS_FINAIS.has(c.etapa)) return false;
-          const info = parcelasInfoByCliente.get(c.clienteId);
-          const venc = info?.proxVencFuturo;
-          if (!venc) return false;
-          return venc > todayStr && venc <= limite3dStr;
+          if (!info) return false;
+          if (info.vencimentoMaisAntigo) return false; // tem parcela atrasada → outra coluna
+          return info.proxVencFuturo === todayStr;
         });
       } else if (col.id === 'vencido_n1') {
         list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 1 && c.diasAtraso <= 15);
@@ -363,6 +358,8 @@ export default function KanbanCobrancaPage() {
   }, [allCards]);
 
   const handleDragStart = (e: React.DragEvent, cardId: string) => {
+    // 'text/plain' garante compatibilidade ampla; 'cardId' mantido para compat.
+    e.dataTransfer.setData('text/plain', cardId);
     e.dataTransfer.setData('cardId', cardId);
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -376,12 +373,17 @@ export default function KanbanCobrancaPage() {
   const handleDrop = (e: React.DragEvent, columnId: string) => {
     e.preventDefault();
     setDragOverColumn(null);
-    const cardId = e.dataTransfer.getData('cardId');
+    const cardId = e.dataTransfer.getData('cardId') || e.dataTransfer.getData('text/plain');
     if (!cardId) return;
 
     const card = allCards.find((c) => c.id === cardId);
+    if (!card) return;
     const novaEtapa = columnToEtapa(columnId);
-    if (!card || card.etapa === novaEtapa) return;
+    // Mesma etapa de DB (ex.: N1↔N2↔N3 todos são 'vencido'): apenas avisa.
+    if (card.etapa === novaEtapa) {
+      toast.info(`Card já está em ${COLUMNS.find((c) => c.id === columnId)?.title}`);
+      return;
+    }
     moverCard.mutate(
       { id: cardId, etapa: novaEtapa },
       {
@@ -409,21 +411,6 @@ export default function KanbanCobrancaPage() {
           }
         },
         onError: (err) => toast.error(`Erro ao mover: ${err.message}`),
-      }
-    );
-  };
-
-  const handleRegistrarContato = () => {
-    if (!selectedCard) return;
-    registrarContato.mutate(
-      { id: selectedCard.id, observacao: contatoObs || undefined },
-      {
-        onSuccess: () => {
-          toast.success('Contato registrado com sucesso');
-          setContatoObs('');
-          setSelectedCard(null);
-        },
-        onError: (err) => toast.error(`Erro: ${err.message}`),
       }
     );
   };
@@ -465,7 +452,6 @@ export default function KanbanCobrancaPage() {
           setNegociacaoCard(null);
           setNegMsg('');
           setNegCobrancaCriada(null);
-          setSelectedCard(null);
         },
         onError: (err) => toast.error(`Erro ao enviar: ${err.message}`),
       }
@@ -688,7 +674,6 @@ export default function KanbanCobrancaPage() {
                 setNegociacaoCard(null);
                 setNegMsg('');
                 setNegCobrancaCriada(null);
-                setSelectedCard(null);
               },
               onError: (err) => {
                 toast.error(`Pix gerado, mas erro ao enviar WhatsApp: ${err.message}`, { id: 'acordo-pix' });
@@ -845,7 +830,6 @@ export default function KanbanCobrancaPage() {
                         className="liquid-metal-card cursor-grab active:cursor-grabbing"
                         draggable
                         onDragStart={(e) => handleDragStart(e, card.id)}
-                        onClick={() => setSelectedCard(card)}
                       >
                         <CardContent className="p-4">
                           <div className="space-y-2">
@@ -960,10 +944,58 @@ export default function KanbanCobrancaPage() {
                                   <Archive className="w-4 h-4" />
                                 </Button>
                               )}
-                              <Button size="sm" variant="default" className="h-8 px-2" onClick={(e) => { e.stopPropagation(); setSelectedCard(card); }}>
-                                <ChevronRight className="w-4 h-4" />
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-8 px-2"
+                                title="Mover para outra coluna"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setMoveMenuCard(moveMenuCard === card.id ? null : card.id);
+                                }}
+                              >
+                                <ChevronRight className={`w-4 h-4 transition-transform duration-200 ${moveMenuCard === card.id ? 'rotate-90' : ''}`} />
                               </Button>
                             </div>
+
+                            {/* Mover para — inline, sem overflow clipping */}
+                            {moveMenuCard === card.id && (
+                              <div
+                                className="mt-2 rounded-xl border border-border/60 bg-muted/50 backdrop-blur-sm p-1.5"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Mover para</div>
+                                <div className="grid grid-cols-2 gap-1">
+                                  {COLUMNS.filter((c) => c.id !== column.id).map((c) => (
+                                    <button
+                                      key={c.id}
+                                      className="text-left px-2.5 py-2 text-sm hover:bg-background rounded-lg flex items-center gap-2 transition-colors duration-150 border border-transparent hover:border-border/40"
+                                      onClick={() => {
+                                        setMoveMenuCard(null);
+                                        const novaEtapa = columnToEtapa(c.id);
+                                        if (card.etapa === novaEtapa) {
+                                          toast.info(`${card.clienteNome} já está em ${c.title}`);
+                                          return;
+                                        }
+                                        moverCard.mutate(
+                                          { id: card.id, etapa: novaEtapa },
+                                          {
+                                            onSuccess: () => toast.success(`Movido para ${c.title}`),
+                                            onError: (err) => toast.error(`Erro ao mover: ${err.message}`),
+                                          },
+                                        );
+                                      }}
+                                    >
+                                      <span
+                                        className="kanban-status-dot shrink-0"
+                                        style={{ background: c.dotColor, '--dot-color': c.dotColor } as React.CSSProperties}
+                                      />
+                                      <span className="truncate text-xs">{c.title}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                             {/* Contatado: exibir info do contato + botões confirmar/cancelar */}
                             {card.etapa === 'contatado' && (
                               <>
@@ -995,224 +1027,8 @@ export default function KanbanCobrancaPage() {
         </>
       )}
 
-      {/* Modal de Detalhes */}
-      <Dialog open={!!selectedCard} onOpenChange={() => { setSelectedCard(null); setContatoObs(''); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-primary text-white rounded-full flex items-center justify-center font-semibold text-lg">
-                {selectedCard?.clienteNome.charAt(0)}
-              </div>
-              <div>
-                <div className="text-foreground">{selectedCard?.clienteNome}</div>
-                <div className="text-sm text-muted-foreground font-normal">
-                  {selectedCard ? formatCurrency(selectedCard.valorDivida) : ''}
-                </div>
-              </div>
-            </DialogTitle>
-          </DialogHeader>
-          {selectedCard && (
-            <div className="space-y-4">
-              {selectedCard.diasAtraso > 0 && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
-                  <div className="text-sm font-medium text-red-800 dark:text-red-300">
-                    Vencido há {selectedCard.diasAtraso} dias
-                  </div>
-                </div>
-              )}
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Etapa:</span>
-                  <Badge>{(() => {
-                    if (selectedCard.etapa === 'vencido') {
-                      if (selectedCard.diasAtraso <= 15) return 'N1 · 1-15 dias';
-                      if (selectedCard.diasAtraso <= 45) return 'N2 · 16-45 dias';
-                      return 'N3 · 46+ dias';
-                    }
-                    return COLUMNS.find((c) => c.id === selectedCard.etapa)?.title ?? selectedCard.etapa;
-                  })()}</Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Responsável:</span>
-                  <span className="font-medium text-foreground">{selectedCard.responsavelNome}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Contatos:</span>
-                  <span className="font-medium text-foreground">{selectedCard.tentativasContato}x</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Telefone:</span>
-                  <span className="font-medium text-foreground">{selectedCard.clienteTelefone}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Email:</span>
-                  <span className="font-medium text-foreground">{selectedCard.clienteEmail}</span>
-                </div>
-                {selectedCard.observacao && (
-                  <div className="mt-2 p-2 bg-muted rounded text-xs text-muted-foreground">
-                    <strong>Obs.:</strong> {selectedCard.observacao}
-                  </div>
-                )}
-              </div>
-              {/* ── Empréstimos do Cliente ─────────────────────── */}
-              {(() => {
-                const emps = emprestimosByCliente.get(selectedCard.clienteId) ?? [];
-                if (emps.length === 0) return null;
-                const statusBadge = (s: string) => {
-                  const m: Record<string, { label: string; cls: string }> = {
-                    ativo: { label: 'Ativo', cls: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
-                    quitado: { label: 'Quitado', cls: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' },
-                    inadimplente: { label: 'Inadimplente', cls: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' },
-                  };
-                  const c = m[s] || { label: s, cls: '' };
-                  return <Badge className={c.cls}>{c.label}</Badge>;
-                };
-                return (
-                  <div className="space-y-2 border-t pt-3">
-                    <div className="flex items-center gap-2">
-                      <Banknote className="w-4 h-4 text-muted-foreground" />
-                      <label className="text-sm font-medium text-foreground">Empréstimos ({emps.length})</label>
-                    </div>
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {emps.map((emp) => (
-                        <div key={emp.id} className="bg-muted/50 rounded-lg p-3 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-semibold text-foreground">{formatCurrency(emp.valor)}</span>
-                            {statusBadge(emp.status)}
-                          </div>
-                          <div className="grid grid-cols-2 gap-1 text-xs">
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Parcelas:</span>
-                              <span className="font-medium">{emp.parcelasPagas}/{emp.parcelas}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Juros:</span>
-                              <span className="font-medium">{emp.taxaJuros}% {emp.tipoJuros === 'mensal' ? 'a.m.' : emp.tipoJuros === 'semanal' ? 'a.s.' : 'a.d.'}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Parcela:</span>
-                              <span className="font-medium">{formatCurrency(emp.valorParcela)}</span>
-                            </div>
-                            <div className="flex justify-between">  
-                              <span className="text-muted-foreground">Venc.:</span>
-                              <span className="font-medium">{formatDateBR(emp.proximoVencimento)}</span>
-                            </div>
-                          </div>
-                          {(emp.status === 'ativo' || emp.status === 'inadimplente') && (
-                            <div className="flex gap-1 pt-1">
-                              {emp.status === 'ativo' && (
-                                <Button size="sm" variant="outline" className="flex-1 h-7 text-xs text-red-600 border-red-200 hover:bg-red-50" onClick={() => {
-                                  updateEmprestimo.mutate({ id: emp.id, data: { status: 'inadimplente' } }, {
-                                    onSuccess: () => toast.success('Empréstimo marcado como inadimplente'),
-                                    onError: (err) => toast.error(`Erro: ${err.message}`),
-                                  });
-                                }}>
-                                  <AlertOctagon className="w-3 h-3 mr-1" />Inadimplente
-                                </Button>
-                              )}
-                              <Button size="sm" variant="outline" className="flex-1 h-7 text-xs text-green-600 border-green-200 hover:bg-green-50" onClick={() => {
-                                setQuitarEmpId(emp.id);
-                                setQuitarTipo('manual');
-                                setComprovanteFile(null);
-                                setComprovantePreview(null);
-                                setShowQuitarModal(true);
-                              }}>
-                                <CheckCircle2 className="w-3 h-3 mr-1" />Confirmar Pag.
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* ── Envio Rápido via Templates ──────────────── */}
-              {allTemplates.length > 0 && instanciasConectadas.length > 0 && (
-                <div className="space-y-2 border-t pt-3">
-                  <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                    <Send className="w-4 h-4 text-muted-foreground" />
-                    Envio Rápido
-                  </label>
-                  {instanciasConectadas.length > 1 && (
-                    <Select
-                      value={negInstanciaId || instanciasConectadas[0]?.id}
-                      onValueChange={setNegInstanciaId}
-                    >
-                      <SelectTrigger className="h-8 text-xs">
-                        <SelectValue placeholder="Instância WhatsApp" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {instanciasConectadas.map((inst) => (
-                          <SelectItem key={inst.id} value={inst.id}>
-                            {inst.instance_name} ({inst.phone_number || 'sem número'})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                  <div className="grid grid-cols-1 gap-1.5 max-h-40 overflow-y-auto">
-                    {allTemplates.map((tpl) => {
-                      const catColors: Record<string, string> = {
-                        cobranca: 'text-red-600 border-red-200 hover:bg-red-50 dark:hover:bg-red-900/20',
-                        lembrete: 'text-amber-600 border-amber-200 hover:bg-amber-50 dark:hover:bg-amber-900/20',
-                        negociacao: 'text-orange-600 border-orange-200 hover:bg-orange-50 dark:hover:bg-orange-900/20',
-                      };
-                      return (
-                        <Button
-                          key={tpl.id}
-                          size="sm"
-                          variant="outline"
-                          className={`h-auto py-1.5 px-2 text-xs justify-start ${catColors[tpl.categoria] || ''}`}
-                          disabled={enviarWhatsapp.isPending}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            // Preencher variáveis do template
-                            let msg = tpl.mensagemMasculino;
-                            msg = msg.replace(/\{nome\}/gi, selectedCard.clienteNome);
-                            msg = msg.replace(/\{valor\}/gi, formatCurrency(selectedCard.valorDivida));
-                            msg = msg.replace(/\{dias_atraso\}/gi, String(selectedCard.diasAtraso));
-                            const instId = negInstanciaId || instanciasConectadas[0]?.id;
-                            if (!instId) { toast.error('Nenhuma instância conectada'); return; }
-                            handleEnviarWhatsappCobranca(selectedCard, instId, msg);
-                          }}
-                        >
-                          <Badge variant="outline" className="text-[9px] px-1 mr-1.5 shrink-0">{tpl.categoria}</Badge>
-                          <span className="truncate">{tpl.nome}</span>
-                          <Send className="w-3 h-3 ml-auto shrink-0 opacity-50" />
-                        </Button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">
-                    Clique para enviar automaticamente via WhatsApp e mover para Contatado
-                  </p>
-                </div>
-              )}
-
-              <div className="space-y-2 border-t pt-3">
-                <label className="text-sm font-medium text-foreground">Registrar contato</label>
-                <Textarea placeholder="Observação sobre o contato..." value={contatoObs} onChange={(e) => setContatoObs(e.target.value)} rows={2} />
-                <Button size="sm" onClick={handleRegistrarContato} disabled={registrarContato.isPending} className="w-full">
-                  {registrarContato.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Phone className="w-4 h-4 mr-2" />}
-                  Registrar Contato
-                </Button>
-              </div>
-              <div className="flex gap-2 pt-2">
-                <Button className="flex-1" variant="outline" onClick={() => navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(selectedCard.clienteTelefone))}`)}><MessageSquare className="w-4 h-4 mr-2" />Chat</Button>
-                <Button className="flex-1" variant="outline" onClick={() => window.open(`tel:${selectedCard.clienteTelefone}`, '_self')}><Phone className="w-4 h-4 mr-2" />Ligar</Button>
-                <Button className="flex-1 bg-secondary hover:bg-secondary/90" onClick={() => {
-                  handleAbrirNegociacao(selectedCard);
-                  setSelectedCard(null);
-                }}>
-                  <HandshakeIcon className="w-4 h-4 mr-2" />Negociar
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Modal de Detalhes removido — clique no nome abre ClienteDetalhesModal,
+          movimentação manual é feita pelo botão ChevronRight (menu "Mover para"). */}
 
       {/* ── Modal Confirmar Pagamento (com comprovante) ─── */}
       <Dialog open={showQuitarModal} onOpenChange={(open) => { if (!open) { setShowQuitarModal(false); setQuitarEmpId(null); setComprovanteFile(null); setComprovantePreview(null); } }}>

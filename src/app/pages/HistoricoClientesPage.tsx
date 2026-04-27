@@ -14,7 +14,7 @@
  * @route /clientes/historico
  * @access Protegido — perfis admin, gerência
  */
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -135,6 +135,24 @@ export default function HistoricoClientesPage() {
       return matchSearch && matchTipo;
     }),
     [timeline, searchTerm, filtroTipo],
+  );
+
+  // ── Paginação progressiva (lazy load) ─────────────────────
+  // Com 26k parcelas + 10k empréstimos a timeline tem ~36k itens. Renderizar
+  // tudo trava o navegador. Mostra primeiros 100, usuário expande conforme
+  // necessidade. Como timeline já vem ordenada por data DESC, os mais
+  // recentes aparecem primeiro.
+  const PAGE_SIZE = 100;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  // Reset ao mudar filtros
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [searchTerm, filtroTipo]);
+
+  const visibleItems = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount],
   );
 
   /* ── Métricas ───────────────────────────────────────────── */
@@ -342,12 +360,12 @@ export default function HistoricoClientesPage() {
             </div>
           ) : (
             <div className="space-y-0">
-              {filtered.map((item, index) => {
+              {visibleItems.map((item, index) => {
                 const cfg = tipoConfig[item.tipo];
                 return (
                   <div key={item.id} className="flex gap-4 pb-6 relative">
                     {/* Linha de conexão */}
-                    {index < filtered.length - 1 && (
+                    {index < visibleItems.length - 1 && (
                       <div className="absolute left-[19px] top-10 bottom-0 w-0.5 bg-border" />
                     )}
 
@@ -382,6 +400,19 @@ export default function HistoricoClientesPage() {
                   </div>
                 );
               })}
+              {visibleCount < filtered.length && (
+                <div className="flex flex-col items-center gap-2 pt-4 pb-2">
+                  <span className="text-sm text-muted-foreground">
+                    Mostrando {visibleItems.length} de {filtered.length} eventos
+                  </span>
+                  <Button
+                    variant="outline"
+                    onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                  >
+                    Carregar mais {Math.min(PAGE_SIZE, filtered.length - visibleCount)}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>

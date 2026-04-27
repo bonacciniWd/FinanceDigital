@@ -22,6 +22,10 @@ export function useParcelas(status?: string) {
     queryKey: [QUERY_KEY, { status }],
     queryFn: () => parcelasService.getParcelas(status),
     select: (data) => data.map(dbParcelaToView),
+    // Parcelas são pesadas (cresce linearmente com empréstimos × média de parcelas).
+    // Mantém fresh por 3 min; mutações invalidam.
+    staleTime: 1000 * 60 * 3,
+    gcTime: 1000 * 60 * 30,
   });
 }
 

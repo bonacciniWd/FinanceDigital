@@ -1,34 +1,47 @@
+
+!SPRINT 26/27-04
+KanbanCobranca -->> botao setar workflow
+Arrastar corretamente ->>
+Cliente ja tem pendencias vencidas? nao mostrat no a vencer e sim no kanban de acordo com a contagem de dias ja atrasados.
+
+Emprestimos 15 dias joga a frente se nao especificado do quinzenal..
+
+Checagem automatica... 
+Setar contagem de entrada e saida, + controle 
+
+***Bonus e comissoes***
+-Cadastrar Categoria, termo.''\\\\\\\\\\''
+
 AnáliseCredito Page
-- colocar opção de colocar data de cada parcela manualmente 
-- Poder sempre escolher manual a data da primeira parcela, e depois configurar o restante (assim como está, apenas melhorar o UX)
+✅colocar opção de colocar data de cada parcela manualmente 
+✅Poder sempre escolher manual a data da primeira parcela, e depois configurar o restante (assim como está, apenas melhorar o UX)
 ✅⁠verificação para cliente antigo(colocar como opicional)⁠ com aprovação automática de empréstimo 
 
 
 Função de acordo (Já temos regras que o bot usa)
 (ao confirmar um acordo, atualizar as parcelas e emprestimo automaticamente)*vale ressaltar que o que foi pago antes do acordo fica como valor recebido e conta no fluxo de caixa normal e conta como (pagamento limpo), já o recebido depois do acordo conta como Recuperacao via acordos (DashboardCobrançaPage.tsx tem mais informacoes sobre o que eu quero) .
-- acordo: entrada trocar percentual por valor configuravel
-- ⁠acordo: deve abrir novamente as mesmas funções de criação de empréstimos, porque são as mesmas condições com opção de datas e valores. 
+✅acordo: entrada trocar percentual por valor configuravel
+✅⁠acordo: deve abrir novamente as mesmas funções de criação de empréstimos, porque são as mesmas condições com opção de datas e valores. 
 
 
 
 Empréstimos ativos
-- liberar opção de editar empréstimos e liberar a funcionalidade de refinanciamento (acordo)
+✅liberar opção de editar empréstimos e liberar a funcionalidade de refinanciamento (acordo)
 
 Kanban de cobrança 
-- kanban de: A vencer = trazer somente cliente que tem vencimento na data de hoje 
+✅kanban de: A vencer = trazer somente cliente que tem vencimento na data de hoje 
 ✅ajustar a barra de scroll do kanban está passando por cima 
-- Ordenador de dias de vencimento por coluna 
-- ⁠comprovante para pagamento de parcela, achar uma solução porque hoje eles estão baixando no pc é importante (aí fica o registro do comprovante) devemos ter 90% como conciliação automática 
+✅Ordenador de dias de vencimento por coluna 
+✅⁠comprovante para pagamento de parcela, achar uma solução porque hoje eles estão baixando no pc é importante (aí fica o registro do comprovante) devemos ter 90% como conciliação automática 
 
 Gestão de parcelas 
-- liberar ou editar direto no empréstimos ativos não seria necessário a gestão de parcelas
--
+✅liberar ou editar direto no empréstimos ativos não seria necessário a gestão de parcelas
 Permissões de usuário
 ✅deixar as permissões editáveis
 
 
 ClienteDetalhesModal.tsx
-Adicao de botao de edicao de parcelas, adicao de juros, multas, e se vencido botao de acordo acessando a funcao de acordo que criamos logo a cima.
+✅Adicao de botao de edicao de parcelas, adicao de juros, multas, e se vencido botao de acordo acessando a funcao de acordo que criamos logo a cima.
 
 *** REPORTS KANBAN COBRANÇA PAGE ***
 ao clicar no botão de sincronizar, o servidor devolve: 400/

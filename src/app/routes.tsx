@@ -12,10 +12,11 @@
  * @exports router - Instância de `createBrowserRouter`
  */
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter, Navigate } from 'react-router';
+import { createBrowserRouter } from 'react-router';
 import { MainLayout } from './components/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
+import Calculadora from './components/Calculadora';
 import Lottie from 'lottie-react';
 import welcomeAnimation from './assets/animations/welcome.json';
 
@@ -53,12 +54,13 @@ const ProdutividadePage = lazy(() => import('./pages/ProdutividadePage'));
 const ClienteAreaPage = lazy(() => import('./pages/ClienteAreaPage'));
 const PagamentosWooviPage = lazy(() => import('./pages/PagamentosWooviPage'));
 const PagamentosOrfaosPage = lazy(() => import('./pages/PagamentosOrfaosPage'));
+const SaidasOrfasPage = lazy(() => import('./pages/SaidasOrfasPage'));
 const VerifyIdentityPage = lazy(() => import('./pages/VerifyIdentityPage'));
 const IpWhitelistPage = lazy(() => import('./pages/IpWhitelistPage'));
 const DownloadPage = lazy(() => import('./pages/DownloadPage'));
 const DocsPage = lazy(() => import('./pages/DocsPage'));
 const EmergencyTokenPage = lazy(() => import('./pages/EmergencyTokenPage'));
-const ComissoesConfigPage = lazy(() => import('./pages/ComissoesConfigPage'));
+const GastosInternosPage = lazy(() => import('./pages/GastosInternosPage'));
 const ConfigSistemaPage = lazy(() => import('./pages/ConfigSistemaPage'));
 const RelatorioComissoesPage = lazy(() => import('./pages/RelatorioComissoesPage'));
 
@@ -72,7 +74,7 @@ const lz = (node: React.ReactNode) => <Suspense fallback={<PageFallback />}>{nod
 export const router = createBrowserRouter([
   {
     path: '/',
-    element: <Navigate to="/login" replace />,
+    element: <Calculadora />,
   },
   {
     path: '/login',
@@ -139,6 +141,7 @@ export const router = createBrowserRouter([
       // Pagamentos / Woovi
       { path: 'pagamentos', element: lz(<PagamentosWooviPage />) },
       { path: 'pagamentos/orfaos', element: lz(<PagamentosOrfaosPage />) },
+      { path: 'pagamentos/saidas-orfas', element: lz(<SaidasOrfasPage />) },
 
       // Rede de Indicações
       { path: 'rede', element: lz(<RedeIndicacoesPage />) },
@@ -166,7 +169,7 @@ export const router = createBrowserRouter([
       // Configurações
       { path: 'configuracoes/perfis', element: lz(<PerfisAcessoPage />) },
       { path: 'configuracoes/usuarios', element: lz(<GerenciarUsuariosPage />) },
-      { path: 'configuracoes/comissoes', element: lz(<ComissoesConfigPage />) },
+      { path: 'configuracoes/gastos-internos', element: lz(<GastosInternosPage />) },
       { path: 'configuracoes/integracoes', element: lz(<IntegracoesPage />) },
       { path: 'configuracoes/ip-whitelist', element: lz(<IpWhitelistPage />) },
       { path: 'configuracoes/sistema', element: lz(<ConfigSistemaPage />) },
@@ -186,7 +189,10 @@ export const router = createBrowserRouter([
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <h2 className="text-2xl font-semibold mb-2">Pagina em Desenvolvimento...</h2>
-              <Lottie animationData={welcomeAnimation}  width={150} height={150} loop={true} />
+              <p className="text-gray-600 mb-4">Estamos trabalhando para trazer essa funcionalidade em breve.</p>
+              <div className="w-48 mx-auto">
+                <Lottie animationData={welcomeAnimation} loop={true} />
+              </div>
             </div>
           </div>
         ),

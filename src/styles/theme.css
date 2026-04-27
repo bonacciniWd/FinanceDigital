@@ -2,12 +2,19 @@
 
 html {
   zoom: 0.9;
+  height: 100%;
 }
 
-/* No Electron, o zoom é controlado via webFrame.setZoomFactor()
-   então removemos o CSS zoom para não duplicar a escala */
 html.electron-app {
   zoom: 1;
+}
+
+body {
+  height: 100%;
+}
+
+#root {
+  height: 100%;
 }
 
 :root {
@@ -796,7 +803,7 @@ html.electron-app {
       inset 0 -1px 0 0 rgba(0, 0, 0, 0.04),
       0 1px 4px rgba(0, 0, 0, 0.06);
     border: none !important;
-    overflow: hidden;
+    overflow: visible;
     transition: all 0.2s ease;
   }
 

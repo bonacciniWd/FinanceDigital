@@ -10,7 +10,9 @@
  * 5. `Toaster` (Sonner) — notificações toast globais
  */
 import { RouterProvider } from 'react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ClienteModalProvider } from './contexts/ClienteModalContext';
@@ -21,12 +23,35 @@ import { useSyncJurosConfig } from './hooks/useConfigSistema';
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 1000 * 60 * 2, // 2 min
+      // Cache "quente" por 5 min: enquanto fresh, NÃO refetcha em mount/focus.
+      staleTime: 1000 * 60 * 5,
+      // Mantém na memória 30 min após o último consumidor desmontar (evita refetch
+      // ao navegar entre rotas e voltar).
+      gcTime: 1000 * 60 * 30,
       retry: 1,
-      refetchOnWindowFocus: true,
+      // Desligado: refetch ao focar a janela era o maior gerador de tráfego —
+      // qualquer Alt-Tab disparava todas as queries montadas. Mutações já
+      // invalidam o que precisa ser invalidado.
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: 'always',
     },
   },
 });
+
+// ── Persistência do cache em localStorage ─────────────────────────────────
+// Sobrevive a F5 e restart do Electron. Hidrata na inicialização e re-valida
+// em background o que estiver "stale". Mutações em andamento NÃO são
+// persistidas (buster da app), apenas o resultado das queries.
+const persister = createSyncStoragePersister({
+  storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+  key: 'fintech-flow-rq-cache',
+  // Throttle de gravação: evita escrever no localStorage a cada query.
+  throttleTime: 1500,
+});
+
+// Versão do cache: bump quando muda shape dos dados (adapters, RPCs) para
+// invalidar caches antigos automaticamente em produção.
+const CACHE_BUSTER = 'v1';
 
 /** Sincroniza parâmetros configuráveis (juros) do banco → runtime da lib. */
 function RuntimeConfigSync() {
@@ -37,7 +62,18 @@ function RuntimeConfigSync() {
 export default function App() {
   return (
     <ThemeProvider>
-      <QueryClientProvider client={queryClient}>
+      <PersistQueryClientProvider
+        client={queryClient}
+        persistOptions={{
+          persister,
+          maxAge: 1000 * 60 * 60 * 24, // 24h: descarta cache mais velho que isso
+          buster: CACHE_BUSTER,
+          dehydrateOptions: {
+            // Não persistir queries com erro nem queries que não terminaram.
+            shouldDehydrateQuery: (query) => query.state.status === 'success',
+          },
+        }}
+      >
         <AuthProvider>
           <ClienteModalProvider>
             <RuntimeConfigSync />
@@ -45,7 +81,7 @@ export default function App() {
             <Toaster />
           </ClienteModalProvider>
         </AuthProvider>
-      </QueryClientProvider>
+      </PersistQueryClientProvider>
     </ThemeProvider>
   );
 }

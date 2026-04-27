@@ -126,6 +126,22 @@ export default function EmprestimosAtivosPage() {
     });
   }, [emprestimos, filtroStatus, searchTerm]);
 
+  // ── Paginação ────────────────────────────────────────────
+  // 10k empréstimos não cabem em uma tabela DOM. 100 por página dá render
+  // rápido. Reset automático ao mudar filtros.
+  const PAGE_SIZE = 100;
+  const [currentPage, setCurrentPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filtroStatus, searchTerm]);
+
+  const paginatedEmprestimos = useMemo(
+    () => filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [filtered, currentPage],
+  );
+
   // ── Métricas dinâmicas ───────────────────────────────────
   const metricas = useMemo(() => {
     const totalCarteira = emprestimos.reduce((acc, e) => acc + e.valor, 0);
@@ -317,7 +333,7 @@ export default function EmprestimosAtivosPage() {
                     </td>
                   </tr>
                 ) : (
-                  filtered.map((e) => (
+                  paginatedEmprestimos.map((e) => (
                     <tr key={e.id} className="border-b hover:bg-muted/50">
                       <td className="py-3 font-medium">
                         <button
@@ -363,6 +379,37 @@ export default function EmprestimosAtivosPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Controles de paginação */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between gap-4 px-2">
+          <span className="text-sm text-muted-foreground">
+            Mostrando {(currentPage - 1) * PAGE_SIZE + 1}–
+            {Math.min(currentPage * PAGE_SIZE, filtered.length)} de {filtered.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            >
+              Anterior
+            </Button>
+            <span className="text-sm">
+              Página <strong>{currentPage}</strong> de {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            >
+              Próxima
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Modal Detalhes — Painel completo do empréstimo */}
       {selectedEmprestimo && (
