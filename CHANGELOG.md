@@ -6,6 +6,14 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.18] — 2026-04-27
+
+### Corrigido
+- **Espaço preto ao redor da Calculadora**: `calc-shell` tinha largura fixa 320px e era centralizado num fundo `#202020`, gerando bordas pretas visíveis. Agora `calc-shell` usa `flex: 1` e preenche toda área de conteúdo da janela.
+- **Ícone do Windows com baixa resolução**: ICO regenerável via Pillow com 9 entradas (16, 24, 32, 40, 48, 64, 96, 128, 256) — cada entrada PNG-comprimida individualmente.
+
+---
+
 ## [1.4.17] — 2026-04-27
 
 ### Corrigido

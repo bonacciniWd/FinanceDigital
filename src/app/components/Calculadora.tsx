@@ -375,23 +375,19 @@ const calcCss = `
   position: fixed;
   inset: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #202020;
+  flex-direction: column;
+  background: #f3f3f3;
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   -webkit-user-select: none;
   user-select: none;
 }
 .calc-shell {
-  width: 320px;
-  min-height: 500px;
-  background: #f3f3f3;
-  color: #1a1a1a;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 12px 48px rgba(0,0,0,0.5);
+  flex: 1;
   display: flex;
   flex-direction: column;
+  background: #f3f3f3;
+  color: #1a1a1a;
+  overflow: hidden;
 }
 .calc-mode {
   padding: 10px 14px 6px 14px;

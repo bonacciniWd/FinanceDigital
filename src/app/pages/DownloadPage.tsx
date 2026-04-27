@@ -123,7 +123,11 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.17', date: '27 Abr 2026', isLatest: true, items: [
+  { version: '1.4.18', date: '27 Abr 2026', isLatest: true, items: [
+    'Fix: espaço preto ao redor da Calculadora — shell agora preenche toda a janela (sem fundo escuro)',
+    'Fix: ícone do Windows com baixa resolução — ICO regenerável com 9 tamanhos (16→256) via Pillow',
+  ]},
+  { version: '1.4.17', date: '27 Abr 2026', isLatest: false, items: [
     'Fix: dupla barra de título na Calculadora — removida barra fake do HTML, OS já exibe a nativa',
   ]},
   { version: '1.4.16', date: '27 Abr 2026', isLatest: false, items: [
