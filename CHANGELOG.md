@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.16] — 2026-04-27
+
+### Corrigido
+- **App empacotado abria direto em `/login` (sem mostrar a Calculadora)**: o Electron carregava `app://bundle/index.html`, que fazia o React Router ver `pathname = '/index.html'`. Como a rota `/` da Calculadora exige match exato, o roteador caia no fallback `*` dentro do `ProtectedRoute`, que redirecionava para `/login`. Corrigido carregando `app://bundle/` (raiz) — o protocol handler já serve `index.html` como fallback de SPA. Agora o app abre na fachada Calculadora e o cálculo `777÷3==` precisa ser refeito a cada nova abertura.
+
+---
+
 ## [1.4.15] — 2026-04-27
 
 ### Adicionado

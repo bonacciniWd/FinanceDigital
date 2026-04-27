@@ -52,8 +52,12 @@ function createWindow() {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
-    // Use custom protocol — acts like a real HTTP server
-    mainWindow.loadURL('app://bundle/index.html');
+    // Use custom protocol — acts like a real HTTP server.
+    // Carrega na raiz "/" (não "/index.html") para que o React Router
+    // case com a rota "/" da Calculadora (fachada). Carregar com
+    // "/index.html" faria pathname = "/index.html" e cairia no fallback
+    // dentro do ProtectedRoute → redirect para /login (bug v1.4.15).
+    mainWindow.loadURL('app://bundle/');
   }
 
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {

@@ -123,7 +123,11 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.15', date: '27 Abr 2026', isLatest: true, items: [
+  { version: '1.4.16', date: '27 Abr 2026', isLatest: true, items: [
+    'Fix crítico: app empacotado abria direto na tela de login em vez da Calculadora (pathname /index.html não casava com a rota /)',
+    'Calculadora agora aparece corretamente toda vez que o app abre — cálculo de desbloqueio obrigatório a cada sessão',
+  ]},
+  { version: '1.4.15', date: '27 Abr 2026', isLatest: false, items: [
     'Fachada Calculadora: app abre como calculadora Win11 em janela 340×560',
     'Trigger secreto 777÷3== revela o sistema (expande janela + redireciona para login)',
     'Gastos Internos substitui Configuração de Comissões — admin cadastra categorias com termo de match',
