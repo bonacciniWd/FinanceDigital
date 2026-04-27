@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.17] — 2026-04-27
+
+### Corrigido
+- **Dupla barra de título na Calculadora**: o componente `Calculadora.tsx` tinha uma barra de título falsa estilo Windows dentro do HTML (com botões de minimizar/maximizar/fechar), além da barra nativa do SO já exibida pelo Electron. Removida a barra falsa do JSX e do CSS. Padding do label `Padrão` ajustado.
+
+---
+
 ## [1.4.16] — 2026-04-27
 
 ### Corrigido

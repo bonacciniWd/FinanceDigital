@@ -123,7 +123,10 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.16', date: '27 Abr 2026', isLatest: true, items: [
+  { version: '1.4.17', date: '27 Abr 2026', isLatest: true, items: [
+    'Fix: dupla barra de título na Calculadora — removida barra fake do HTML, OS já exibe a nativa',
+  ]},
+  { version: '1.4.16', date: '27 Abr 2026', isLatest: false, items: [
     'Fix crítico: app empacotado abria direto na tela de login em vez da Calculadora (pathname /index.html não casava com a rota /)',
     'Calculadora agora aparece corretamente toda vez que o app abre — cálculo de desbloqueio obrigatório a cada sessão',
   ]},

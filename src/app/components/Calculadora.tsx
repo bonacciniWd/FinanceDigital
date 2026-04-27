@@ -334,21 +334,6 @@ export default function Calculadora() {
     <div className="calc-root">
       <style>{calcCss}</style>
       <div className="calc-shell">
-        <div className="calc-titlebar">
-          <span className="calc-title">Calculadora</span>
-          <div className="calc-window-buttons">
-            <button type="button" aria-label="Minimizar" className="calc-wb">
-              −
-            </button>
-            <button type="button" aria-label="Maximizar" className="calc-wb">
-              □
-            </button>
-            <button type="button" aria-label="Fechar" className="calc-wb close">
-              ×
-            </button>
-          </div>
-        </div>
-
         <div className="calc-mode">Padrão</div>
 
         <div className="calc-screen">
@@ -408,30 +393,8 @@ const calcCss = `
   display: flex;
   flex-direction: column;
 }
-.calc-titlebar {
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: #f3f3f3;
-  padding-left: 12px;
-  border-bottom: 1px solid #e5e5e5;
-}
-.calc-title { font-size: 12px; color: #1a1a1a; }
-.calc-window-buttons { display: flex; }
-.calc-wb {
-  width: 46px;
-  height: 32px;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  font-size: 14px;
-  color: #1a1a1a;
-}
-.calc-wb:hover { background: #e5e5e5; }
-.calc-wb.close:hover { background: #e81123; color: #fff; }
 .calc-mode {
-  padding: 6px 14px;
+  padding: 10px 14px 6px 14px;
   font-size: 18px;
   font-weight: 600;
   color: #1a1a1a;
