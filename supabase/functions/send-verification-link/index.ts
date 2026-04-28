@@ -157,9 +157,16 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      const conectada = allInstancias.find(
-        (i: any) => i.status === "conectado" || i.status === "conectada"
-      );
+      const CONNECTED = ["conectado", "conectada", "open", "connected"];
+
+      // Preferir instância marcada como sistema (is_system=true)
+      const conectada =
+        allInstancias.find(
+          (i: any) => i.is_system && CONNECTED.includes((i.status ?? "").toLowerCase())
+        ) ??
+        allInstancias.find(
+          (i: any) => CONNECTED.includes((i.status ?? "").toLowerCase())
+        );
 
       if (!conectada) {
         const statuses = allInstancias.map((i: any) => `${i.instance_name}: ${i.status}`).join(", ");
