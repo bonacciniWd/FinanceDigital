@@ -123,7 +123,12 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.18', date: '27 Abr 2026', isLatest: true, items: [
+  { version: '1.4.19', date: '28 Abr 2026', isLatest: true, items: [
+    'Adicionar parcela manual: botão "+ Adicionar parcela" na aba Cobrança — define valor, vencimento e empréstimo alvo',
+    'Fix: nome do cliente aparecia como "Cliente" na cobrança PIX via WhatsApp',
+    'Fix: data de vencimento redundante na mensagem PIX — quando vencida exibe "pague hoje" com a data original',
+  ]},
+  { version: '1.4.18', date: '27 Abr 2026', isLatest: false, items: [
     'Fix: espaço preto ao redor da Calculadora — shell agora preenche toda a janela (sem fundo escuro)',
     'Fix: ícone do Windows com baixa resolução — ICO regenerável com 9 tamanhos (16→256) via Pillow',
   ]},
