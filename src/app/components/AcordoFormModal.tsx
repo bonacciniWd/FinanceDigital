@@ -35,6 +35,8 @@ import { useCriarAcordo } from '../hooks/useAcordos';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { useConfigSistema } from '../hooks/useConfigSistema';
+import { useCriarCobvEfi } from '../hooks/useWoovi';
+import { useEnviarWhatsapp, useInstancias } from '../hooks/useWhatsapp';
 
 type Periodicidade = 'diario' | 'semanal' | 'quinzenal' | 'mensal' | 'personalizado';
 
@@ -187,6 +189,9 @@ export default function AcordoFormModal({
 }: Props) {
   const { user } = useAuth();
   const criarAcordo = useCriarAcordo();
+  const criarCobvEfi = useCriarCobvEfi();
+  const enviarWhatsapp = useEnviarWhatsapp();
+  const { data: instancias = [] } = useInstancias();
   const { data: configSistema } = useConfigSistema();
 
   // ── Form state ──────────────────────────────────────────
@@ -202,6 +207,7 @@ export default function AcordoFormModal({
   const [diaUtil, setDiaUtil] = useState(false);
   const [valoresParcelas, setValoresParcelas] = useState<string[]>([]);
   const [observacao, setObservacao] = useState('');
+  const [gerarPixEntrada, setGerarPixEntrada] = useState(true);
 
   // Reset ao abrir
   useEffect(() => {
@@ -220,6 +226,7 @@ export default function AcordoFormModal({
     setDiaUtil(false);
     setValoresParcelas([]);
     setObservacao('');
+    setGerarPixEntrada(true);
   }, [open, valorDividaSugerido, configSistema?.acordo_entrada_percentual]);
 
   // ── Cálculos derivados ──────────────────────────────────
@@ -326,9 +333,84 @@ export default function AcordoFormModal({
         parcelasAcordo,
       });
 
+      const acordoId = (result as any)?.id as string | undefined;
       toast.success(`Acordo criado: ${formatCurrency(valor)} em ${nP}x`);
+
+      // 3. Gerar Pix da entrada via EFI + enviar WhatsApp (opcional)
+      if (gerarPixEntrada && acordoId && valorEntrada > 0) {
+        try {
+          // Buscar dados do cliente (telefone + cpf + nome)
+          const { data: cli } = await supabase
+            .from('clientes')
+            .select('nome, telefone, cpf')
+            .eq('id', clienteId)
+            .maybeSingle<{ nome: string; telefone: string | null; cpf: string | null }>();
+          const nome = cli?.nome || clienteNome || 'Cliente';
+          const cpf = cli?.cpf || undefined;
+          const telefone = cli?.telefone || '';
+          // Vencimento: amanhã (entrada deve ser paga rápido)
+          const venc = new Date();
+          venc.setDate(venc.getDate() + 1);
+          const vencIso = toIsoDate(venc);
+          const cobv = await criarCobvEfi.mutateAsync({
+            cliente_id: clienteId,
+            valor: valorEntrada,
+            descricao: `Entrada acordo - ${nome}`.substring(0, 140),
+            cliente_nome: nome,
+            cliente_cpf: cpf,
+            data_vencimento: vencIso,
+          });
+          const charge = (cobv as any)?.charge;
+          const chargeRowId = charge?.id as string | undefined;
+          const brCode = (charge?.br_code as string | undefined) || '';
+          const qrImage = (charge?.qr_code_image as string | undefined) || '';
+          // Linkar entrada_charge_id no acordo
+          if (chargeRowId) {
+            await supabase
+              .from('acordos')
+              .update({ entrada_charge_id: chargeRowId } as never)
+              .eq('id', acordoId);
+          }
+          // Enviar via WhatsApp na instância principal (is_system) ou primeira conectada
+          const instSistema = (instancias as any[]).find((i) => i.is_system && ['conectado', 'conectada', 'open', 'connected'].includes((i.status || '').toLowerCase()))
+            || (instancias as any[]).find((i) => ['conectado', 'conectada', 'open', 'connected'].includes((i.status || '').toLowerCase()));
+          if (instSistema && telefone && brCode) {
+            const phoneDigits = telefone.replace(/\D/g, '');
+            const phone = phoneDigits.length <= 11 ? '55' + phoneDigits : phoneDigits;
+            const msg = `🤝 *Acordo confirmado*\n\nOlá ${nome}!\n\nSeu acordo foi formalizado:\n• Valor total: *${formatCurrency(valor)}*\n• Entrada: *${formatCurrency(valorEntrada)}*\n• Parcelas restantes: *${nP}x ${formatCurrency(valorParcelaPadrao)}*\n\n💰 *Pague a entrada via Pix* (vencimento ${venc.toLocaleDateString('pt-BR')}):\n\n${brCode}\n\n_Após a confirmação do pagamento, suas parcelas serão atualizadas automaticamente._`;
+            await enviarWhatsapp.mutateAsync({
+              instancia_id: instSistema.id,
+              telefone: phone,
+              conteudo: msg,
+              cliente_id: clienteId,
+            });
+            if (qrImage) {
+              const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
+              await enviarWhatsapp.mutateAsync({
+                instancia_id: instSistema.id,
+                telefone: phone,
+                conteudo: 'QR Code da entrada do acordo',
+                tipo: 'image',
+                media_base64: base64Data,
+                cliente_id: clienteId,
+              });
+            }
+            toast.success('Pix da entrada gerado e enviado por WhatsApp');
+          } else if (!instSistema) {
+            toast.warning('Pix gerado, mas não há instância WhatsApp principal conectada');
+          } else if (!telefone) {
+            toast.warning('Pix gerado, mas cliente sem telefone cadastrado');
+          } else {
+            toast.success('Pix da entrada gerado');
+          }
+        } catch (pixErr) {
+          console.error('[AcordoFormModal] Erro ao gerar/enviar Pix da entrada:', pixErr);
+          toast.error(`Acordo criado, mas falhou ao gerar Pix da entrada: ${(pixErr as Error).message}`);
+        }
+      }
+
       onCriado?.({
-        acordoId: (result as any)?.id,
+        acordoId: acordoId ?? '',
         valorEntrada,
         valorRestante,
         numParcelas: nP,
@@ -639,6 +721,24 @@ export default function AcordoFormModal({
             <div className="flex justify-between"><span>Entrada:</span><strong>{formatCurrency(valorEntrada)}</strong></div>
             <div className="flex justify-between"><span>Restante ({nP}x):</span><strong>{nP}x {formatCurrency(valorParcelaPadrao)}</strong></div>
             <div className="flex justify-between text-xs text-muted-foreground"><span>Periodicidade:</span><span>{periodicidade}{diaUtil ? ' · dias úteis' : ''}</span></div>
+          </div>
+
+          {/* Pix entrada + WhatsApp */}
+          <div className="flex items-start gap-2 p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
+            <Checkbox
+              id="acordo-pix-entrada"
+              checked={gerarPixEntrada}
+              onCheckedChange={(v) => setGerarPixEntrada(!!v)}
+              className="mt-0.5"
+            />
+            <div className="flex-1">
+              <Label htmlFor="acordo-pix-entrada" className="text-sm font-medium cursor-pointer">
+                Gerar Pix da entrada e enviar por WhatsApp
+              </Label>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Cria cobrança Pix EFI ({formatCurrency(valorEntrada)}, vence amanhã) e envia ao cliente pela instância principal.
+              </p>
+            </div>
           </div>
 
           {/* Ações */}

@@ -129,6 +129,35 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
+      // ── Se esta charge é a entrada de um acordo, marcar entrada_paga ─
+      try {
+        const { data: acordoEntrada } = await adminClient
+          .from("acordos")
+          .select("id, kanban_card_id, cliente_id, entrada_paga")
+          .eq("entrada_charge_id", charge.id)
+          .maybeSingle();
+
+        if (acordoEntrada && !acordoEntrada.entrada_paga) {
+          await adminClient
+            .from("acordos")
+            .update({ entrada_paga: true })
+            .eq("id", acordoEntrada.id);
+          console.log(`[webhook-efi] Acordo ${acordoEntrada.id}: entrada paga (charge=${charge.id})`);
+
+          // Mover card do kanban para 'pago' (entrada quitada → acordo cumprindo)
+          // Mantemos em 'acordo' até que TODAS as parcelas do acordo sejam pagas;
+          // só registramos timestamp de último_contato.
+          if (acordoEntrada.kanban_card_id) {
+            await adminClient
+              .from("kanban_cobranca")
+              .update({ updated_at: new Date().toISOString() })
+              .eq("id", acordoEntrada.kanban_card_id);
+          }
+        }
+      } catch (acordoErr) {
+        console.error("[webhook-efi] Erro ao processar entrada de acordo:", acordoErr);
+      }
+
       // ── Registrar transação de recebimento ─────────────
       const { error: txError } = await adminClient
         .from("woovi_transactions")

@@ -117,6 +117,56 @@ export async function criarAcordo(
     if (errParcelas) throw errParcelas;
   }
 
+  // 4. Mover card do kanban para etapa 'acordo'.
+  //    Se kanban_card_id não foi passado, busca o card ativo do cliente.
+  try {
+    let cardId = acordo.kanban_card_id ?? null;
+    if (!cardId && acordo.cliente_id) {
+      const { data: card } = await supabase
+        .from('kanban_cobranca')
+        .select('id')
+        .eq('cliente_id', acordo.cliente_id)
+        .not('etapa', 'in', '("pago","perdido","arquivado","acordo")')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      cardId = (card as { id: string } | null)?.id ?? null;
+      if (cardId) {
+        await supabase.from('acordos').update({ kanban_card_id: cardId }).eq('id', novoAcordo.id);
+      }
+    }
+    if (cardId) {
+      await supabase
+        .from('kanban_cobranca')
+        .update({ etapa: 'acordo', updated_at: new Date().toISOString() })
+        .eq('id', cardId);
+    }
+  } catch (e) {
+    console.error('[acordoService] Erro ao mover card kanban:', e);
+  }
+
+  // 5. Recomputar status dos empréstimos afetados (parcelas vencidas → congeladas
+  //    devem fazer o emprestimo voltar de 'inadimplente' → 'ativo').
+  try {
+    const empIds = new Set<string>();
+    parcelasAcordo.forEach((p) => p.emprestimo_id && empIds.add(p.emprestimo_id));
+    // Buscar emprestimos das parcelas originais também (caso difiram)
+    if (acordo.parcelas_originais_ids?.length) {
+      const { data: origs } = await supabase
+        .from('parcelas')
+        .select('emprestimo_id')
+        .in('id', acordo.parcelas_originais_ids);
+      (origs ?? []).forEach((r: { emprestimo_id: string | null }) => {
+        if (r.emprestimo_id) empIds.add(r.emprestimo_id);
+      });
+    }
+    for (const empId of empIds) {
+      await supabase.rpc('sync_emprestimo_status_from_parcelas', { p_emprestimo_id: empId });
+    }
+  } catch (e) {
+    console.error('[acordoService] Erro ao sincronizar status do empréstimo:', e);
+  }
+
   return novoAcordo;
 }
 

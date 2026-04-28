@@ -6,6 +6,17 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.19] — 2026-04-28
+
+### Adicionado
+- **Adicionar parcela manual**: botão "+ Adicionar parcela" na aba Cobrança do modal do cliente. Abre dialog com seleção de empréstimo ativo/inadimplente, valor, vencimento e número automático (max + 1). Após inserção, atualiza total de parcelas do empréstimo e dispara `sync_emprestimo_status_from_parcelas` para recompute de `proximo_vencimento` e `status`. Invalida queries de `parcelas`, `emprestimos`, `clientes`, `dashboard-stats`, `kanban-cobranca`, `kanban-stats`.
+
+### Corrigido
+- **Nome do cliente na cobrança PIX via WhatsApp**: o campo "Olá Cliente!" ocorria porque o fallback `emp?.clienteNome` retornava `undefined`. Agora busca `cli?.nome` (query Supabase) antes de definir o nome, com fallback `emp?.clienteNome || 'Cliente'`.
+- **Data de vencimento redundante na mensagem PIX**: quando a parcela estava vencida e o vencimento era ajustado para hoje (requisito da API EFI), a mensagem mostrava a data ajustada como se fosse o vencimento real. Agora exibe "Vencimento original: DD/MM/YYYY — *pague hoje*" para parcelas vencidas, e a data normal para parcelas dentro do prazo.
+
+---
+
 ## [1.4.18] — 2026-04-27
 
 ### Corrigido

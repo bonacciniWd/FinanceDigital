@@ -52,6 +52,7 @@ import {
   Image as ImageIcon,
   Copy,
   QrCode,
+  Plus,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -60,7 +61,7 @@ import {
   useUpdateCliente,
 } from '../hooks/useClientes';
 import { useEmprestimosByCliente, useUpdateEmprestimo } from '../hooks/useEmprestimos';
-import { useParcelasByCliente, useUpdateParcela, useRegistrarPagamento } from '../hooks/useParcelas';
+import { useParcelasByCliente, useUpdateParcela, useRegistrarPagamento, useCreateParcela, useSyncEmprestimoStatus } from '../hooks/useParcelas';
 import { useAcordosByCliente } from '../hooks/useAcordos';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
@@ -71,8 +72,9 @@ import { supabase } from '../lib/supabase';
 import AcordoFormModal from './AcordoFormModal';
 import EmprestimoEditModal from './EmprestimoEditModal';
 import ComprovanteUploader from './ComprovanteUploader';
-import type { ClienteUpdate } from '../lib/database.types';
+import type { ClienteUpdate, ParcelaUpdate } from '../lib/database.types';
 import type { Parcela } from '../lib/view-types';
+import { valorCorrigido, diasDeAtraso, JUROS_DIAS_MAX } from '../lib/juros';
 
 interface Props {
   clienteId: string | null;
@@ -132,7 +134,14 @@ function ModalBody({ clienteId, tab, onTabChange, onClose }: Props & { clienteId
   // KPIs topo
   const saldoDevedor = parcelas
     .filter((p) => p.status !== 'paga' && p.status !== 'cancelada')
-    .reduce((acc, p) => acc + (p.valorOriginal + p.juros + p.multa - p.desconto), 0);
+    .reduce((acc, p) => {
+      const dias = diasDeAtraso(p.dataVencimento);
+      const congelado = !!p.acordoId || !!p.congelada || dias > JUROS_DIAS_MAX;
+      const { total } = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, {
+        congelarJuros: congelado,
+      });
+      return acc + total;
+    }, 0);
   const parcelasVencidas = parcelas.filter((p) => p.status === 'vencida').length;
   const emprestimosAtivos = emprestimos.filter((e) => e.status === 'ativo' || e.status === 'inadimplente').length;
   const acordosAtivos = acordos.filter((a) => a.status === 'ativo').length;
@@ -554,6 +563,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   const { data: instancias = [] } = useInstancias();
   const updateParcela = useUpdateParcela();
   const registrarPagamento = useRegistrarPagamento();
+  const createParcela = useCreateParcela();
+  const syncEmprestimoStatus = useSyncEmprestimoStatus();
   const criarCobvEfi = useCriarCobvEfi();
   const enviarWhatsapp = useEnviarWhatsapp();
 
@@ -567,14 +578,92 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   const pendentes = parcelas.filter((p) => p.status !== 'paga' && p.status !== 'cancelada');
   const pendentesCount = pendentes.length;
   const temVencidas = pendentes.some((p) => p.status === 'vencida');
-  const saldoPendente = pendentes.reduce((sum, p) => sum + (p.valor + p.juros + p.multa - p.desconto), 0);
 
-  // Edit juros/multa/desconto inline
+  // Calcula valores corrigidos (juros automáticos exceto se congelada/acordo/>365d)
+  const computeValores = (p: Parcela) => {
+    const dias = diasDeAtraso(p.dataVencimento);
+    const congelado = !!p.acordoId || !!p.congelada || dias > JUROS_DIAS_MAX;
+    const v = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, {
+      congelarJuros: congelado,
+    });
+    return { ...v, congelado, bloqueada: !!p.acordoId || !!p.congelada };
+  };
+
+  const saldoPendente = pendentes.reduce((sum, p) => sum + computeValores(p).total, 0);
+
+  // Edit inline por célula (campo único) ou pelo atalho do lápis (% — juros/multa/desconto juntos)
   const [showAcordoModal, setShowAcordoModal] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editJuros, setEditJuros] = useState('');
-  const [editMulta, setEditMulta] = useState('');
-  const [editDesconto, setEditDesconto] = useState('');
+  type EditField = 'all' | 'vencimento' | 'valor' | 'juros' | 'multa' | 'desconto' | 'status';
+  const [edit, setEdit] = useState<{
+    id: string;
+    field: EditField;
+    vencimento: string;
+    valor: string;
+    juros: string;
+    multa: string;
+    desconto: string;
+    status: Parcela['status'];
+  } | null>(null);
+
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const startEditCell = (p: Parcela, field: EditField) => {
+    if (p.acordoId || p.congelada) {
+      toast.error('Parcela bloqueada (acordo/congelada). Edição não permitida.');
+      return;
+    }
+    setEdit({
+      id: p.id,
+      field,
+      vencimento: p.dataVencimento.slice(0, 10),
+      valor: String(p.valorOriginal),
+      juros: String(p.juros),
+      multa: String(p.multa),
+      desconto: String(p.desconto),
+      status: p.status,
+    });
+  };
+
+  const cancelEdit = () => setEdit(null);
+
+  const saveEdit = async () => {
+    if (!edit) return;
+    const data: ParcelaUpdate = {};
+    if (edit.field === 'all') {
+      data.juros = Number(edit.juros) || 0;
+      data.multa = Number(edit.multa) || 0;
+      data.desconto = Number(edit.desconto) || 0;
+    } else if (edit.field === 'vencimento') {
+      if (edit.vencimento < todayIso) {
+        toast.error('Vencimento não pode ser anterior à data de hoje.');
+        return;
+      }
+      data.data_vencimento = edit.vencimento;
+    } else if (edit.field === 'valor') {
+      const n = Number(edit.valor);
+      if (!isFinite(n) || n < 0) {
+        toast.error('Valor inválido.');
+        return;
+      }
+      data.valor_original = n;
+      data.valor = n;
+    } else if (edit.field === 'juros') {
+      data.juros = Number(edit.juros) || 0;
+    } else if (edit.field === 'multa') {
+      data.multa = Number(edit.multa) || 0;
+    } else if (edit.field === 'desconto') {
+      data.desconto = Number(edit.desconto) || 0;
+    } else if (edit.field === 'status') {
+      data.status = edit.status;
+    }
+    try {
+      await updateParcela.mutateAsync({ id: edit.id, data });
+      setEdit(null);
+      toast.success('Parcela atualizada');
+    } catch (err) {
+      toast.error('Erro: ' + (err as Error).message);
+    }
+  };
 
   // Pagar modal
   const [pagamentoParcelaId, setPagamentoParcelaId] = useState<string | null>(null);
@@ -597,31 +686,56 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   // Visualizar comprovante (parcelas pagas)
   const [viewComprovanteUrl, setViewComprovanteUrl] = useState<string | null>(null);
 
-  const isBusy = updateParcela.isPending || registrarPagamento.isPending;
+  // Adicionar parcela manualmente a um empréstimo ativo
+  const [showAddParcelaModal, setShowAddParcelaModal] = useState(false);
+  const [addParcelaEmprestimoId, setAddParcelaEmprestimoId] = useState('');
+  const [addParcelaValor, setAddParcelaValor] = useState('');
+  const [addParcelaVencimento, setAddParcelaVencimento] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [addParcelaSubmitting, setAddParcelaSubmitting] = useState(false);
 
-  const startEdit = (id: string, juros: number, multa: number, desconto: number) => {
-    setEditingId(id);
-    setEditJuros(String(juros));
-    setEditMulta(String(multa));
-    setEditDesconto(String(desconto));
-  };
-
-  const saveEdit = async (id: string) => {
+  const handleAddParcela = async () => {
+    if (!addParcelaEmprestimoId) { toast.error('Selecione o empréstimo'); return; }
+    const valorN = Number(addParcelaValor.replace(',', '.'));
+    if (!isFinite(valorN) || valorN <= 0) { toast.error('Valor inválido'); return; }
+    if (!addParcelaVencimento) { toast.error('Informe o vencimento'); return; }
+    setAddParcelaSubmitting(true);
     try {
-      await updateParcela.mutateAsync({
-        id,
-        data: {
-          juros: Number(editJuros) || 0,
-          multa: Number(editMulta) || 0,
-          desconto: Number(editDesconto) || 0,
-        },
+      // Próximo número da parcela = max(numero) + 1 do empréstimo
+      const parcelasDoEmp = parcelas.filter((p) => p.emprestimoId === addParcelaEmprestimoId);
+      const proxNum = parcelasDoEmp.reduce((max, p) => Math.max(max, p.numero), 0) + 1;
+      await createParcela.mutateAsync({
+        emprestimo_id: addParcelaEmprestimoId,
+        cliente_id: clienteId,
+        numero: proxNum,
+        valor: valorN,
+        valor_original: valorN,
+        data_vencimento: addParcelaVencimento,
+        status: 'pendente',
       });
-      setEditingId(null);
-      toast.success('Parcela atualizada');
+      // Atualizar total de parcelas do empréstimo + recompute status/proximo_vencimento
+      const emp = emprestimoById.get(addParcelaEmprestimoId);
+      if (emp) {
+        await supabase
+          .from('emprestimos')
+          .update({ parcelas: (emp.parcelas || parcelasDoEmp.length) + 1 } as never)
+          .eq('id', addParcelaEmprestimoId);
+      }
+      await syncEmprestimoStatus.mutateAsync(addParcelaEmprestimoId);
+      toast.success(`Parcela ${proxNum} adicionada`);
+      setShowAddParcelaModal(false);
+      setAddParcelaValor('');
     } catch (err) {
-      toast.error('Erro: ' + (err as Error).message);
+      toast.error(`Erro: ${(err as Error).message}`);
+    } finally {
+      setAddParcelaSubmitting(false);
     }
   };
+
+  const isBusy = updateParcela.isPending || registrarPagamento.isPending;
 
   const openPagamentoModal = (parcela: Parcela) => {
     setPagamentoParcelaId(parcela.id);
@@ -641,8 +755,9 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
 
   const handleEfetuarPagamento = (parcela: Parcela) => {
     const desconto = parseFloat(pagamentoDesconto) || 0;
-    const valorCorrigido = parcela.valorOriginal + parcela.juros + parcela.multa;
-    const totalPagar = Math.max(valorCorrigido - desconto, 0);
+    const { juros: jurosCalc } = computeValores(parcela);
+    const valorComJuros = parcela.valorOriginal + jurosCalc + parcela.multa;
+    const totalPagar = Math.max(valorComJuros - desconto, 0);
 
     if (pagamentoTab === 'parcial') {
       const valorPago = parseFloat(pagamentoValorParcial) || 0;
@@ -677,6 +792,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
             updateParcela.mutate({
               id: parcela.id,
               data: {
+                juros: jurosCalc,
                 desconto,
                 observacao: pagamentoObs || null,
                 conta_bancaria: pagamentoConta || null,
@@ -693,19 +809,25 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
 
   const handleGerarPix = async (parcela: Parcela) => {
     const emp = emprestimoById.get(parcela.emprestimoId);
-    const clienteNome = emp?.clienteNome || 'Cliente';
     setGerandoPixId(parcela.id);
     try {
       const { data: cli } = await supabase.from('clientes').select('cpf, nome, telefone').eq('id', parcela.clienteId).single() as { data: { cpf: string | null; nome: string; telefone: string } | null };
+      const clienteNome = cli?.nome || emp?.clienteNome || 'Cliente';
+      const { total: valorPixCorrigido } = computeValores(parcela);
+      const hoje = new Date().toISOString().slice(0, 10);
+      const vencido = parcela.dataVencimento < hoje;
+      const pixVencimento = vencido ? hoje : parcela.dataVencimento;
       const result = await criarCobvEfi.mutateAsync({
         parcela_id: parcela.id,
         emprestimo_id: parcela.emprestimoId,
         cliente_id: parcela.clienteId,
-        valor: parcela.valor,
+        // Valor corrigido com juros — EFI cobra o valor real a receber
+        valor: valorPixCorrigido,
         descricao: `Parcela ${parcela.numero} - ${clienteNome}`,
         cliente_nome: clienteNome,
         cliente_cpf: cli?.cpf || undefined,
-        data_vencimento: parcela.dataVencimento,
+        // EFI rejeita cobv com data passada — usa hoje se já venceu
+        data_vencimento: pixVencimento,
       });
       const charge = (result as any)?.charge;
       const brCode = charge?.br_code || '';
@@ -713,10 +835,14 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
       if (brCode || qrImage) {
         setPixResultDialog({ qrImage, brCode, parcelaNumero: parcela.numero });
       }
-      const instSistema = instancias.find((i: any) => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
+      const instSistema = instancias.find((i: any) => i.is_system && ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status))
+        || instancias.find((i: any) => ['conectado', 'conectada', 'open', 'connected'].includes(i.status?.toLowerCase?.() || i.status));
       if (instSistema && cli?.telefone && brCode) {
         const phone = cli.telefone.replace(/\D/g, '').length <= 11 ? '55' + cli.telefone.replace(/\D/g, '') : cli.telefone.replace(/\D/g, '');
-        const msg = `💰 *Cobrança PIX - Parcela ${parcela.numero}*\n\nOlá ${clienteNome}!\n\nValor: *${formatCurrency(parcela.valor)}*\nVencimento: ${formatDate(parcela.dataVencimento)}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_CasaDaMoeda_`;
+        const linhaVencimento = vencido
+          ? `Vencimento original: ${formatDate(parcela.dataVencimento)} — *pague hoje*`
+          : `Vencimento: ${formatDate(parcela.dataVencimento)}`;
+        const msg = `💰 *Cobrança PIX - Parcela ${parcela.numero}*\n\nOlá ${clienteNome}!\n\nValor: *${formatCurrency(valorPixCorrigido)}*\n${linhaVencimento}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_CasaDaMoeda_`;
         await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
         if (qrImage) {
           const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
@@ -797,7 +923,24 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
       />
 
       <section>
-        <h3 className="text-sm font-semibold mb-3">Parcelas pendentes & vencidas</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold">Parcelas pendentes & vencidas</h3>
+          {emprestimos.filter((e) => e.status === 'ativo' || e.status === 'inadimplente').length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              onClick={() => {
+                const ativos = emprestimos.filter((e) => e.status === 'ativo' || e.status === 'inadimplente');
+                setAddParcelaEmprestimoId(ativos[0]?.id ?? '');
+                setShowAddParcelaModal(true);
+              }}
+            >
+              <Plus className="w-3.5 h-3.5 mr-1" />
+              Adicionar parcela
+            </Button>
+          )}
+        </div>
         {pendentes.length === 0 ? (
           <div className="text-xs text-muted-foreground">Sem parcelas pendentes</div>
         ) : (
@@ -818,68 +961,179 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
               </thead>
               <tbody>
                 {pendentes.map((p) => {
-                  const total = p.valorOriginal + p.juros + p.multa - p.desconto;
-                  const isEdit = editingId === p.id;
+                  const { total, juros: jurosCalc, congelado, bloqueada } = computeValores(p);
+                  const isEditing = (f: EditField) =>
+                    edit?.id === p.id &&
+                    (edit.field === f ||
+                      (edit.field === 'all' && (f === 'juros' || f === 'multa' || f === 'desconto')));
+                  const cellCls = (f: EditField) =>
+                    `px-2 py-2 text-right tabular-nums ${
+                      bloqueada ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-muted/50'
+                    }${isEditing(f) ? ' bg-muted/40' : ''}`;
+                  const onCellClick = (f: EditField) => () => startEditCell(p, f);
                   return (
                     <tr key={p.id} className="border-t">
                       <td className="px-2 py-2">{p.numero}</td>
-                      <td className="px-2 py-2">{formatDate(p.dataVencimento)}</td>
-                      <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(p.valorOriginal)}</td>
-                      <td className="px-2 py-2 text-right tabular-nums">
-                        {isEdit ? (
+
+                      {/* Vencimento */}
+                      <td
+                        className={`px-2 py-2 ${
+                          bloqueada ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-muted/50'
+                        }${isEditing('vencimento') ? ' bg-muted/40' : ''}`}
+                        onClick={!isEditing('vencimento') ? onCellClick('vencimento') : undefined}
+                        title={bloqueada ? 'Parcela bloqueada' : 'Clique para editar'}
+                      >
+                        {isEditing('vencimento') ? (
                           <Input
-                            type="number"
-                            value={editJuros}
-                            onChange={(e) => setEditJuros(e.target.value)}
-                            className="h-7 text-right w-20 inline-block"
+                            type="date"
+                            min={todayIso}
+                            value={edit!.vencimento}
+                            onChange={(e) => setEdit({ ...edit!, vencimento: e.target.value })}
+                            autoFocus
+                            className="h-7 w-36 inline-block"
                           />
                         ) : (
-                          formatCurrency(p.juros)
+                          formatDate(p.dataVencimento)
                         )}
                       </td>
-                      <td className="px-2 py-2 text-right tabular-nums">
-                        {isEdit ? (
+
+                      {/* Valor Original */}
+                      <td
+                        className={cellCls('valor')}
+                        onClick={!isEditing('valor') ? onCellClick('valor') : undefined}
+                        title={bloqueada ? 'Parcela bloqueada' : 'Clique para editar'}
+                      >
+                        {isEditing('valor') ? (
                           <Input
                             type="number"
-                            value={editMulta}
-                            onChange={(e) => setEditMulta(e.target.value)}
-                            className="h-7 text-right w-20 inline-block"
+                            step="0.01"
+                            value={edit!.valor}
+                            onChange={(e) => setEdit({ ...edit!, valor: e.target.value })}
+                            autoFocus
+                            className="h-7 text-right w-24 inline-block"
+                          />
+                        ) : (
+                          formatCurrency(p.valorOriginal)
+                        )}
+                      </td>
+
+                      {/* Juros (auto-calc; só editável quando congelada/atalho) */}
+                      <td
+                        className={`${cellCls('juros')} ${congelado ? '' : 'text-muted-foreground'}`}
+                        onClick={!isEditing('juros') && congelado && !bloqueada ? onCellClick('juros') : undefined}
+                        title={
+                          bloqueada
+                            ? 'Parcela bloqueada'
+                            : congelado
+                            ? 'Clique para editar (juros congelado)'
+                            : 'Juros calculado automaticamente'
+                        }
+                      >
+                        {isEditing('juros') ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={edit!.juros}
+                            onChange={(e) => setEdit({ ...edit!, juros: e.target.value })}
+                            autoFocus
+                            className="h-7 text-right w-24 inline-block"
+                          />
+                        ) : (
+                          formatCurrency(jurosCalc)
+                        )}
+                      </td>
+
+                      {/* Multa */}
+                      <td
+                        className={cellCls('multa')}
+                        onClick={!isEditing('multa') ? onCellClick('multa') : undefined}
+                        title={bloqueada ? 'Parcela bloqueada' : 'Clique para editar'}
+                      >
+                        {isEditing('multa') ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={edit!.multa}
+                            onChange={(e) => setEdit({ ...edit!, multa: e.target.value })}
+                            autoFocus={edit!.field === 'multa'}
+                            className="h-7 text-right w-24 inline-block"
                           />
                         ) : (
                           formatCurrency(p.multa)
                         )}
                       </td>
-                      <td className="px-2 py-2 text-right tabular-nums">
-                        {isEdit ? (
+
+                      {/* Desconto */}
+                      <td
+                        className={cellCls('desconto')}
+                        onClick={!isEditing('desconto') ? onCellClick('desconto') : undefined}
+                        title={bloqueada ? 'Parcela bloqueada' : 'Clique para editar'}
+                      >
+                        {isEditing('desconto') ? (
                           <Input
                             type="number"
-                            value={editDesconto}
-                            onChange={(e) => setEditDesconto(e.target.value)}
-                            className="h-7 text-right w-20 inline-block"
+                            step="0.01"
+                            value={edit!.desconto}
+                            onChange={(e) => setEdit({ ...edit!, desconto: e.target.value })}
+                            autoFocus={edit!.field === 'desconto'}
+                            className="h-7 text-right w-24 inline-block"
                           />
                         ) : (
                           formatCurrency(p.desconto)
                         )}
                       </td>
-                      <td className="px-2 py-2 text-right font-semibold tabular-nums">{formatCurrency(total)}</td>
-                      <td className="px-2 py-2 text-center">
-                        <Badge
-                          className={
-                            p.status === 'vencida'
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }
-                        >
-                          {p.status}
-                        </Badge>
+
+                      {/* Total (calculado) */}
+                      <td className="px-2 py-2 text-right font-semibold tabular-nums">
+                        {formatCurrency(total)}
                       </td>
+
+                      {/* Status (dropdown inline) */}
+                      <td
+                        className={`px-2 py-2 text-center ${
+                          bloqueada ? 'cursor-not-allowed opacity-70' : 'cursor-pointer hover:bg-muted/50'
+                        }${isEditing('status') ? ' bg-muted/40' : ''}`}
+                        onClick={!isEditing('status') ? onCellClick('status') : undefined}
+                        title={bloqueada ? 'Parcela bloqueada' : 'Clique para editar status'}
+                      >
+                        {isEditing('status') ? (
+                          <Select
+                            value={edit!.status}
+                            onValueChange={(v) => setEdit({ ...edit!, status: v as Parcela['status'] })}
+                          >
+                            <SelectTrigger className="h-7 w-32 mx-auto">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="pendente">pendente</SelectItem>
+                              <SelectItem value="vencida">vencida</SelectItem>
+                              <SelectItem value="paga">paga</SelectItem>
+                              <SelectItem value="cancelada">cancelada</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Badge
+                            className={
+                              p.status === 'vencida'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }
+                          >
+                            {p.status}
+                          </Badge>
+                        )}
+                      </td>
+
+                      {/* Ações */}
                       <td className="px-2 py-2">
-                        {isEdit ? (
+                        {edit?.id === p.id ? (
                           <div className="flex gap-1 justify-center">
-                            <Button size="sm" onClick={() => saveEdit(p.id)} disabled={updateParcela.isPending}>
+                            <Button size="sm" onClick={saveEdit} disabled={updateParcela.isPending}>
                               <Save className="w-3 h-3" />
                             </Button>
-                            <Button size="sm" variant="secondary" onClick={() => setEditingId(null)}>X</Button>
+                            <Button size="sm" variant="secondary" onClick={cancelEdit}>
+                              X
+                            </Button>
                           </div>
                         ) : (
                           <div className="flex flex-wrap gap-1 justify-center">
@@ -888,7 +1142,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                               className="h-7 text-xs px-2 bg-green-600 hover:bg-green-700 text-white"
                               title="Efetuar pagamento"
                               onClick={() => openPagamentoModal(p)}
-                              disabled={isBusy}
+                              disabled={isBusy || bloqueada}
                             >
                               <DollarSign className="w-3.5 h-3.5 mr-1" />Pagar
                             </Button>
@@ -897,7 +1151,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                               variant="outline"
                               className="h-7 text-xs px-2 text-blue-600 border-blue-200"
                               title="Gerar PIX e enviar via WhatsApp"
-                              disabled={gerandoPixId === p.id || criarCobvEfi.isPending}
+                              disabled={gerandoPixId === p.id || criarCobvEfi.isPending || bloqueada}
                               onClick={() => handleGerarPix(p)}
                             >
                               {gerandoPixId === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <QrCode className="w-3.5 h-3.5" />}
@@ -911,6 +1165,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                                 setComprovanteParcela(p);
                                 setShowComprovanteModal(true);
                               }}
+                              disabled={bloqueada}
                             >
                               <Upload className="w-3.5 h-3.5" />
                             </Button>
@@ -918,9 +1173,9 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                               size="sm"
                               variant="outline"
                               className="h-7 text-xs px-2"
-                              title="Editar juros/multa/desconto"
-                              onClick={() => startEdit(p.id, p.juros, p.multa, p.desconto)}
-                              disabled={isBusy}
+                              title="Atalho: editar juros/multa/desconto"
+                              onClick={() => startEditCell(p, 'all')}
+                              disabled={isBusy || bloqueada}
                             >
                               <Percent className="w-3.5 h-3.5" />
                             </Button>
@@ -940,8 +1195,9 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
       {pagamentoParcela && (() => {
         const parcela = pagamentoParcela;
         const desconto = parseFloat(pagamentoDesconto) || 0;
-        const valorCorrigido = parcela.valorOriginal + parcela.juros + parcela.multa;
-        const totalPagar = Math.max(valorCorrigido - desconto, 0);
+        const { juros: jurosCalc } = computeValores(parcela);
+        const valorComJuros = parcela.valorOriginal + jurosCalc + parcela.multa;
+        const totalPagar = Math.max(valorComJuros - desconto, 0);
         const diasAtraso = (() => {
           const venc = new Date(parcela.dataVencimento);
           const pagDt = new Date(pagamentoData);
@@ -1006,7 +1262,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                       </div>
                       <div>
                         <Label className="text-xs">Valor Corrigido</Label>
-                        <Input value={formatCurrency(valorCorrigido)} readOnly className="h-8 text-xs bg-muted" />
+                        <Input value={formatCurrency(valorComJuros)} readOnly className="h-8 text-xs bg-muted" />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -1097,8 +1353,78 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         );
       })()}
 
+      {/* ── Modal: Adicionar parcela manualmente ── */}
+      {showAddParcelaModal && (
+        <Dialog open onOpenChange={(o) => { if (!o) setShowAddParcelaModal(false); }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Plus className="w-5 h-5 text-blue-500" />
+                Adicionar parcela
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <Label className="text-xs">Empréstimo</Label>
+                <select
+                  className="mt-1 w-full h-9 rounded-md border bg-background px-2 text-sm"
+                  value={addParcelaEmprestimoId}
+                  onChange={(e) => setAddParcelaEmprestimoId(e.target.value)}
+                >
+                  {emprestimos
+                    .filter((e) => e.status === 'ativo' || e.status === 'inadimplente')
+                    .map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {formatCurrency(e.valor)} · {e.parcelas}x · {e.status}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs">Valor</Label>
+                  <Input
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    placeholder="0,00"
+                    value={addParcelaValor}
+                    onChange={(e) => setAddParcelaValor(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs">Vencimento</Label>
+                  <Input
+                    type="date"
+                    min={todayIso}
+                    value={addParcelaVencimento}
+                    onChange={(e) => setAddParcelaVencimento(e.target.value)}
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                A parcela será adicionada como <b>pendente</b>, com numeração sequencial. O empréstimo terá o total de parcelas incrementado e o status recalculado.
+              </p>
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => setShowAddParcelaModal(false)} disabled={addParcelaSubmitting}>
+                  Cancelar
+                </Button>
+                <Button className="flex-1" onClick={handleAddParcela} disabled={addParcelaSubmitting}>
+                  {addParcelaSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+                  Adicionar
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
       {/* ── Modal: Confirmar Pagamento Manual com Comprovante ── */}
-      {showComprovanteModal && comprovanteParcela && (
+      {showComprovanteModal && comprovanteParcela && (() => {
+        const comprovanteValores = computeValores(comprovanteParcela);
+        const comprovanteTotal = comprovanteValores.total;
+        const comprovanteJuros = comprovanteValores.juros;
+        return (
         <Dialog open onOpenChange={() => { setShowComprovanteModal(false); setComprovanteParcela(null); }}>
           <DialogContent className="max-w-md">
             <DialogHeader>
@@ -1110,8 +1436,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
-                  <Label className="text-xs">Valor</Label>
-                  <p className="font-semibold">{formatCurrency(comprovanteParcela.valor)}</p>
+                  <Label className="text-xs">Valor{comprovanteJuros > 0 ? ' (corrigido c/ juros)' : ''}</Label>
+                  <p className="font-semibold">{formatCurrency(comprovanteTotal)}</p>
                 </div>
                 <div>
                   <Label className="text-xs">Vencimento</Label>
@@ -1121,8 +1447,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
 
               <ComprovanteUploader
                 parcela={{
-                  valor: comprovanteParcela.valor,
-                  juros: comprovanteParcela.juros,
+                  valor: comprovanteParcela.valorOriginal,
+                  juros: comprovanteJuros,
                   multa: comprovanteParcela.multa,
                   desconto: comprovanteParcela.desconto,
                 }}
@@ -1167,7 +1493,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
             </div>
           </DialogContent>
         </Dialog>
-      )}
+        );
+      })()}
 
       {/* ── Modal: Resultado PIX ── */}
       {pixResultDialog && (

@@ -53,6 +53,8 @@ export function useCriarAcordo() {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
       queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
       queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+      queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+      queryClient.invalidateQueries({ queryKey: ['clientes'] });
     },
   });
 }
