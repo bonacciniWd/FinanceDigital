@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -53,6 +54,7 @@ import {
   Copy,
   QrCode,
   Plus,
+  Ban,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -156,12 +158,12 @@ function ModalBody({ clienteId, tab, onTabChange, onClose }: Props & { clienteId
               {cliente.nome}
             </DialogTitle>
             <div className="flex flex-wrap gap-2 mt-2 text-xs">
-              <Badge variant="secondary">{cliente.telefone}</Badge>
-              {cliente.cpf && <Badge variant="secondary">CPF: {cliente.cpf}</Badge>}
+              <Badge variant="outline">{cliente.telefone}</Badge>
+              {cliente.cpf && <Badge variant="outline">CPF: {cliente.cpf}</Badge>}
               <Badge
                 className={
                   cliente.status === 'vencido'
-                    ? 'bg-red-100 text-red-800'
+                    ? 'bg-red-800 text-white'
                     : cliente.status === 'a_vencer'
                     ? 'bg-yellow-100 text-yellow-800'
                     : 'bg-green-100 text-green-800'
@@ -171,7 +173,7 @@ function ModalBody({ clienteId, tab, onTabChange, onClose }: Props & { clienteId
               </Badge>
             </div>
           </div>
-          <div className="hidden sm:grid grid-cols-2 gap-3 text-right">
+          <div className="hidden mr-8 sm:grid grid-cols-2 gap-3 text-right">
             <div>
               <div className="text-[10px] uppercase text-muted-foreground">Saldo devedor</div>
               <div className="text-sm font-semibold text-red-600">{formatCurrency(saldoDevedor)}</div>
@@ -445,6 +447,7 @@ function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente:
 
 function EmprestimosTab({ clienteId }: { clienteId: string }) {
   const { data: emprestimos = [], isLoading } = useEmprestimosByCliente(clienteId);
+  const { data: parcelas = [] } = useParcelasByCliente(clienteId);
   const { data: allUsers = [] } = useAdminUsers();
   const updateEmprestimo = useUpdateEmprestimo();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -453,6 +456,48 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
     () => allUsers.filter((u: any) => ['cobranca', 'gerencia', 'admin'].includes(u.role)),
     [allUsers],
   );
+
+  // KPIs por empréstimo (agrega parcelas)
+  const kpisByEmprestimo = useMemo(() => {
+    const map = new Map<string, {
+      recebido: number;
+      jurosRecebidos: number;
+      saldoCorrigido: number;
+      vencidas: number;
+      pendentes: number;
+      pagas: number;
+      proximoVenc: string | null;
+    }>();
+    for (const e of emprestimos) {
+      const ps = parcelas.filter((p) => p.emprestimoId === e.id);
+      let recebido = 0;
+      let jurosRecebidos = 0;
+      let saldoCorrigido = 0;
+      let vencidas = 0;
+      let pendentes = 0;
+      let pagas = 0;
+      let proximoVenc: string | null = null;
+      for (const p of ps) {
+        if (p.status === 'paga') {
+          recebido += (p.valor ?? 0);
+          jurosRecebidos += (p.juros ?? 0);
+          pagas++;
+        } else if (p.status === 'cancelada') {
+          // ignora
+        } else {
+          const dias = diasDeAtraso(p.dataVencimento);
+          const congelado = !!p.acordoId || !!p.congelada || dias > JUROS_DIAS_MAX;
+          const { total } = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, { congelarJuros: congelado });
+          saldoCorrigido += total;
+          if (p.status === 'vencida') vencidas++;
+          else pendentes++;
+          if (!proximoVenc || p.dataVencimento < proximoVenc) proximoVenc = p.dataVencimento;
+        }
+      }
+      map.set(e.id, { recebido, jurosRecebidos, saldoCorrigido, vencidas, pendentes, pagas, proximoVenc });
+    }
+    return map;
+  }, [emprestimos, parcelas]);
 
   if (isLoading) return <Loader2 className="w-4 h-4 animate-spin" />;
   if (emprestimos.length === 0) {
@@ -479,8 +524,17 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
 
   return (
     <div className="space-y-3">
-      {emprestimos.map((e) => {
+      {[...emprestimos].sort((a, b) => {
+        const order = { inadimplente: 0, ativo: 1, quitado: 2 };
+        return (order[a.status as keyof typeof order] ?? 1) - (order[b.status as keyof typeof order] ?? 1);
+      }).map((e) => {
         const progresso = e.parcelas > 0 ? (e.parcelasPagas / e.parcelas) * 100 : 0;
+        const kpis = kpisByEmprestimo.get(e.id);
+        const recebido = kpis?.recebido ?? 0;
+        const jurosRecebidos = kpis?.jurosRecebidos ?? 0;
+        const saldoCorrigido = kpis?.saldoCorrigido ?? 0;
+        const vencidas = kpis?.vencidas ?? 0;
+        const proximoVenc = kpis?.proximoVenc ?? e.proximoVencimento;
         return (
           <div key={e.id} className="border rounded-lg p-4 space-y-3 hover:border-primary/50 transition-colors">
             <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -492,7 +546,8 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
               >
                 <div className="text-sm font-semibold">{formatCurrency(e.valor)} · {e.parcelas}x {formatCurrency(e.valorParcela)}</div>
                 <div className="text-xs text-muted-foreground mt-0.5">
-                  Contrato {formatDate(e.dataContrato)} · Juros {e.taxaJuros}% {e.tipoJuros} · Próx. venc. {formatDate(e.proximoVencimento)}
+                  Contrato {formatDate(e.dataContrato)} · Juros {e.taxaJuros}% {e.tipoJuros} · Próx. venc. {formatDate(proximoVenc)}
+                  {vencidas > 0 && <span className="ml-2 text-red-600 font-medium">· {vencidas} vencida{vencidas > 1 ? 's' : ''}</span>}
                 </div>
               </button>
               <Badge
@@ -506,6 +561,26 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
               >
                 {e.status}
               </Badge>
+            </div>
+
+            {/* KPIs financeiros */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div className="rounded border bg-muted/30 px-2 py-1.5">
+                <div className="text-[10px] uppercase text-muted-foreground">Liberado</div>
+                <div className="font-semibold">{formatCurrency(e.valor)}</div>
+              </div>
+              <div className="rounded border bg-green-50 dark:bg-green-950/30 px-2 py-1.5">
+                <div className="text-[10px] uppercase text-muted-foreground">Recebido</div>
+                <div className="font-semibold text-green-700 dark:text-green-400">{formatCurrency(recebido)}</div>
+              </div>
+              <div className="rounded border bg-blue-50 dark:bg-blue-950/30 px-2 py-1.5">
+                <div className="text-[10px] uppercase text-muted-foreground">Juros recebidos</div>
+                <div className="font-semibold text-blue-700 dark:text-blue-400">{formatCurrency(jurosRecebidos)}</div>
+              </div>
+              <div className={`rounded border px-2 py-1.5 ${saldoCorrigido > 0 ? 'bg-orange-50 dark:bg-orange-950/30' : 'bg-muted/30'}`}>
+                <div className="text-[10px] uppercase text-muted-foreground">Saldo (c/ juros)</div>
+                <div className={`font-semibold ${saldoCorrigido > 0 ? 'text-orange-700 dark:text-orange-400' : ''}`}>{formatCurrency(saldoCorrigido)}</div>
+              </div>
             </div>
 
             <div className="h-1.5 bg-muted rounded overflow-hidden">
@@ -527,7 +602,7 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex items-end gap-2">
+              <div className="flex items-end gap-2 flex-wrap">
                 <Button size="sm" variant="secondary" onClick={() => setEditingId(e.id)}>
                   Editar
                 </Button>
@@ -696,6 +771,76 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
     return d.toISOString().slice(0, 10);
   });
   const [addParcelaSubmitting, setAddParcelaSubmitting] = useState(false);
+
+  // Infere a periodicidade (em dias) entre as parcelas existentes do empréstimo.
+  // Usa a mediana dos deltas entre vencimentos consecutivos. Default: 30 dias.
+  const inferirPeriodoDias = (empId: string): number => {
+    const lista = parcelas
+      .filter((p) => p.emprestimoId === empId)
+      .map((p) => p.dataVencimento.slice(0, 10))
+      .sort();
+    if (lista.length < 2) return 30;
+    const deltas: number[] = [];
+    for (let i = 1; i < lista.length; i++) {
+      const a = new Date(lista[i - 1] + 'T00:00:00').getTime();
+      const b = new Date(lista[i] + 'T00:00:00').getTime();
+      const diff = Math.round((b - a) / 86400000);
+      if (diff > 0) deltas.push(diff);
+    }
+    if (!deltas.length) return 30;
+    deltas.sort((x, y) => x - y);
+    const mid = Math.floor(deltas.length / 2);
+    return deltas.length % 2 === 0 ? Math.round((deltas[mid - 1] + deltas[mid]) / 2) : deltas[mid];
+  };
+
+  // Próximo vencimento sugerido = max(vencimento das parcelas) + período inferido.
+  const sugerirProximoVencimento = (empId: string): string => {
+    const venc = parcelas
+      .filter((p) => p.emprestimoId === empId)
+      .map((p) => p.dataVencimento.slice(0, 10))
+      .sort();
+    const dias = inferirPeriodoDias(empId);
+    const base = venc.length ? new Date(venc[venc.length - 1] + 'T00:00:00') : new Date();
+    base.setDate(base.getDate() + dias);
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    if (base < hoje) base.setTime(hoje.getTime() + 86400000);
+    const yyyy = base.getFullYear();
+    const mm = String(base.getMonth() + 1).padStart(2, '0');
+    const dd = String(base.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  // Ao trocar o empréstimo selecionado (ou abrir modal), auto-preencher vencimento
+  useEffect(() => {
+    if (!showAddParcelaModal || !addParcelaEmprestimoId) return;
+    setAddParcelaVencimento(sugerirProximoVencimento(addParcelaEmprestimoId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAddParcelaModal, addParcelaEmprestimoId]);
+
+  // Anular parcela (status=cancelada). Nunca excluir — anti-fraude.
+  const handleAnularParcela = async (p: Parcela) => {
+    if (p.acordoId || p.congelada) {
+      toast.error('Parcela bloqueada (acordo/congelada). Anulação não permitida.');
+      return;
+    }
+    const motivo = window.prompt(
+      `Anular parcela ${p.numero}?\n\nA parcela permanecerá no histórico (auditoria), mas não será cobrada. Informe o motivo:`,
+      '',
+    );
+    if (motivo === null) return;
+    try {
+      const obs = `[ANULADA${motivo ? ' — ' + motivo : ''}]${p.observacao ? '\n' + p.observacao : ''}`;
+      await updateParcela.mutateAsync({
+        id: p.id,
+        data: { status: 'cancelada', observacao: obs },
+      });
+      await syncEmprestimoStatus.mutateAsync(p.emprestimoId);
+      toast.success(`Parcela ${p.numero} anulada`);
+    } catch (err) {
+      toast.error(`Erro: ${(err as Error).message}`);
+    }
+  };
 
   const handleAddParcela = async () => {
     if (!addParcelaEmprestimoId) { toast.error('Selecione o empréstimo'); return; }
@@ -944,23 +1089,53 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         {pendentes.length === 0 ? (
           <div className="text-xs text-muted-foreground">Sem parcelas pendentes</div>
         ) : (
-          <div className="border rounded-lg overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="px-2 py-2 text-left">#</th>
-                  <th className="px-2 py-2 text-left">Vencimento</th>
-                  <th className="px-2 py-2 text-right">Original</th>
-                  <th className="px-2 py-2 text-right">Juros</th>
-                  <th className="px-2 py-2 text-right">Multa</th>
-                  <th className="px-2 py-2 text-right">Desc.</th>
-                  <th className="px-2 py-2 text-right">Total</th>
-                  <th className="px-2 py-2 text-center">Status</th>
-                  <th className="px-2 py-2 text-center">Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendentes.map((p) => {
+          <Accordion
+            type="multiple"
+            defaultValue={[...new Set(pendentes.map((p) => p.emprestimoId))]}
+            className="space-y-2"
+          >
+            {[...new Set(pendentes.map((p) => p.emprestimoId))].map((empId) => {
+              const emp = emprestimoById.get(empId);
+              const parcelasDoEmp = pendentes
+                .filter((p) => p.emprestimoId === empId)
+                .sort((a, b) => a.numero - b.numero);
+              const totalEmp = parcelasDoEmp.reduce((s, p) => s + computeValores(p).total, 0);
+              const temVencidaEmp = parcelasDoEmp.some((p) => p.status === 'vencida');
+              return (
+                <AccordionItem key={empId} value={empId} className="border rounded-lg">
+                  <AccordionTrigger className="px-3 py-2 hover:no-underline hover:bg-muted/30 rounded-t-lg [&[data-state=closed]]:rounded-lg">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-semibold text-sm">{emp ? formatCurrency(emp.valor) : 'Empréstimo'}</span>
+                      {emp && <span className="text-muted-foreground">{emp.parcelas}x · {emp.tipoJuros} · {formatDate(emp.dataContrato)}</span>}
+                      <Badge className={`text-[10px] ${temVencidaEmp ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                        {parcelasDoEmp.length} pendente{parcelasDoEmp.length !== 1 ? 's' : ''}
+                      </Badge>
+                      {emp && (
+                        <Badge className={`text-[10px] ${emp.status === 'inadimplente' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
+                          {emp.status}
+                        </Badge>
+                      )}
+                      <span className="text-muted-foreground">saldo: <b className="text-foreground">{formatCurrency(totalEmp)}</b></span>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent className="px-0 pb-0">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="px-2 py-2 text-left">#</th>
+                            <th className="px-2 py-2 text-left">Vencimento</th>
+                            <th className="px-2 py-2 text-right">Original</th>
+                            <th className="px-2 py-2 text-right">Juros</th>
+                            <th className="px-2 py-2 text-right">Multa</th>
+                            <th className="px-2 py-2 text-right">Desc.</th>
+                            <th className="px-2 py-2 text-right">Total</th>
+                            <th className="px-2 py-2 text-center">Status</th>
+                            <th className="px-2 py-2 text-center">Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {parcelasDoEmp.map((p) => {
                   const { total, juros: jurosCalc, congelado, bloqueada } = computeValores(p);
                   const isEditing = (f: EditField) =>
                     edit?.id === p.id &&
@@ -1139,12 +1314,13 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                           <div className="flex flex-wrap gap-1 justify-center">
                             <Button
                               size="sm"
-                              className="h-7 text-xs px-2 bg-green-600 hover:bg-green-700 text-white"
+                              variant="outline"
+                              className="h-7 text-xs px-2 hover:bg-green-700 text-white"
                               title="Efetuar pagamento"
                               onClick={() => openPagamentoModal(p)}
                               disabled={isBusy || bloqueada}
                             >
-                              <DollarSign className="w-3.5 h-3.5 mr-1" />Pagar
+                              <DollarSign className="w-3.5 h-3.5 mr-1" />
                             </Button>
                             <Button
                               size="sm"
@@ -1169,25 +1345,31 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                             >
                               <Upload className="w-3.5 h-3.5" />
                             </Button>
+                            
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 text-xs px-2"
-                              title="Atalho: editar juros/multa/desconto"
-                              onClick={() => startEditCell(p, 'all')}
+                              className="h-7 text-xs px-2 text-red-600 border-red-200 hover:bg-red-50"
+                              title="Anular parcela (mantida no histórico, não cobrada)"
+                              onClick={() => handleAnularParcela(p)}
                               disabled={isBusy || bloqueada}
                             >
-                              <Percent className="w-3.5 h-3.5" />
+                              <Ban className="w-3.5 h-3.5" />
                             </Button>
                           </div>
                         )}
                       </td>
                     </tr>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              );
+            })}
+          </Accordion>
         )}
       </section>
 
@@ -1405,6 +1587,15 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
               <p className="text-[11px] text-muted-foreground">
                 A parcela será adicionada como <b>pendente</b>, com numeração sequencial. O empréstimo terá o total de parcelas incrementado e o status recalculado.
               </p>
+              {addParcelaEmprestimoId && (() => {
+                const dias = inferirPeriodoDias(addParcelaEmprestimoId);
+                const label = dias === 1 ? 'diária' : dias === 7 ? 'semanal' : dias === 15 ? 'quinzenal' : dias >= 28 && dias <= 31 ? 'mensal' : `a cada ${dias} dias`;
+                return (
+                  <p className="text-[11px] text-blue-600 dark:text-blue-400">
+                    Período inferido: <b>{label}</b> · vencimento sugerido com base na última parcela.
+                  </p>
+                );
+              })()}
               <div className="flex gap-2 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setShowAddParcelaModal(false)} disabled={addParcelaSubmitting}>
                   Cancelar
@@ -1619,7 +1810,8 @@ function WhatsappTab({ cliente }: { cliente: NonNullable<ReturnType<typeof useCl
             <SelectContent>
               {instancias.map((i: any) => (
                 <SelectItem key={i.id} value={i.id}>
-                  {i.nome} {i.status === 'connected' ? '🟢' : '🔴'}
+                  {i.instance_name || i.nome || i.id}{' '}
+                  {['conectado', 'conectada', 'connected', 'open'].includes(i.status?.toLowerCase?.() ?? i.status) ? '🟢' : '🔴'}
                 </SelectItem>
               ))}
             </SelectContent>

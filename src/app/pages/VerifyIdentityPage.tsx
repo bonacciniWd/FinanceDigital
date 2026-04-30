@@ -138,6 +138,9 @@ export default function VerifyIdentityPage() {
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Hard reference to recorded blob — prevents Safari iOS GC of blob backing data
+  // after uploadToStorage materializes ArrayBuffer (without this, blob: URL goes 404)
+  const videoBlobRef = useRef<Blob | null>(null);
 
   // Document state removed — docs moved to ClientesPage
 
@@ -162,6 +165,7 @@ export default function VerifyIdentityPage() {
   const residenceChunksRef = useRef<Blob[]>([]);
   const residenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const residenceStreamRef = useRef<MediaStream | null>(null);
+  const residenceVideoBlobRef = useRef<Blob | null>(null);
 
   // Upload state — progressive: cada arquivo é enviado ao ser capturado
   const [uploading, setUploading] = useState(false);
@@ -407,14 +411,15 @@ export default function VerifyIdentityPage() {
         };
 
         recorder.onstop = async () => {
+          if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+          setIsRecording(false);
           const blob = new Blob(chunksRef.current, { type: mimeType.split(';')[0] });
           chunksRef.current = []; // Liberar memória dos chunks
+          videoBlobRef.current = blob; // hard ref para evitar GC do Safari iOS
           const url = URL.createObjectURL(blob);
           setVideoUrl(url);
-          setIsRecording(false);
           stream.getTracks().forEach((t) => t.stop());
           if (videoRef.current) videoRef.current.srcObject = null;
-          if (timerRef.current) clearInterval(timerRef.current);
           // Upload progressivo — uploadToStorage lê para ArrayBuffer antes de enviar
           const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
           try { await uploadToStorage(`video.${ext}`, blob, 'video'); } catch { /* toast já exibido */ }
@@ -424,13 +429,14 @@ export default function VerifyIdentityPage() {
         setIsRecording(true);
         setShowPhrase(true);
 
-        // Timer de duração
+        // Timer de duração (auto-stop em MAX_VIDEO_DURATION com guard contra re-entrada)
         const startTime = Date.now();
         timerRef.current = setInterval(() => {
           const elapsed = Math.floor((Date.now() - startTime) / 1000);
-          setVideoDuration(elapsed);
+          setVideoDuration(Math.min(elapsed, MAX_VIDEO_DURATION));
           if (elapsed >= MAX_VIDEO_DURATION) {
-            recorder.stop();
+            if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+            if (recorder.state === 'recording') recorder.stop();
           }
         }, 500);
       } else {
@@ -447,6 +453,7 @@ export default function VerifyIdentityPage() {
 
   const retakeVideo = useCallback(() => {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
+    videoBlobRef.current = null;
     setUploadedPaths((prev) => ({ ...prev, video: undefined }));
     setVideoUrl(null);
     setVideoDuration(0);
@@ -533,14 +540,15 @@ export default function VerifyIdentityPage() {
         };
 
         recorder.onstop = async () => {
+          if (residenceTimerRef.current) { clearInterval(residenceTimerRef.current); residenceTimerRef.current = null; }
+          setIsRecordingResidence(false);
           const blob = new Blob(residenceChunksRef.current, { type: mimeType.split(';')[0] });
           residenceChunksRef.current = []; // Liberar memória dos chunks
+          residenceVideoBlobRef.current = blob; // hard ref para evitar GC do Safari iOS
           const url = URL.createObjectURL(blob);
           setResidenceVideoUrl(url);
-          setIsRecordingResidence(false);
           stream.getTracks().forEach((t) => t.stop());
           if (residenceVideoRef.current) residenceVideoRef.current.srcObject = null;
-          if (residenceTimerRef.current) clearInterval(residenceTimerRef.current);
           // Upload progressivo — uploadToStorage lê para ArrayBuffer antes de enviar
           const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
           try { await uploadToStorage(`residence-video.${ext}`, blob, 'residenceVideo'); } catch { /* toast já exibido */ }
@@ -552,9 +560,10 @@ export default function VerifyIdentityPage() {
         const startTime = Date.now();
         residenceTimerRef.current = setInterval(() => {
           const elapsed = Math.floor((Date.now() - startTime) / 1000);
-          setResidenceDuration(elapsed);
+          setResidenceDuration(Math.min(elapsed, MAX_VIDEO_DURATION));
           if (elapsed >= MAX_VIDEO_DURATION) {
-            recorder.stop();
+            if (residenceTimerRef.current) { clearInterval(residenceTimerRef.current); residenceTimerRef.current = null; }
+            if (recorder.state === 'recording') recorder.stop();
           }
         }, 500);
       } else {
@@ -575,6 +584,7 @@ export default function VerifyIdentityPage() {
 
   const retakeResidenceVideo = useCallback(() => {
     if (residenceVideoUrl) URL.revokeObjectURL(residenceVideoUrl);
+    residenceVideoBlobRef.current = null;
     setUploadedPaths((prev) => ({ ...prev, residenceVideo: undefined }));
     setResidenceVideoUrl(null);
     setResidenceDuration(0);
@@ -696,6 +706,25 @@ export default function VerifyIdentityPage() {
         },
       };
       await ((supabase.from('verification_logs' as any) as any).insert(logPayload) as Promise<unknown>);
+
+      setUploadProgress(90);
+
+      // Notificar cliente via WhatsApp (não-bloqueante: erros aqui não impedem o sucesso do envio)
+      try {
+        console.log('[VerifyIdentity] Invocando notify-verification-submitted para analise:', verification.analise_id);
+        const { data: notifyData, error: notifyError } = await supabase.functions.invoke(
+          'notify-verification-submitted',
+          { body: { analise_id: verification.analise_id } }
+        );
+        console.log('[VerifyIdentity] notify-verification-submitted response:', { notifyData, notifyError });
+        if (notifyError) {
+          console.warn('[VerifyIdentity] Edge function retornou erro:', notifyError);
+        } else if (notifyData && notifyData.success === false) {
+          console.warn('[VerifyIdentity] Notificação WhatsApp falhou:', notifyData.error);
+        }
+      } catch (notifyErr) {
+        console.warn('[VerifyIdentity] Exceção ao notificar cliente via WhatsApp:', notifyErr);
+      }
 
       setUploadProgress(100);
       setStep('submitted');
@@ -1243,28 +1272,64 @@ export default function VerifyIdentityPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Video preview */}
-              <div>
-                <p className="text-sm font-medium mb-2">Vídeo Selfie ({videoDuration}s)</p>
-                {videoUrl && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium">Vídeo Selfie ({videoDuration}s)</p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => { retakeVideo(); setStep('video'); }}
+                    disabled={uploading}
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    Refazer
+                  </Button>
+                </div>
+                {videoUrl ? (
                   <video
-                    className="w-full rounded-lg"
+                    className="w-full rounded-lg bg-black"
                     src={videoUrl}
                     controls
                     playsInline
+                    preload="metadata"
                   />
+                ) : (
+                  <div className="w-full aspect-video rounded-lg bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                    Vídeo não disponível — toque em Refazer
+                  </div>
                 )}
               </div>
 
               {/* Residence video */}
-              <div>
-                <p className="text-sm font-medium mb-2">Vídeo da Fachada ({residenceDuration}s)</p>
-                {residenceVideoUrl && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium">Vídeo da Fachada ({residenceDuration}s)</p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => { retakeResidenceVideo(); setStep('residence_video'); }}
+                    disabled={uploading}
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    Refazer
+                  </Button>
+                </div>
+                {residenceVideoUrl ? (
                   <video
-                    className="w-full rounded-lg"
+                    className="w-full rounded-lg bg-black"
                     src={residenceVideoUrl}
                     controls
                     playsInline
+                    preload="metadata"
                   />
+                ) : (
+                  <div className="w-full aspect-video rounded-lg bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                    Vídeo não disponível — toque em Refazer
+                  </div>
                 )}
               </div>
 

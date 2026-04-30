@@ -35,6 +35,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import AnaliseDetalhadaModal from '../components/AnaliseDetalhadaModal';
 import type { AnaliseCredito } from '../lib/view-types';
+import { useClienteModal } from '../contexts/ClienteModalContext';
 
 export default function AnaliseCreditoPage() {
   const [filtroStatus, setFiltroStatus] = useState('todos');
@@ -73,6 +74,7 @@ export default function AnaliseCreditoPage() {
   const [showClienteResults, setShowClienteResults] = useState(false);
   const [pendenciaCliente, setPendenciaCliente] = useState<{ temPendencia: boolean; total: number; emprestimos: Array<{ id: string; valor: number; status: string; parcelas: number; parcelas_pagas: number }> } | null>(null);
   const [verificandoPendencia, setVerificandoPendencia] = useState(false);
+  const { openClienteModal } = useClienteModal();
 
   // ── React Query ──────────────────────────────────────────
   const { data: analises, isLoading, isError } = useAnalises();
@@ -100,6 +102,109 @@ export default function AnaliseCreditoPage() {
     const num = v.replace(/\./g, '').replace(',', '.');
     return parseFloat(num) || 0;
   };
+
+  // ── Auto-preencher datas das parcelas por periodicidade ──
+  // Quando muda periodicidade (≠ personalizado), nº parcelas, dia/intervalo ou
+  // data da 1ª parcela, geramos as datas em `datasParcelas`. O usuário pode
+  // editar manualmente cada data nos inputs individuais (sobrescreve).
+  useEffect(() => {
+    const n = parseInt(formNova.numeroParcelas || '0');
+    if (!n || n <= 0 || n > 60) return;
+    if (formNova.periodicidade === 'personalizado') return;
+
+    const toIso = (d: Date) => {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    };
+    const proxDiaUtil = (d: Date) => {
+      const o = new Date(d);
+      while (o.getDay() === 0 || o.getDay() === 6) o.setDate(o.getDate() + 1);
+      return o;
+    };
+
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const inicio = formNova.dataPrimeiraParcela
+      ? new Date(formNova.dataPrimeiraParcela + 'T00:00:00')
+      : null;
+
+    const datas: Date[] = [];
+    if (formNova.periodicidade === 'diario') {
+      const base = inicio ? new Date(inicio) : new Date(hoje);
+      if (!inicio) base.setDate(base.getDate() + 1);
+      for (let i = 0; i < n; i++) datas.push(new Date(base.getFullYear(), base.getMonth(), base.getDate() + i));
+    } else if (formNova.periodicidade === 'semanal') {
+      let base: Date;
+      if (inicio) {
+        base = new Date(inicio);
+      } else {
+        base = new Date(hoje);
+        const dow = parseInt(formNova.diaPagamento || '');
+        if (!isNaN(dow)) {
+          const targetDow = ((dow % 7) + 7) % 7;
+          const diff = (targetDow - base.getDay() + 7) % 7 || 7;
+          base.setDate(base.getDate() + diff);
+        } else {
+          base.setDate(base.getDate() + 7);
+        }
+      }
+      for (let i = 0; i < n; i++) datas.push(new Date(base.getFullYear(), base.getMonth(), base.getDate() + i * 7));
+    } else if (formNova.periodicidade === 'quinzenal') {
+      let base: Date;
+      if (inicio) {
+        base = new Date(inicio);
+      } else {
+        base = new Date(hoje);
+        const dia = parseInt(formNova.diaPagamento || '');
+        if (!isNaN(dia)) {
+          base.setDate(Math.min(dia, 28));
+          if (base <= hoje) base.setDate(base.getDate() + 15);
+        } else {
+          base.setDate(base.getDate() + 15);
+        }
+      }
+      for (let i = 0; i < n; i++) datas.push(new Date(base.getFullYear(), base.getMonth(), base.getDate() + i * 15));
+    } else {
+      // mensal (default)
+      let base: Date;
+      if (inicio) {
+        base = new Date(inicio);
+        for (let i = 0; i < n; i++) {
+          const m = base.getMonth() + i;
+          const y = base.getFullYear();
+          datas.push(new Date(y, m, base.getDate()));
+        }
+      } else {
+        const dia = parseInt(formNova.diaPagamento || '') || hoje.getDate() || 10;
+        const diaSafe = Math.min(dia, 28);
+        let mes = hoje.getMonth() + 1;
+        let ano = hoje.getFullYear();
+        for (let i = 0; i < n; i++) {
+          let m = mes + i;
+          let y = ano;
+          while (m > 11) { m -= 12; y++; }
+          datas.push(new Date(y, m, diaSafe));
+        }
+      }
+    }
+
+    const finais = datas.map((d) => (formNova.diaUtil ? proxDiaUtil(d) : d)).map(toIso);
+    setFormNova((prev) => {
+      const atual = prev.datasParcelas.slice(0, n);
+      const mesma = atual.length === finais.length && atual.every((v, i) => v === finais[i]);
+      if (mesma) return prev;
+      return { ...prev, datasParcelas: finais };
+    });
+  }, [
+    formNova.periodicidade,
+    formNova.numeroParcelas,
+    formNova.diaPagamento,
+    formNova.intervaloDias,
+    formNova.diaUtil,
+    formNova.dataPrimeiraParcela,
+  ]);
 
   // ── Verificar pendências do cliente ──────────────────────
   const verificarPendencias = useCallback(async (clienteId?: string, cpf?: string) => {
@@ -359,6 +464,10 @@ export default function AnaliseCreditoPage() {
             } catch (err) {
               toast.error(`Análise criada, mas auto-aprovação falhou: ${(err as Error).message}`);
             }
+          } else if (!skipAutoApprove && created?.id) {
+            // Caso padrão: envia automaticamente o link de verificação via WhatsApp
+            // ao número cadastrado do cliente. Sem ação manual em Análises → Ações.
+            await handleSendMagicLink(created.id);
           }
         },
         onError: (err) => toast.error(`Erro ao criar análise: ${err.message}`),
@@ -503,7 +612,7 @@ export default function AnaliseCreditoPage() {
                 ) : (
                   filtered.map((a) => (
                     <tr key={a.id} className="border-b hover:bg-muted/50">
-                      <td className="py-3 font-medium">{a.clienteNome}</td>
+                      <td className="py-3 font-medium cursor-pointer hover:text-primary" onClick={() => { if (a.clienteId) openClienteModal(a.clienteId, { tab: 'whatsapp' }); }}>{a.clienteNome}</td>
                       <td className="py-3 text-muted-foreground">{a.cpf}</td>
                       <td className="py-3 text-right font-medium">{formatCurrency(a.valorSolicitado)}</td>
                       <td className="py-3 text-right">{formatCurrency(a.rendaMensal)}</td>
@@ -621,12 +730,12 @@ export default function AnaliseCreditoPage() {
                 />
               </div>
               {showClienteResults && clientesFiltrados.length > 0 && (
-                <div className="absolute z-50 mt-1 w-full bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                <div className="absolute z-50 mt-1 w-full bg-black/80 border rounded-md shadow-lg max-h-48 overflow-y-auto">
                   {clientesFiltrados.map((c) => (
                     <button
                       key={c.id}
                       type="button"
-                      className="w-full text-left px-3 py-2 text-sm hover:bg-accent flex items-center justify-between"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted/90 flex items-center justify-between"
                       onClick={() => {
                         const cpfFormatted = c.cpf ? formatCpf(c.cpf) : '';
                         const rendaStr = c.rendaMensal ? (c.rendaMensal).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '';
@@ -704,19 +813,7 @@ export default function AnaliseCreditoPage() {
                 </div>
               </div>
             </div>
-            <div>
-              <Label htmlFor="renda">Renda Mensal</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm">R$</span>
-                <Input
-                  id="renda"
-                  className="pl-10"
-                  placeholder="5.500,00"
-                  value={formNova.rendaMensal}
-                  onChange={(e) => setFormNova({ ...formNova, rendaMensal: formatBRL(e.target.value) })}
-                />
-              </div>
-            </div>
+           
 
 
             {/* ── Alerta de pendências ──────────────── */}
@@ -760,7 +857,7 @@ export default function AnaliseCreditoPage() {
                     type="number"
                     placeholder="Ex: 4"
                     min={1}
-                    max={60}
+                    max={90}
                     value={formNova.numeroParcelas}
                     onChange={(e) => {
                       const novoN = e.target.value;

@@ -1,5 +1,3 @@
-// @refresh reset
-// @refresh reset
 /**
  * @module ClienteModalContext
  * @description Provider global para o ClienteDetalhesModal unificado.

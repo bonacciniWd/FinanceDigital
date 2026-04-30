@@ -13,6 +13,7 @@
  * @see AuthContext para dados do usuário logado
  */
 import { Link, useLocation, Outlet, useNavigate } from 'react-router';
+import { ClienteModalProvider } from '../contexts/ClienteModalContext';
 import {
   LayoutDashboard,
   Users,
@@ -67,6 +68,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useActivityTracker } from '../hooks/useActivityTracker';
+import { useRealtimeSync } from '../hooks/useRealtimeSync';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useState, useEffect, useRef } from 'react';
@@ -92,6 +94,10 @@ export function MainLayout() {
 
   // Rastreia atividade do usuário logado (online/offline, sessão, heartbeat)
   useActivityTracker(user?.id);
+
+  // Realtime → invalida React Query cache para mudanças externas (ex: cliente
+  // preenchendo link de verificação, outra sessão criando análise)
+  useRealtimeSync();
 
   // ── Prefetch das listas mais usadas ────────────────────────────
   // Roda uma vez no login. Como já existe persistência (localStorage), o
@@ -455,7 +461,9 @@ export function MainLayout() {
 
         {/* Page Content */}
         <main className="flex-1 overflow-auto p-6">
-          <Outlet />
+          <ClienteModalProvider>
+            <Outlet />
+          </ClienteModalProvider>
         </main>
       </div>
 

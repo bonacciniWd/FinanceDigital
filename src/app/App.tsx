@@ -15,7 +15,6 @@ import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
-import { ClienteModalProvider } from './contexts/ClienteModalContext';
 import { Toaster } from './components/ui/sonner';
 import { router } from './routes';
 import { useSyncJurosConfig } from './hooks/useConfigSistema';
@@ -75,11 +74,9 @@ export default function App() {
         }}
       >
         <AuthProvider>
-          <ClienteModalProvider>
-            <RuntimeConfigSync />
-            <RouterProvider router={router} />
-            <Toaster />
-          </ClienteModalProvider>
+          <RuntimeConfigSync />
+          <RouterProvider router={router} />
+          <Toaster />
         </AuthProvider>
       </PersistQueryClientProvider>
     </ThemeProvider>

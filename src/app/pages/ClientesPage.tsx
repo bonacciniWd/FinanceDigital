@@ -32,6 +32,7 @@ import { cn } from '../components/ui/utils';
 import { supabase } from '../lib/supabase';
 import type { Cliente } from '../lib/view-types';
 import type { ClienteInsert, ClienteUpdate, Sexo } from '../lib/database.types';
+import { useClienteModal } from '../contexts/ClienteModalContext';
 
 type ClienteFormData = {
   nome: string;
@@ -71,6 +72,7 @@ const ESTADOS_BR = [
 export default function ClientesPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { openClienteModal } = useClienteModal();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('todos');
   const [mapStateFilter, setMapStateFilter] = useState('');
@@ -205,6 +207,7 @@ export default function ClientesPage() {
   const [docBackFile, setDocBackFile] = useState<File | null>(null);
   const [comprovanteFile, setComprovanteFile] = useState<File | null>(null);
   const [uploadingDocs, setUploadingDocs] = useState(false);
+  
 
   const MAX_DOC_SIZE = 10 * 1024 * 1024; // 10MB
   const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -712,12 +715,7 @@ export default function ClientesPage() {
                     <Phone className="w-4 h-4 mr-1" />
                     WhatsApp
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    onClick={() => setSelectedClient(cliente)}
-                  >
+                  <Button onClick={() => openClienteModal(cliente.id, { tab: 'emprestimos' })}>
                     <Eye className="w-4 h-4 mr-1" />
                     Ver
                   </Button>

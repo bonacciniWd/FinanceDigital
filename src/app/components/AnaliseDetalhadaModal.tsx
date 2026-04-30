@@ -851,7 +851,7 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                           href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(enderecoCadastro)}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-white border border-border hover:bg-muted text-xs font-medium transition-colors"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-red-600 border border-border hover:bg-red-700 text-white text-xs font-medium transition-colors"
                         >
                           <ExternalLink className="h-3 w-3" />
                           Buscar endereço cadastrado
