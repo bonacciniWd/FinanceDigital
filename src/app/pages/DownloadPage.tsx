@@ -123,7 +123,18 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.19', date: '28 Abr 2026', isLatest: true, items: [
+  { version: '1.4.20', date: '30 Abr 2026', isLatest: true, items: [
+    'Verificação de identidade: vídeo de fachada e selfie corrigidos no Safari iOS (Blob hard-ref + ArrayBuffer)',
+    'Passo de revisão com play/refazer por etapa antes do envio',
+    'Edge function notify-verification-submitted: cliente recebe confirmação automática via WhatsApp após enviar verificação',
+    'Acordos: confirmar entrada paga manualmente com upload de comprovante (imagem/PDF)',
+    'Acordos: card enriquecido com KPIs (parcelas pagas, valor entrada, status, ver comprovante)',
+    'Acordos: parcelas do acordo aparecem em grupo separado das parcelas dos empréstimos no modal do cliente',
+    'Fix: parcelas originais não somem mais ao lado das parcelas do acordo (filtro de congeladas)',
+    'Kanban Cobrança: exportar lista de contatos para cobrador via WhatsApp (colunas N1/N2/N3) com nome, CPF, endereço, valor em atraso e telefone',
+    'Migration 052: bucket comprovantes-acordo + colunas de auditoria de entrada paga',
+  ]},
+  { version: '1.4.19', date: '28 Abr 2026', isLatest: false, items: [
     'Adicionar parcela manual: botão "+ Adicionar parcela" na aba Cobrança — define valor, vencimento e empréstimo alvo',
     'Fix: nome do cliente aparecia como "Cliente" na cobrança PIX via WhatsApp',
     'Fix: data de vencimento redundante na mensagem PIX — quando vencida exibe "pague hoje" com a data original',

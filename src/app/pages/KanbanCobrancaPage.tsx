@@ -60,6 +60,7 @@ import { useCriarCobrancaWoovi, useCriarCobvEfi } from '../hooks/useWoovi';
 import { useRegistrarPagamento, useParcelas } from '../hooks/useParcelas';
 import { useCriarAcordo } from '../hooks/useAcordos';
 import { useClientes } from '../hooks/useClientes';
+import { useAdminUsers } from '../hooks/useAdminUsers';
 import ComprovanteUploader from '../components/ComprovanteUploader';
 import { useConfigSistema } from '../hooks/useConfigSistema';
 import { supabase } from '../lib/supabase';
@@ -145,6 +146,8 @@ export default function KanbanCobrancaPage() {
   const { data: parcelasVencidasList = [] } = useParcelas('vencida');
   const { data: instancias = [] } = useInstancias();
   const { data: clientes = [] } = useClientes();
+  const isManager = user?.role === 'admin' || user?.role === 'gerencia';
+  const { data: adminUsers = [] } = useAdminUsers();
   const { data: templatesCobranca = [] } = useTemplatesByCategoria('cobranca');
   const { data: templatesNegociacao = [] } = useTemplatesByCategoria('negociacao');
   const { data: templatesLembrete = [] } = useTemplatesByCategoria('lembrete');
@@ -419,6 +422,24 @@ export default function KanbanCobrancaPage() {
     const minha = instancias.find((i) => i.created_by === user.id && i.phone_number);
     return minha?.phone_number ?? '';
   }, [instancias, user?.id]);
+
+  /** Lista de cobradores disponíveis (admin/gerência podem ver todos com instância conectada+phone). */
+  const cobradoresDisponiveis = useMemo(() => {
+    if (!isManager) return [];
+    // Mapa userId -> primeiro phone_number da instância dele (não-system, conectada)
+    const phoneByUser = new Map<string, string>();
+    for (const inst of instancias) {
+      const isSys = (inst as any).is_system;
+      if (isSys) continue;
+      if (!inst.phone_number || !inst.created_by) continue;
+      if (!phoneByUser.has(inst.created_by)) {
+        phoneByUser.set(inst.created_by, inst.phone_number);
+      }
+    }
+    return adminUsers
+      .filter((u) => ['cobranca', 'admin', 'gerencia'].includes(u.role) && phoneByUser.has(u.id))
+      .map((u) => ({ id: u.id, name: u.name, role: u.role, phone: phoneByUser.get(u.id)! }));
+  }, [isManager, adminUsers, instancias]);
 
   const openExportModal = (colId: string) => {
     const cardsCol = cardsByEtapa[colId] ?? [];
@@ -919,6 +940,28 @@ export default function KanbanCobrancaPage() {
             return (
               <div className="space-y-3 text-sm">
                 <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                  {cobradoresDisponiveis.length > 0 && (
+                    <div>
+                      <label className="text-xs font-medium block mb-1">Selecionar cobrador</label>
+                      <Select
+                        onValueChange={(uid) => {
+                          const c = cobradoresDisponiveis.find((x) => x.id === uid);
+                          if (c) setExportTargetPhone(c.phone);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Escolher cobrador da equipe..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {cobradoresDisponiveis.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.name} <span className="text-muted-foreground">({c.role}) — {c.phone}</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div>
                     <label className="text-xs font-medium block mb-1">Telefone do cobrador (com DDD)</label>
                     <Input

@@ -1,6 +1,6 @@
 # FinanceDigital — Documentação Técnica Completa
 
-> **Atualizado:** 25 de abril de 2026 — v1.4.4  
+> **Atualizado:** 30 de abril de 2026 — v1.4.20  
 > **Stack:** React 18 · TypeScript 5 · Vite 6 · Tailwind CSS v4 · Supabase · React Query (TanStack) · Tesseract.js (OCR)
 
 ---

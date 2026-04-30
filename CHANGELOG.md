@@ -6,6 +6,26 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.4.20] — 2026-04-30
+
+### Adicionado
+- **Verificação de identidade no celular do cliente — gravação de vídeo de fachada e selfie**: corrigida regressão no Safari iOS onde o `Blob` da gravação era coletado pelo GC antes do upload, gerando vídeo quebrado e impossibilitando o `play` na revisão final. Solução: hard-ref via `useRef<Blob>`, materialização via `ArrayBuffer` e ordem de cleanup do `recorder.onstop` reorganizada (clearInterval → setIsRecording(false) → criação do Blob → ref → URL → upload). Auto-stop ao atingir `MAX_VIDEO_DURATION` agora encerra timer e nula a referência.
+- **Passo de revisão em VerifyIdentityPage com play/refazer**: tela final agora exibe `<video controls playsInline preload="metadata" />` por vídeo gravado e botão "Refazer" por etapa, antes do envio definitivo.
+- **Edge function `notify-verification-submitted`**: após submissão de verificação, dispara WhatsApp pela instância `is_system` informando "Recebemos seus dados enviados, se estiver tudo certo, seu empréstimo será aprovado, lembre-se que a chave PIX foi verificada por você no ato do envio... Casa da Moeda agradece a sua preferência". Logs em `whatsapp_mensagens_log` com `metadata.context="verification_submitted"`. Tolerante a falhas (sempre retorna 200 com `{success}`).
+- **Confirmar entrada paga manualmente em acordos**: na aba Cobrança do modal do cliente, novo botão em cada acordo ativo permite anexar comprovante (imagem/PDF, até 10MB) e marcar `entrada_paga=true`. Espelha o webhook EFI quando há `entrada_charge_id` (atualiza `woovi_charges.status='CONFIRMED'`). Audit: `entrada_paga_em` + `entrada_paga_por`.
+- **Bucket privado `comprovantes-acordo`** + RLS para admin/gerência/cobrança (insert/select).
+- **Card de acordo enriquecido**: KPIs (parcelas pagas/total), valor da entrada, status pago/pendente, botão ver comprovante (signed URL).
+- **Agrupamento separado de parcelas por acordo**: na lista "Parcelas pendentes & vencidas", parcelas com `acordoId` aparecem em grupo distinto (header azul, ícone Handshake) acima dos empréstimos comuns. Inclui badge de status da entrada.
+- **Exportação de contatos para cobradores via WhatsApp**: botão `Download` ao lado do botão de ordenação nas colunas N1, N2 e N3 do Kanban de Cobrança. Modal lista todos os clientes da coluna com checkbox (todos selecionados por padrão), permite escolher cobrador da equipe (admin/gerência veem dropdown com `nome (role) — telefone`) ou digitar número manualmente. Mensagem formatada contém: nome completo, CPF, telefone, endereço completo, valor original, juros+multa, total em atraso e dias em atraso. Envio pela instância `is_system`.
+- **Migração 052** (`comprovante_entrada_acordo.sql`): bucket + colunas `entrada_comprovante_url`, `entrada_paga_em`, `entrada_paga_por` em `acordos`.
+
+### Corrigido
+- **Vídeo de fachada continuava "contando como aberto/gravando" depois de terminado**: timer permanecia ativo quando `recorder.onstop` era disparado pelo auto-stop interno; corrigido por clear inline antes do toggle de estado.
+- **Bug do freeze: parcelas originais continuavam aparecendo ao lado das parcelas do acordo**: o filtro `pendentes` em CobrancaTab não excluía `congelada=true`. Corrigido. (A freeze ao nível de DB já funcionava — o problema era apenas de UI).
+- **Edge function `notify-verification-submitted` não disparava após primeiro deploy**: as alterações de frontend que fazem o `supabase.functions.invoke` não haviam sido pushed ao repositório; após `git push` e novo deploy Vercel, dispara corretamente.
+
+---
+
 ## [1.4.19] — 2026-04-28
 
 ### Adicionado
