@@ -26,8 +26,9 @@ import { Calendar } from '../components/ui/calendar';
 import { ptBR } from 'date-fns/locale/pt-BR';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Skeleton } from '../components/ui/skeleton';
-import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus, Shield, Send, CalendarDays, X } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Clock, AlertTriangle, FileText, Plus, Shield, Send, CalendarDays, X, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 
 import { useAnalises, useCreateAnalise, useUpdateAnalise } from '../hooks/useAnaliseCredito';
 import { useClientes } from '../hooks/useClientes';
@@ -77,11 +78,58 @@ export default function AnaliseCreditoPage() {
   const { openClienteModal } = useClienteModal();
 
   // ── React Query ──────────────────────────────────────────
-  const { data: analises, isLoading, isError } = useAnalises();
+  const queryClient = useQueryClient();
+  const { data: analises, isLoading, isError, refetch: refetchAnalises, isFetching } = useAnalises();
   const createMutation = useCreateAnalise();
   const updateMutation = useUpdateAnalise();
   const { data: clientes } = useClientes();
   const { user } = useAuth();
+
+  // ── Refresh manual: invalida tudo que esta página depende ─
+  const handleRefresh = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['analises-credito'] }),
+      queryClient.invalidateQueries({ queryKey: ['identity-verifications'] }),
+      queryClient.invalidateQueries({ queryKey: ['verification-by-analise'] }),
+      queryClient.invalidateQueries({ queryKey: ['clientes'] }),
+    ]);
+    refetchAnalises();
+    toast.success('Lista atualizada.');
+  }, [queryClient, refetchAnalises]);
+
+  // ── Realtime: ouvir mudanças em analises_credito + identity_verifications ─
+  // Resolve o problema de o cliente terminar a verificação e a tela do operador
+  // ficar travada no estado anterior (cache localStorage não invalidava sozinho).
+  useEffect(() => {
+    const channel = supabase
+      .channel('analise-credito-page')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'analises_credito' },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['analises-credito'] });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'identity_verifications' },
+        (payload) => {
+          queryClient.invalidateQueries({ queryKey: ['identity-verifications'] });
+          queryClient.invalidateQueries({ queryKey: ['verification-by-analise'] });
+          // analises_credito tem verification_id FK — também recarrega a lista
+          queryClient.invalidateQueries({ queryKey: ['analises-credito'] });
+          const newRow = (payload.new ?? {}) as { status?: string };
+          if (newRow.status === 'pending') {
+            toast.info('Cliente enviou novos dados de verificação.');
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [queryClient]);
 
   const formatCpf = (v: string) => {
     const digits = v.replace(/\D/g, '').slice(0, 11);
@@ -267,12 +315,19 @@ export default function AnaliseCreditoPage() {
 
   // ── Enviar Link de Verificação via WhatsApp ──────────────
   const [sendingLink, setSendingLink] = useState(false);
-  const handleSendMagicLink = async (analiseId: string) => {
+  const handleSendMagicLink = async (
+    analiseId: string,
+    options?: { mode?: 'initial' | 'retry' | 'retry_after_rejection'; rejection_reason?: string }
+  ) => {
     if (!user || sendingLink) return;
     setSendingLink(true);
     try {
       const { data, error } = await supabase.functions.invoke('send-verification-link', {
-        body: { analise_id: analiseId },
+        body: {
+          analise_id: analiseId,
+          mode: options?.mode ?? 'initial',
+          rejection_reason: options?.rejection_reason,
+        },
       });
       if (error) throw error;
       if (data?.success) {
@@ -460,6 +515,13 @@ export default function AnaliseCreditoPage() {
               });
               if (error) throw error;
               if (!data?.success) throw new Error(data?.error || 'Erro na auto-aprovação');
+              // Invalidar caches para refletir status='aprovado' imediatamente —
+              // sem isso a lista permanece em 'em_analise' até refresh manual.
+              queryClient.invalidateQueries({ queryKey: ['analises-credito'] });
+              queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+              queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+              queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+              queryClient.invalidateQueries({ queryKey: ['clientes'] });
               toast.success(`Auto-aprovação concluída — ${data.parcelas_geradas} parcela(s) criada(s).`);
             } catch (err) {
               toast.error(`Análise criada, mas auto-aprovação falhou: ${(err as Error).message}`);
@@ -494,10 +556,21 @@ export default function AnaliseCreditoPage() {
             {isLoading ? '...' : `${filtered.length} solicitação(ões) encontrada(s)`}
           </p>
         </div>
-        <Button className="bg-primary hover:bg-primary/90" onClick={() => setShowNovaAnalise(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          Nova Análise
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleRefresh}
+            disabled={isFetching}
+            title="Atualizar lista (também atualiza automaticamente em tempo real)"
+          >
+            <RefreshCw className={`w-4 h-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
+            {isFetching ? 'Atualizando...' : 'Atualizar'}
+          </Button>
+          <Button className="bg-primary hover:bg-primary/90" onClick={() => setShowNovaAnalise(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            Nova Análise
+          </Button>
+        </div>
       </div>
 
       {/* Filtros */}

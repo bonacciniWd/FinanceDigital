@@ -45,17 +45,23 @@ import { toast } from 'sonner';
 import { useVerificationsByAnalise, useUpdateVerification, useCreateVerificationLog, useVerificationLogs } from '../hooks/useIdentityVerification';
 import { useUpdateAnalise } from '../hooks/useAnaliseCredito';
 import { useCliente } from '../hooks/useClientes';
+import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useAuth } from '../contexts/AuthContext';
 import { getSignedUrl } from '../services/identityVerificationService';
 import { supabase } from '../lib/supabase';
 import { useQueryClient } from '@tanstack/react-query';
 import type { AnaliseCredito } from '../lib/view-types';
 
+interface SendMagicLinkOptions {
+  mode?: 'initial' | 'retry' | 'retry_after_rejection';
+  rejection_reason?: string;
+}
+
 interface Props {
   analise: AnaliseCredito | null;
   open: boolean;
   onClose: () => void;
-  onSendMagicLink?: (analiseId: string) => void;
+  onSendMagicLink?: (analiseId: string, options?: SendMagicLinkOptions) => void;
 }
 
 const STATUS_LABELS: Record<string, { label: string; className: string }> = {
@@ -188,6 +194,8 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
   const updateVerification = useUpdateVerification();
   const createLog = useCreateVerificationLog();
   const updateAnalise = useUpdateAnalise();
+  const { data: instancias = [] } = useInstancias();
+  const enviarWhatsapp = useEnviarWhatsapp();
 
   // Fetch client data to compare profissao
   const { data: clienteData } = useCliente(analise?.clienteId ?? undefined);
@@ -442,6 +450,37 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
           });
 
           if (autoReject) {
+            // Mensagem final de recusa — enviada via instancia sistema, sem link.
+            const sistemaInstancia = instancias.find(
+              (i: { is_system?: boolean; status?: string; id: string }) =>
+                i.is_system && (i.status === 'conectado' || i.status === 'conectada')
+            ) ?? instancias.find(
+              (i: { status?: string; id: string }) => i.status === 'conectado' || i.status === 'conectada'
+            );
+            const telefoneCliente = clienteData?.telefone;
+            if (sistemaInstancia && telefoneCliente) {
+              const mensagemFinal = [
+                '❌ *Análise de crédito recusada*',
+                '',
+                `Olá, *${analise.clienteNome}*.`,
+                '',
+                'Após 3 tentativas, não foi possível concluir a verificação de identidade necessária para liberar o seu crédito.',
+                '',
+                `📋 *Último motivo informado:* ${rejectionReason}`,
+                '',
+                'Sua solicitação foi *recusada* e o link de verificação não estará mais disponível.',
+                '',
+                'Caso queira tentar novamente no futuro, entre em contato com a nossa equipe.',
+                '',
+                '_Casa da Moeda_',
+              ].join('\n');
+              enviarWhatsapp.mutate({
+                instancia_id: sistemaInstancia.id,
+                telefone: telefoneCliente,
+                conteudo: mensagemFinal,
+                cliente_id: analise.clienteId ?? undefined,
+              });
+            }
             updateAnalise.mutate(
               { id: analise.id, updates: { status: 'recusado', motivo: 'Verificação de identidade rejeitada 3 vezes.' } },
               {
@@ -452,9 +491,12 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
               }
             );
           } else {
-            // Enviar novo link via WhatsApp automaticamente
+            // Reenvio após rejeição: usa template específico com motivo.
             if (onSendMagicLink) {
-              onSendMagicLink(analise.id);
+              onSendMagicLink(analise.id, {
+                mode: 'retry_after_rejection',
+                rejection_reason: rejectionReason,
+              });
             }
             toast.info(`Verificação rejeitada. Novo link enviado ao cliente (${newRetryCount}/3).`);
             setShowRejectForm(false);
@@ -496,9 +538,9 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
             performed_by: user.id,
             details: { new_phrase: retryPhrase },
           });
-          // Enviar novo link via WhatsApp automaticamente
+          // Solicita reenvio com mensagem específica de retry (sem rejeição).
           if (onSendMagicLink) {
-            onSendMagicLink(analise.id);
+            onSendMagicLink(analise.id, { mode: 'retry' });
           }
           toast.info('Reenvio solicitado. Novo link sendo enviado via WhatsApp.');
           setShowRetryForm(false);
@@ -685,7 +727,7 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                         <Video className="h-4 w-4" /> Vídeo de Verificação
                       </p>
                       <video
-                        className="w-96 rounded-lg bg-black"
+                        className="w-full rounded-lg bg-black aspect-video"
                         src={videoSignedUrl}
                         controls
                         playsInline
@@ -712,7 +754,7 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                         <Home className="h-4 w-4" /> Vídeo da Fachada
                       </p>
                       <video
-                        className="w-96 rounded-lg bg-black"
+                        className="w-full rounded-lg bg-black aspect-video"
                         src={residenceVideoUrl}
                         controls
                         playsInline

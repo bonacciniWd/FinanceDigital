@@ -135,10 +135,24 @@ async function efiRequest(creds: EfiCredentials, method: string, path: string, b
 
   // DELETE e alguns endpoints podem retornar 204 No Content
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
 
   if (!response.ok) {
-    const msg = data?.mensagem || data?.message || `EFI API error: ${response.status}`;
+    // EFI retorna formatos variados de erro. Tentar extrair o máximo possível.
+    const violacoes = Array.isArray(data?.violacoes) && data.violacoes.length
+      ? " — " + data.violacoes
+          .map((v: any) => `${v.propriedade || v.propriedade_violada || ""}: ${v.razao || v.descricao || JSON.stringify(v)}`)
+          .join("; ")
+      : "";
+    const title = data?.title || data?.nome || data?.error;
+    const detail = data?.detail || data?.mensagem || data?.message;
+    const msg = `EFI API ${response.status} ${path}${title ? ` — ${title}` : ""}${detail ? `: ${detail}` : ""}${violacoes}${(!title && !detail && !violacoes && text) ? ` — ${text.substring(0, 300)}` : ""}`;
+    console.error("[efi] request failed", method, path, response.status, text);
     throw new Error(msg);
   }
 
@@ -469,15 +483,34 @@ Deno.serve(async (req: Request) => {
         }
         if (!creds.pixKey) throw new Error("Chave PIX não configurada.");
 
+        // EFI exige devedor com CPF válido (11 dígitos) em cobranças com vencimento.
+        const cpfDigits = (cobvCpf || "").replace(/\D/g, "");
+        if (!cpfDigits || cpfDigits.length !== 11) {
+          // tentar buscar do cadastro
+          const { data: cliRow } = await adminClient
+            .from("clientes")
+            .select("cpf, nome")
+            .eq("id", cobvClienteId)
+            .maybeSingle();
+          const fallbackCpf = (cliRow?.cpf || "").replace(/\D/g, "");
+          if (!fallbackCpf || fallbackCpf.length !== 11) {
+            return errorResponse(
+              "Cobrança com vencimento (cobv) exige CPF válido do devedor. " +
+              "Cadastre o CPF do cliente antes de gerar o Pix da entrada."
+            );
+          }
+        }
+        const cpfFinal = cpfDigits.length === 11
+          ? cpfDigits
+          : ((await adminClient.from("clientes").select("cpf").eq("id", cobvClienteId).maybeSingle()).data?.cpf || "").replace(/\D/g, "");
+
         const cobvTxid = crypto.randomUUID().replace(/-/g, "").substring(0, 35);
         const cobvPayload: Record<string, unknown> = {
           calendario: { dataDeVencimento: data_vencimento, validadeAposVencimento: 30 },
           valor: { original: cobvValor.toFixed(2) },
           chave: creds.pixKey,
+          devedor: { cpf: cpfFinal, nome: (cobvNome || "Cliente").substring(0, 200) },
         };
-        if (cobvCpf) {
-          cobvPayload.devedor = { cpf: cobvCpf.replace(/\D/g, ""), nome: cobvNome || "Cliente" };
-        }
         if (cobvDescricao) cobvPayload.solicitacaoPagador = cobvDescricao.substring(0, 140);
         if (multa) cobvPayload.valor = { ...(cobvPayload.valor as Record<string, unknown>), multa };
         if (juros) cobvPayload.valor = { ...(cobvPayload.valor as Record<string, unknown>), juros };

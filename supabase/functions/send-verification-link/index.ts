@@ -63,11 +63,19 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Body ──────────────────────────────────────────────
-    const { analise_id, instancia_id } = await req.json();
+    const { analise_id, instancia_id, mode = "initial", rejection_reason } = await req.json();
 
     if (!analise_id) {
       return new Response(
         JSON.stringify({ success: false, error: "Campo obrigatório: analise_id" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const validModes = ["initial", "retry", "retry_after_rejection"];
+    if (!validModes.includes(mode)) {
+      return new Response(
+        JSON.stringify({ success: false, error: `mode inválido. Aceitos: ${validModes.join(", ")}` }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -284,7 +292,17 @@ Deno.serve(async (req: Request) => {
     // ── Montar link e mensagem ───────────────────────────
     const verifyUrl = `${siteUrl}/verify-identity?analise_id=${analise_id}`;
 
-    const mensagem = `🔐 *Verificação de Identidade — Fintech*\n\nOlá, *${analise.cliente_nome}*!\n\nPara dar continuidade à sua análise de crédito, precisamos que você confirme sua identidade.\n\n📋 *O que você vai precisar:*\n• Gravar um vídeo-selfie lendo uma frase de verificação\n• Enviar foto do seu documento (frente e verso)\n\n⏰ *Prazo:* Este link expira em 48 horas.\n\n👉 Clique no link abaixo para iniciar:\n${verifyUrl}\n\n_Se você não solicitou esta verificação, ignore esta mensagem._`;
+    let mensagem: string;
+    if (mode === "retry_after_rejection") {
+      const reasonLine = rejection_reason
+        ? `\n📋 *Motivo da rejeição anterior:* ${rejection_reason}\n`
+        : "";
+      mensagem = `⚠️ *Verificação reprovada — refaça por favor*\n\nOlá, *${analise.cliente_nome}*!\n\nIdentificamos um problema na sua verificação anterior e ela não pôde ser aprovada.${reasonLine}\nPara prosseguirmos com a análise do seu crédito, precisamos que você *refaça a verificação* com atenção aos pontos sinalizados.\n\n📋 *O que você vai precisar:*\n• Gravar um vídeo-selfie lendo a frase de verificação\n• Enviar foto do seu documento (frente e verso)\n• Conferir os dados pessoais\n\n⏰ *Prazo:* este link expira em 48 horas.\n\n👉 Clique no link abaixo para refazer:\n${verifyUrl}\n\n_Em caso de dúvida, responda esta mensagem._`;
+    } else if (mode === "retry") {
+      mensagem = `🔄 *Reenvio de verificação solicitado — Casa da Moeda*\n\nOlá, *${analise.cliente_nome}*!\n\nNossa equipe precisa que você *refaça alguns passos da sua verificação* para concluirmos a análise do seu crédito.\n\n📋 *O que você vai precisar:*\n• Gravar um novo vídeo-selfie\n• Conferir as fotos do documento\n\n⏰ *Prazo:* este link expira em 48 horas.\n\n👉 Clique no link para iniciar:\n${verifyUrl}\n\n_Em caso de dúvida, responda esta mensagem._`;
+    } else {
+      mensagem = `🔐 *Verificação de Identidade — Fintech*\n\nOlá, *${analise.cliente_nome}*!\n\nPara dar continuidade à sua análise de crédito, precisamos que você confirme sua identidade.\n\n📋 *O que você vai precisar:*\n• Gravar um vídeo-selfie lendo uma frase de verificação\n• Enviar foto do seu documento (frente e verso)\n\n⏰ *Prazo:* Este link expira em 48 horas.\n\n👉 Clique no link abaixo para iniciar:\n${verifyUrl}\n\n_Se você não solicitou esta verificação, ignore esta mensagem._`;
+    }
 
     // ── Enviar via Evolution API ─────────────────────────
     // Normalizar número: apenas dígitos + garantir DDI 55
@@ -333,7 +351,7 @@ Deno.serve(async (req: Request) => {
         tipo: "text",
         direcao: "enviada",
         status: "failed",
-        metadata: { context: "verification_link", analise_id, verification_id: verificationId, error: errMsg },
+        metadata: { context: "verification_link", mode, analise_id, verification_id: verificationId, error: errMsg },
       });
 
       await adminClient.from("verification_logs").insert({
@@ -376,6 +394,7 @@ Deno.serve(async (req: Request) => {
       status: evoSuccess ? "sent" : "failed",
       metadata: {
         context: "verification_link",
+        mode,
         analise_id,
         verification_id: verificationId,
         evolution_status: evoRes.status,
