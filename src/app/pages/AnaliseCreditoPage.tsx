@@ -356,6 +356,10 @@ export default function AnaliseCreditoPage() {
     let result = analises;
     if (filtroStatus !== 'todos') {
       result = result.filter((a) => a.status === filtroStatus);
+    } else {
+      // Aprovados viram empréstimo ativo e poluem visualmente esta lista —
+      // só aparecem quando o usuário escolhe explicitamente "Aprovado" no filtro.
+      result = result.filter((a) => a.status !== 'aprovado');
     }
     if (busca.trim()) {
       const q = busca.toLowerCase();

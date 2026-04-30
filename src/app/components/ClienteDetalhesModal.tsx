@@ -890,8 +890,17 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
       }
       await syncEmprestimoStatus.mutateAsync(addParcelaEmprestimoId);
       toast.success(`Parcela ${proxNum} adicionada`);
-      setShowAddParcelaModal(false);
-      setAddParcelaValor('');
+      // Mantém o painel aberto para adicionar mais (UX cliente final).
+      // Avança o vencimento sugerido baseado na periodicidade do empréstimo,
+      // partindo da parcela recém-criada — respeitando ordem e períodos.
+      const dias = inferirPeriodoDias(addParcelaEmprestimoId);
+      const proxVenc = new Date(addParcelaVencimento + 'T00:00:00');
+      proxVenc.setDate(proxVenc.getDate() + dias);
+      const yyyy = proxVenc.getFullYear();
+      const mm = String(proxVenc.getMonth() + 1).padStart(2, '0');
+      const dd = String(proxVenc.getDate()).padStart(2, '0');
+      setAddParcelaVencimento(`${yyyy}-${mm}-${dd}`);
+      // Mantém o valor preenchido para acelerar adicionar parcelas iguais.
     } catch (err) {
       toast.error(`Erro: ${(err as Error).message}`);
     } finally {
@@ -1314,19 +1323,94 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
           {emprestimos.filter((e) => e.status === 'ativo' || e.status === 'inadimplente').length > 0 && (
             <Button
               size="sm"
-              variant="outline"
+              variant={showAddParcelaModal ? 'secondary' : 'outline'}
               className="h-8"
               onClick={() => {
+                if (showAddParcelaModal) {
+                  setShowAddParcelaModal(false);
+                  return;
+                }
                 const ativos = emprestimos.filter((e) => e.status === 'ativo' || e.status === 'inadimplente');
                 setAddParcelaEmprestimoId(ativos[0]?.id ?? '');
                 setShowAddParcelaModal(true);
               }}
             >
               <Plus className="w-3.5 h-3.5 mr-1" />
-              Adicionar parcela
+              {showAddParcelaModal ? 'Fechar' : 'Adicionar parcela'}
             </Button>
           )}
         </div>
+
+        {/* ── Painel inline: Adicionar parcela (sem modal, UX simplificada) ── */}
+        {showAddParcelaModal && (
+          <div className="mb-3 rounded-lg border border-blue-200 dark:border-blue-900/50 bg-blue-50/60 dark:bg-blue-950/20 p-4 space-y-3">
+            <div className="flex items-center gap-2 text-sm font-medium text-blue-900 dark:text-blue-200">
+              <Plus className="w-4 h-4" />
+              Adicionar parcela
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="md:col-span-3">
+                <Label className="text-xs">Empréstimo</Label>
+                <select
+                  className="mt-1 w-full h-9 rounded-md border bg-background px-2 text-sm"
+                  value={addParcelaEmprestimoId}
+                  onChange={(e) => setAddParcelaEmprestimoId(e.target.value)}
+                >
+                  {emprestimos
+                    .filter((e) => e.status === 'ativo' || e.status === 'inadimplente')
+                    .map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {formatCurrency(e.valor)} · {e.parcelas}x · {e.status}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <Label className="text-xs">Valor</Label>
+                <Input
+                  type="number"
+                  min={0.01}
+                  step={0.01}
+                  placeholder="0,00"
+                  value={addParcelaValor}
+                  onChange={(e) => setAddParcelaValor(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Vencimento</Label>
+                <Input
+                  type="date"
+                  min={todayIso}
+                  value={addParcelaVencimento}
+                  onChange={(e) => setAddParcelaVencimento(e.target.value)}
+                />
+              </div>
+              <div className="flex items-end">
+                <Button
+                  className="w-full"
+                  onClick={handleAddParcela}
+                  disabled={addParcelaSubmitting || !addParcelaValor || !addParcelaVencimento}
+                >
+                  {addParcelaSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
+                  Adicionar
+                </Button>
+              </div>
+            </div>
+            {addParcelaEmprestimoId && (() => {
+              const dias = inferirPeriodoDias(addParcelaEmprestimoId);
+              const label = dias === 1 ? 'diária' : dias === 7 ? 'semanal' : dias === 15 ? 'quinzenal' : dias >= 28 && dias <= 31 ? 'mensal' : `a cada ${dias} dias`;
+              const proxNum = parcelas
+                .filter((p) => p.emprestimoId === addParcelaEmprestimoId)
+                .reduce((max, p) => Math.max(max, p.numero), 0) + 1;
+              return (
+                <p className="text-[11px] text-blue-700 dark:text-blue-300">
+                  Próxima parcela: <b>nº {proxNum}</b> · periodicidade <b>{label}</b> · vencimento avança automaticamente a cada clique em <b>Adicionar</b>.
+                </p>
+              );
+            })()}
+          </div>
+        )}
+
         {pendentes.length === 0 ? (
           <div className="text-xs text-muted-foreground">Sem parcelas pendentes</div>
         ) : (() => {
@@ -1816,80 +1900,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         );
       })()}
 
-      {/* ── Modal: Adicionar parcela manualmente ── */}
-      {showAddParcelaModal && (
-        <Dialog open onOpenChange={(o) => { if (!o) setShowAddParcelaModal(false); }}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Plus className="w-5 h-5 text-blue-500" />
-                Adicionar parcela
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-3">
-              <div>
-                <Label className="text-xs">Empréstimo</Label>
-                <select
-                  className="mt-1 w-full h-9 rounded-md border bg-background px-2 text-sm"
-                  value={addParcelaEmprestimoId}
-                  onChange={(e) => setAddParcelaEmprestimoId(e.target.value)}
-                >
-                  {emprestimos
-                    .filter((e) => e.status === 'ativo' || e.status === 'inadimplente')
-                    .map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {formatCurrency(e.valor)} · {e.parcelas}x · {e.status}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs">Valor</Label>
-                  <Input
-                    type="number"
-                    min={0.01}
-                    step={0.01}
-                    placeholder="0,00"
-                    value={addParcelaValor}
-                    onChange={(e) => setAddParcelaValor(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs">Vencimento</Label>
-                  <Input
-                    type="date"
-                    min={todayIso}
-                    value={addParcelaVencimento}
-                    onChange={(e) => setAddParcelaVencimento(e.target.value)}
-                  />
-                </div>
-              </div>
-              <p className="text-[11px] text-muted-foreground">
-                A parcela será adicionada como <b>pendente</b>, com numeração sequencial. O empréstimo terá o total de parcelas incrementado e o status recalculado.
-              </p>
-              {addParcelaEmprestimoId && (() => {
-                const dias = inferirPeriodoDias(addParcelaEmprestimoId);
-                const label = dias === 1 ? 'diária' : dias === 7 ? 'semanal' : dias === 15 ? 'quinzenal' : dias >= 28 && dias <= 31 ? 'mensal' : `a cada ${dias} dias`;
-                return (
-                  <p className="text-[11px] text-blue-600 dark:text-blue-400">
-                    Período inferido: <b>{label}</b> · vencimento sugerido com base na última parcela.
-                  </p>
-                );
-              })()}
-              <div className="flex gap-2 pt-2">
-                <Button variant="outline" className="flex-1" onClick={() => setShowAddParcelaModal(false)} disabled={addParcelaSubmitting}>
-                  Cancelar
-                </Button>
-                <Button className="flex-1" onClick={handleAddParcela} disabled={addParcelaSubmitting}>
-                  {addParcelaSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
-                  Adicionar
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+      {/* ── Adicionar parcela: agora é inline na seção acima (sem modal) ── */}
 
       {/* ── Modal: Confirmar Pagamento Manual com Comprovante ── */}
       {showComprovanteModal && comprovanteParcela && (() => {

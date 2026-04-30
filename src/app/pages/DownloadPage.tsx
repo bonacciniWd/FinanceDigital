@@ -123,7 +123,18 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.4.20', date: '30 Abr 2026', isLatest: true, items: [
+  { version: '1.5.0', date: '30 Abr 2026', isLatest: true, items: [
+    'Análise de Crédito: refresh em tempo real (Realtime + botão Atualizar) — fim do "fechar e abrir o app" para ver novos dados',
+    'Verificação: mensagens de WhatsApp distintas para reenvio, rejeição com motivo e recusa final',
+    'Adicionar parcela inline (sem modal): formulário fica aberto, número e vencimento avançam automaticamente para cadastrar várias seguidas',
+    'Análises aprovadas saem da lista padrão (já viram empréstimo ativo) — voltam ao selecionar filtro "Aprovado"',
+    'Fix: skipVerification agora reflete "aprovado" imediatamente (cache invalidado após approve-credit)',
+    'Fix: PIX 400 ao gerar entrada do acordo (CPF agora obrigatório no payload cobv da EFI + erros mais claros)',
+    'Fix: aba Acordos com fundo legível em modo claro/escuro',
+    'Fix: vídeo de verificação/fachada com moldura preta cobrindo toda a janela',
+    'Migration 053: identity_verifications na publicação supabase_realtime',
+  ]},
+  { version: '1.4.20', date: '30 Abr 2026', isLatest: false, items: [
     'Verificação de identidade: vídeo de fachada e selfie corrigidos no Safari iOS (Blob hard-ref + ArrayBuffer)',
     'Passo de revisão com play/refazer por etapa antes do envio',
     'Edge function notify-verification-submitted: cliente recebe confirmação automática via WhatsApp após enviar verificação',

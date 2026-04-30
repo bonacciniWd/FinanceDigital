@@ -6,6 +6,23 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.5.0] — 2026-04-30
+
+### Adicionado
+- **Refresh em tempo real na Análise de Crédito (resolve dados travados no Electron)**: botão **Atualizar** no cabeçalho da página + Realtime subscription via Supabase Channel ouvindo `analises_credito` e `identity_verifications`. Quando o cliente envia vídeos/comprovante/localização, a tela do operador atualiza automaticamente sem precisar fechar e reabrir o app. Toast informa quando novos dados chegam.
+- **Migration 053** (`realtime_identity_verifications.sql`): adiciona `identity_verifications` à publicação `supabase_realtime` (sem isso o canal não disparava).
+- **Mensagens de WhatsApp distintas por contexto na verificação**: edge function `send-verification-link` agora aceita `mode` (`initial` | `retry` | `retry_after_rejection`) e `rejection_reason`. Texto de **rejeição + reenvio** inclui o motivo informado pelo analista; texto de **solicitação de reenvio** (sem rejeição prévia) tem template próprio. Após 3 rejeições, dispara mensagem final de recusa via instância sistema (sem link).
+- **Adicionar parcela inline (sem modal)**: na aba Cobrança do modal do cliente, o painel “Adicionar parcela” agora abre embutido na própria seção. Após clicar em **Adicionar**, o formulário permanece aberto, o número da parcela incrementa automaticamente e o vencimento avança respeitando a periodicidade inferida do empréstimo — permite cadastrar várias parcelas em sequência sem esforço cognitivo. (UX para cliente final).
+
+### Corrigido
+- **`skipVerification` ainda caindo em “em análise”**: após o `approve-credit` retornar sucesso no fluxo de auto-aprovação, faltava invalidar o cache do React Query — a UI permanecia com a versão antiga (`em_analise`) persistida em `localStorage` até reabrir o app. Agora invalida `analises-credito`, `emprestimos`, `parcelas`, `dashboard-stats`, `clientes` imediatamente após o sucesso.
+- **PIX 400 ao gerar entrada do acordo**: o payload do `cobv` na EFI omitia o bloco `devedor` quando o CPF não vinha no body. EFI exige CPF para `cobv`. Agora a edge function `efi`, no caso `create_cobv`, valida CPF (11 dígitos), faz fallback consultando a tabela `clientes` e aborta com erro claro se ausente. Logs de erro agora extraem `title`, `detail`, `mensagem` e `violacoes` da resposta da EFI para diagnóstico acionável.
+- **Aprovados poluindo a lista de Análises**: empréstimos já aprovados viraram empréstimo ativo na própria página de Empréstimos; então, no filtro “Todos” (padrão), análises com status `aprovado` agora são ocultadas. Continuam acessíveis selecionando explicitamente o filtro **Aprovado**.
+- **Fundo branco prejudicando visibilidade da aba Acordos**: cards e cabeçalho do grupo de acordos no modal do cliente agora usam `bg-slate-50/100 dark:bg-slate-900/40` com cores adequadas também no modo claro.
+- **“Máscara” preta cobrindo só parte do vídeo de verificação/fachada**: containers de vídeo na `AnaliseDetalhadaModal` agora carregam `bg-black aspect-video` no wrapper com `object-contain` no `<video>` — a moldura preta cobre toda a janela mesmo em vídeos verticais.
+
+---
+
 ## [1.4.20] — 2026-04-30
 
 ### Adicionado

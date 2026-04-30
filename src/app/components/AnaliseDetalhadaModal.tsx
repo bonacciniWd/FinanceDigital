@@ -726,12 +726,14 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                       <p className="text-sm font-medium mb-2 flex items-center gap-2">
                         <Video className="h-4 w-4" /> Vídeo de Verificação
                       </p>
-                      <video
-                        className="w-full rounded-lg bg-black aspect-video"
-                        src={videoSignedUrl}
-                        controls
-                        playsInline
-                      />
+                      <div className="overflow-hidden rounded-lg bg-black aspect-video w-full flex items-center justify-center">
+                        <video
+                          className="w-full h-full object-contain block"
+                          src={videoSignedUrl}
+                          controls
+                          playsInline
+                        />
+                      </div>
                     </div>
                   ) : latestVerification.videoUrl ? (
                     <Button variant="outline" onClick={loadMedia} disabled={loadingMedia}>
@@ -753,12 +755,14 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
                       <p className="text-sm font-medium mb-2 flex items-center gap-2">
                         <Home className="h-4 w-4" /> Vídeo da Fachada
                       </p>
-                      <video
-                        className="w-full rounded-lg bg-black aspect-video"
-                        src={residenceVideoUrl}
-                        controls
-                        playsInline
-                      />
+                      <div className="overflow-hidden rounded-lg bg-black aspect-video w-full flex items-center justify-center">
+                        <video
+                          className="w-full h-full object-contain block"
+                          src={residenceVideoUrl}
+                          controls
+                          playsInline
+                        />
+                      </div>
                     </div>
                   ) : latestVerification.residenceVideoUrl && !loadingMedia ? (
                     <Button variant="outline" onClick={loadMedia} disabled={loadingMedia}>
