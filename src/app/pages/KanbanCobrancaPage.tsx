@@ -42,6 +42,8 @@ import {
   QrCode,
   Image,
   ArrowUpDown,
+  Download,
+  Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -57,6 +59,7 @@ import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useCriarCobrancaWoovi, useCriarCobvEfi } from '../hooks/useWoovi';
 import { useRegistrarPagamento, useParcelas } from '../hooks/useParcelas';
 import { useCriarAcordo } from '../hooks/useAcordos';
+import { useClientes } from '../hooks/useClientes';
 import ComprovanteUploader from '../components/ComprovanteUploader';
 import { useConfigSistema } from '../hooks/useConfigSistema';
 import { supabase } from '../lib/supabase';
@@ -130,11 +133,18 @@ export default function KanbanCobrancaPage() {
   // Gerar PIX per parcela
   const [gerandoPixId, setGerandoPixId] = useState<string | null>(null);
 
+  // ── Exportar contatos em lote (cobradores de rua) ──
+  const [exportColId, setExportColId] = useState<string | null>(null);
+  const [exportSelected, setExportSelected] = useState<Set<string>>(new Set());
+  const [exportTargetPhone, setExportTargetPhone] = useState('');
+  const [exportSending, setExportSending] = useState(false);
+
   const { data: allCards = [], isLoading, error, refetch } = useCardsCobranca();
   const { data: emprestimos = [] } = useEmprestimos();
   const { data: parcelasPendentes = [] } = useParcelas('pendente');
   const { data: parcelasVencidasList = [] } = useParcelas('vencida');
   const { data: instancias = [] } = useInstancias();
+  const { data: clientes = [] } = useClientes();
   const { data: templatesCobranca = [] } = useTemplatesByCategoria('cobranca');
   const { data: templatesNegociacao = [] } = useTemplatesByCategoria('negociacao');
   const { data: templatesLembrete = [] } = useTemplatesByCategoria('lembrete');
@@ -396,6 +406,108 @@ export default function KanbanCobrancaPage() {
     );
   };
 
+  // ── Export: helpers ────────────────────────────────────────
+  const clientesById = useMemo(() => {
+    const m = new Map<string, typeof clientes[number]>();
+    clientes.forEach((c) => m.set(c.id, c));
+    return m;
+  }, [clientes]);
+
+  /** Telefone padrão do cobrador (a partir da instância dele). Admin/gerência cai em vazio. */
+  const defaultCobradorPhone = useMemo(() => {
+    if (!user?.id) return '';
+    const minha = instancias.find((i) => i.created_by === user.id && i.phone_number);
+    return minha?.phone_number ?? '';
+  }, [instancias, user?.id]);
+
+  const openExportModal = (colId: string) => {
+    const cardsCol = cardsByEtapa[colId] ?? [];
+    setExportColId(colId);
+    setExportSelected(new Set(cardsCol.map((c) => c.id))); // todos selecionados por padrão
+    setExportTargetPhone(defaultCobradorPhone);
+  };
+
+  const buildEnderecoCliente = (c: ReturnType<typeof clientesById.get>): string => {
+    if (!c) return '—';
+    const partes = [
+      [c.rua, c.numero].filter(Boolean).join(', '),
+      c.bairro,
+      [c.cidade, c.estado].filter(Boolean).join(' - '),
+      c.cep,
+    ].filter(Boolean);
+    return partes.join(' • ') || c.endereco || '—';
+  };
+
+  const buildExportMessage = (cardIds: string[]): string => {
+    const allParcelas = [...parcelasPendentes, ...parcelasVencidasList].filter((p) => !p.congelada);
+    const linhas: string[] = [
+      '*📋 Lista de Cobrança — Casa da Moeda*',
+      `_Gerado em ${formatDateBR(new Date().toISOString())}_`,
+      '',
+    ];
+    let totalGeral = 0;
+    cardIds.forEach((cid, idx) => {
+      const card = allCards.find((c) => c.id === cid);
+      if (!card) return;
+      const cli = clientesById.get(card.clienteId);
+      const psCli = allParcelas.filter((p) => p.clienteId === card.clienteId);
+      const valorOriginal = psCli.reduce((s, p) => s + (p.valorOriginal || 0), 0);
+      const juros = psCli.reduce((s, p) => s + (p.juros || 0), 0);
+      const multa = psCli.reduce((s, p) => s + (p.multa || 0), 0);
+      const valorAtraso = card.valorDivida || (valorOriginal + juros + multa);
+      totalGeral += valorAtraso;
+      linhas.push(`*${idx + 1}. ${card.clienteNome}*`);
+      if (cli?.cpf) linhas.push(`   • CPF: ${cli.cpf}`);
+      linhas.push(`   • Tel: ${card.clienteTelefone || cli?.telefone || '—'}`);
+      linhas.push(`   • Endereço: ${buildEnderecoCliente(cli)}`);
+      linhas.push(`   • Valor original: ${formatCurrency(valorOriginal)}`);
+      linhas.push(`   • Juros/multa: ${formatCurrency(juros + multa)}`);
+      linhas.push(`   • *Total em atraso: ${formatCurrency(valorAtraso)}*`);
+      linhas.push(`   • Dias em atraso: ${card.diasAtraso}`);
+      linhas.push('');
+    });
+    linhas.push(`*Total da rota: ${formatCurrency(totalGeral)}*`);
+    linhas.push(`*Clientes: ${cardIds.length}*`);
+    return linhas.join('\n');
+  };
+
+  const handleEnviarExport = async () => {
+    if (!exportColId) return;
+    if (exportSelected.size === 0) {
+      toast.error('Selecione pelo menos um cliente');
+      return;
+    }
+    const phoneDigits = normalizePhoneBR(exportTargetPhone);
+    if (phoneDigits.length < 12) {
+      toast.error('Telefone inválido — informe um número com DDD');
+      return;
+    }
+    const sistema = instancias.find((i) => (i as any).is_system && i.status === 'conectado')
+      ?? instanciasConectadas[0];
+    if (!sistema) {
+      toast.error('Nenhuma instância do sistema conectada');
+      return;
+    }
+    setExportSending(true);
+    try {
+      const ids = Array.from(exportSelected);
+      const mensagem = buildExportMessage(ids);
+      await enviarWhatsapp.mutateAsync({
+        instancia_id: sistema.id,
+        telefone: phoneDigits,
+        conteudo: mensagem,
+        tipo: 'text',
+      });
+      toast.success(`Lista enviada para ${phoneDigits} (${ids.length} clientes)`);
+      setExportColId(null);
+      setExportSelected(new Set());
+    } catch (err: any) {
+      toast.error(`Erro ao enviar: ${err.message || ''}`);
+    } finally {
+      setExportSending(false);
+    }
+  };
+
   const handleArquivarCard = (card: KanbanCobrancaView) => {
     updateCard.mutate(
       {
@@ -549,6 +661,17 @@ export default function KanbanCobrancaPage() {
                         >
                           <ArrowUpDown className="w-3.5 h-3.5" />
                         </button>
+                        {(column.id === 'vencido_n1' || column.id === 'vencido_n2' || column.id === 'vencido_n3') && cards.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => openExportModal(column.id)}
+                            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            title="Exportar contatos para o cobrador via WhatsApp"
+                            aria-label="Exportar contatos"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <Badge variant="secondary" className="font-semibold">{cards.length}</Badge>
                       </div>
                     </div>
@@ -762,6 +885,136 @@ export default function KanbanCobrancaPage() {
 
       {/* Modal de Detalhes removido — clique no nome abre ClienteDetalhesModal,
           movimentação manual é feita pelo botão ChevronRight (menu "Mover para"). */}
+
+      {/* ── Modal Exportar Contatos para Cobrador (WhatsApp) ─── */}
+      <Dialog
+        open={!!exportColId}
+        onOpenChange={(o) => {
+          if (!o) {
+            setExportColId(null);
+            setExportSelected(new Set());
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Download className="w-5 h-5" />
+              Exportar contatos · {COLUMNS.find((c) => c.id === exportColId)?.title}
+            </DialogTitle>
+          </DialogHeader>
+          {exportColId && (() => {
+            const cardsCol = cardsByEtapa[exportColId] ?? [];
+            const allSelected = cardsCol.length > 0 && cardsCol.every((c) => exportSelected.has(c.id));
+            const toggleAll = () => {
+              if (allSelected) setExportSelected(new Set());
+              else setExportSelected(new Set(cardsCol.map((c) => c.id)));
+            };
+            const toggleOne = (id: string) => {
+              const next = new Set(exportSelected);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              setExportSelected(next);
+            };
+            return (
+              <div className="space-y-3 text-sm">
+                <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+                  <div>
+                    <label className="text-xs font-medium block mb-1">Telefone do cobrador (com DDD)</label>
+                    <Input
+                      placeholder="Ex.: 47989279037"
+                      value={exportTargetPhone}
+                      onChange={(e) => setExportTargetPhone(e.target.value)}
+                      disabled={exportSending}
+                    />
+                    {defaultCobradorPhone && (
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Sugerido a partir da sua instância conectada: {defaultCobradorPhone}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                    <Send className="w-3 h-3" /> Envio será feito pela instância do <b>sistema</b> (is_system).
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={toggleAll}
+                    className="text-xs text-primary hover:underline flex items-center gap-1"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    {allSelected ? 'Desmarcar todos' : 'Selecionar todos'}
+                  </button>
+                  <span className="text-xs text-muted-foreground">
+                    {exportSelected.size}/{cardsCol.length} selecionados
+                  </span>
+                </div>
+
+                <div className="border rounded-lg divide-y max-h-[40vh] overflow-y-auto">
+                  {cardsCol.map((card) => {
+                    const cli = clientesById.get(card.clienteId);
+                    const checked = exportSelected.has(card.id);
+                    return (
+                      <label
+                        key={card.id}
+                        className={`flex items-start gap-2 p-2 cursor-pointer hover:bg-muted/30 ${checked ? 'bg-blue-50 dark:bg-blue-950/30' : ''}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleOne(card.id)}
+                          className="mt-0.5"
+                          disabled={exportSending}
+                        />
+                        <div className="flex-1 min-w-0 text-xs">
+                          <div className="font-medium truncate">{card.clienteNome}</div>
+                          <div className="text-muted-foreground truncate">
+                            {cli?.cpf || '—'} · {card.clienteTelefone || cli?.telefone || '—'}
+                          </div>
+                          <div className="text-muted-foreground truncate">
+                            {buildEnderecoCliente(cli)}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-amber-700 dark:text-amber-400 font-medium">
+                              {formatCurrency(card.valorDivida)}
+                            </span>
+                            <span className="text-muted-foreground">· {card.diasAtraso}d em atraso</span>
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setExportColId(null)}
+                    disabled={exportSending}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleEnviarExport}
+                    disabled={exportSending || exportSelected.size === 0 || !exportTargetPhone.trim()}
+                  >
+                    {exportSending ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <Send className="w-3.5 h-3.5 mr-1" />
+                    )}
+                    Enviar lista ({exportSelected.size})
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* ── Modal Confirmar Pagamento (com comprovante) ─── */}
       <Dialog open={showQuitarModal} onOpenChange={(open) => { if (!open) { setShowQuitarModal(false); setQuitarEmpId(null); setComprovanteFile(null); setComprovantePreview(null); } }}>
