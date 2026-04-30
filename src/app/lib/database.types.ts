@@ -691,6 +691,9 @@ export interface Database {
           data_primeira_parcela: string | null;
           entrada_charge_id: string | null;
           entrada_paga: boolean;
+          entrada_comprovante_url: string | null;
+          entrada_paga_em: string | null;
+          entrada_paga_por: string | null;
           parcelas_originais_ids: string[];
           status: AcordoStatus;
           observacao: string | null;
@@ -721,6 +724,9 @@ export interface Database {
           status?: AcordoStatus;
           entrada_paga?: boolean;
           entrada_charge_id?: string | null;
+          entrada_comprovante_url?: string | null;
+          entrada_paga_em?: string | null;
+          entrada_paga_por?: string | null;
           observacao?: string | null;
           updated_at?: string;
         };

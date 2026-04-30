@@ -11,6 +11,7 @@
  *  - Histórico: pagamentos + contatos + tempo de resposta
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Dialog,
   DialogContent,
@@ -642,6 +643,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   const syncEmprestimoStatus = useSyncEmprestimoStatus();
   const criarCobvEfi = useCriarCobvEfi();
   const enviarWhatsapp = useEnviarWhatsapp();
+  const queryClient = useQueryClient();
 
   // Map emprestimoId -> emprestimo (para gateway/clienteNome)
   const emprestimoById = useMemo(() => {
@@ -650,9 +652,21 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
     return m;
   }, [emprestimos]);
 
-  const pendentes = parcelas.filter((p) => p.status !== 'paga' && p.status !== 'cancelada');
+  const pendentes = parcelas.filter((p) => p.status !== 'paga' && p.status !== 'cancelada' && !p.congelada);
   const pendentesCount = pendentes.length;
   const temVencidas = pendentes.some((p) => p.status === 'vencida');
+
+  // Mapa parcelas por acordo (todas as parcelas, não só pendentes) — usado para KPIs do acordo card
+  const parcelasByAcordo = useMemo(() => {
+    const m = new Map<string, typeof parcelas>();
+    parcelas.forEach((p) => {
+      if (p.acordoId) {
+        if (!m.has(p.acordoId)) m.set(p.acordoId, []);
+        m.get(p.acordoId)!.push(p);
+      }
+    });
+    return m;
+  }, [parcelas]);
 
   // Calcula valores corrigidos (juros automáticos exceto se congelada/acordo/>365d)
   const computeValores = (p: Parcela) => {
@@ -668,6 +682,11 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
 
   // Edit inline por célula (campo único) ou pelo atalho do lápis (% — juros/multa/desconto juntos)
   const [showAcordoModal, setShowAcordoModal] = useState(false);
+  const [confirmEntradaAcordoId, setConfirmEntradaAcordoId] = useState<string | null>(null);
+  const [confirmEntradaFile, setConfirmEntradaFile] = useState<File | null>(null);
+  const [confirmEntradaObs, setConfirmEntradaObs] = useState('');
+  const [confirmEntradaSaving, setConfirmEntradaSaving] = useState(false);
+  const [comprovanteAcordoUrl, setComprovanteAcordoUrl] = useState<string | null>(null);
   type EditField = 'all' | 'vencimento' | 'valor' | 'juros' | 'multa' | 'desconto' | 'status';
   const [edit, setEdit] = useState<{
     id: string;
@@ -1030,27 +1049,99 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
           <div className="text-xs text-muted-foreground">Nenhum acordo cadastrado</div>
         ) : (
           <div className="space-y-2">
-            {acordos.map((a) => (
-              <div key={a.id} className="border rounded p-3 text-xs flex items-center justify-between">
-                <div>
-                  <div className="font-medium">{formatCurrency(a.valor_divida_original)} em {a.num_parcelas}x</div>
-                  <div className="text-muted-foreground">
-                    Criado {formatDate(a.created_at)} · Status: {a.status}
+            {acordos.map((a) => {
+              const ps = parcelasByAcordo.get(a.id) ?? [];
+              const pagas = ps.filter((p) => p.status === 'paga').length;
+              const total = ps.length || a.num_parcelas;
+              const isAtivo = a.status === 'ativo';
+              const entradaPaga = !!a.entrada_paga;
+              const temComprovante = !!a.entrada_comprovante_url;
+              const valorEntrada = a.valor_entrada || 0;
+              return (
+                <div key={a.id} className="border rounded p-3 text-xs space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="space-y-0.5">
+                      <div className="font-medium flex items-center gap-2">
+                        <HandshakeIcon className="w-3.5 h-3.5" />
+                        {formatCurrency(a.valor_divida_original)} em {a.num_parcelas}x
+                        <span className="text-muted-foreground font-normal">
+                          ({formatCurrency(a.valor_parcela)}/parcela)
+                        </span>
+                      </div>
+                      <div className="text-muted-foreground">
+                        Criado {formatDate(a.created_at)} · Parcelas pagas: {pagas}/{total}
+                      </div>
+                      {valorEntrada > 0 && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-muted-foreground">
+                            Entrada: <b>{formatCurrency(valorEntrada)}</b>
+                          </span>
+                          {entradaPaga ? (
+                            <Badge className="bg-green-100 text-green-800 h-5 px-1.5 text-[10px]">
+                              <CheckCircle2 className="w-3 h-3 mr-1" /> paga
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-amber-100 text-amber-800 h-5 px-1.5 text-[10px]">
+                              <AlertCircle className="w-3 h-3 mr-1" /> pendente
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <Badge
+                      className={
+                        a.status === 'ativo'
+                          ? 'bg-green-100 text-green-800'
+                          : a.status === 'quebrado'
+                          ? 'bg-red-100 text-red-800'
+                          : 'bg-gray-100 text-gray-800'
+                      }
+                    >
+                      {a.status}
+                    </Badge>
                   </div>
+                  {isAtivo && valorEntrada > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1 border-t">
+                      {!entradaPaga && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-[11px]"
+                          onClick={() => {
+                            setConfirmEntradaAcordoId(a.id);
+                            setConfirmEntradaFile(null);
+                            setConfirmEntradaObs('');
+                          }}
+                        >
+                          <Upload className="w-3 h-3 mr-1" />
+                          Confirmar entrada paga (anexar comprovante)
+                        </Button>
+                      )}
+                      {temComprovante && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-[11px]"
+                          onClick={async () => {
+                            try {
+                              const { data, error } = await supabase.storage
+                                .from('comprovantes-acordo')
+                                .createSignedUrl(a.entrada_comprovante_url!, 60 * 5);
+                              if (error) throw error;
+                              setComprovanteAcordoUrl(data.signedUrl);
+                            } catch (err: any) {
+                              toast.error('Erro ao gerar URL: ' + (err.message || ''));
+                            }
+                          }}
+                        >
+                          <Eye className="w-3 h-3 mr-1" /> Ver comprovante
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <Badge
-                  className={
-                    a.status === 'ativo'
-                      ? 'bg-green-100 text-green-800'
-                      : a.status === 'quebrado'
-                      ? 'bg-red-100 text-red-800'
-                      : 'bg-gray-100 text-gray-800'
-                  }
-                >
-                  {a.status}
-                </Badge>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         <p className="text-[11px] text-muted-foreground mt-2">
@@ -1066,6 +1157,156 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         origem="modal-cliente"
         onCriado={() => setShowAcordoModal(false)}
       />
+
+      {/* Dialog: Confirmar entrada paga (anexar comprovante) */}
+      <Dialog
+        open={!!confirmEntradaAcordoId}
+        onOpenChange={(o) => {
+          if (!o) {
+            setConfirmEntradaAcordoId(null);
+            setConfirmEntradaFile(null);
+            setConfirmEntradaObs('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Confirmar entrada paga</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground text-xs">
+              Anexe o comprovante (foto/PDF) e marque a entrada como paga manualmente.
+            </p>
+            <div>
+              <Label className="text-xs">Comprovante (imagem ou PDF, até 10MB)</Label>
+              <Input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                onChange={(e) => setConfirmEntradaFile(e.target.files?.[0] ?? null)}
+                disabled={confirmEntradaSaving}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Observação (opcional)</Label>
+              <Textarea
+                rows={2}
+                value={confirmEntradaObs}
+                onChange={(e) => setConfirmEntradaObs(e.target.value)}
+                placeholder="Ex.: Recebido em PIX manual via banco X"
+                disabled={confirmEntradaSaving}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmEntradaAcordoId(null)}
+              disabled={confirmEntradaSaving}
+            >
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              className="bg-green-600 hover:bg-green-700"
+              disabled={!confirmEntradaFile || confirmEntradaSaving}
+              onClick={async () => {
+                if (!confirmEntradaAcordoId || !confirmEntradaFile) return;
+                setConfirmEntradaSaving(true);
+                try {
+                  const acordoId = confirmEntradaAcordoId;
+                  const ext = confirmEntradaFile.name.split('.').pop() || 'bin';
+                  const path = `${acordoId}/${Date.now()}.${ext}`;
+                  const { error: upErr } = await supabase.storage
+                    .from('comprovantes-acordo')
+                    .upload(path, confirmEntradaFile, {
+                      cacheControl: '3600',
+                      upsert: false,
+                      contentType: confirmEntradaFile.type,
+                    });
+                  if (upErr) throw upErr;
+
+                  const acordoAtual = acordos.find((a) => a.id === acordoId);
+                  const novaObs = [acordoAtual?.observacao, confirmEntradaObs.trim()]
+                    .filter(Boolean)
+                    .join('\n— Entrada confirmada manualmente: ');
+
+                  const { data: userRes } = await supabase.auth.getUser();
+                  const { error: updErr } = await supabase
+                    .from('acordos')
+                    .update({
+                      entrada_paga: true,
+                      entrada_comprovante_url: path,
+                      entrada_paga_em: new Date().toISOString(),
+                      entrada_paga_por: userRes.user?.id ?? null,
+                      observacao: novaObs || null,
+                    } as never)
+                    .eq('id', acordoId);
+                  if (updErr) throw updErr;
+
+                  // Se há cobrança EFI vinculada, marcar como CONFIRMED também (espelha webhook)
+                  if (acordoAtual?.entrada_charge_id) {
+                    await supabase
+                      .from('woovi_charges')
+                      .update({ status: 'CONFIRMED' } as never)
+                      .eq('charge_id', acordoAtual.entrada_charge_id);
+                  }
+
+                  toast.success('Entrada confirmada com sucesso');
+                  queryClient.invalidateQueries({ queryKey: ['acordos'] });
+                  queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
+                  setConfirmEntradaAcordoId(null);
+                  setConfirmEntradaFile(null);
+                  setConfirmEntradaObs('');
+                } catch (err: any) {
+                  toast.error('Erro ao confirmar entrada: ' + (err.message || ''));
+                } finally {
+                  setConfirmEntradaSaving(false);
+                }
+              }}
+            >
+              {confirmEntradaSaving ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle className="w-3 h-3 mr-1" />}
+              Confirmar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Visualizar comprovante */}
+      <Dialog
+        open={!!comprovanteAcordoUrl}
+        onOpenChange={(o) => !o && setComprovanteAcordoUrl(null)}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Comprovante de entrada</DialogTitle>
+          </DialogHeader>
+          {comprovanteAcordoUrl && (
+            comprovanteAcordoUrl.toLowerCase().includes('.pdf') ? (
+              <iframe
+                src={comprovanteAcordoUrl}
+                className="w-full h-[70vh] rounded border"
+                title="Comprovante PDF"
+              />
+            ) : (
+              <img
+                src={comprovanteAcordoUrl}
+                alt="Comprovante"
+                className="w-full max-h-[70vh] object-contain rounded border"
+              />
+            )
+          )}
+          <div className="flex justify-end pt-2">
+            {comprovanteAcordoUrl && (
+              <Button size="sm" variant="outline" asChild>
+                <a href={comprovanteAcordoUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink className="w-3 h-3 mr-1" /> Abrir em nova aba
+                </a>
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <section>
         <div className="flex items-center justify-between mb-3">
@@ -1088,34 +1329,73 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         </div>
         {pendentes.length === 0 ? (
           <div className="text-xs text-muted-foreground">Sem parcelas pendentes</div>
-        ) : (
+        ) : (() => {
+          // Agrupa por acordo (parcelas com acordoId) ou por emprestimo (acordoId === null)
+          const groupKey = (p: Parcela) => p.acordoId ? `acordo:${p.acordoId}` : `emp:${p.emprestimoId}`;
+          const grupos: string[] = [];
+          const seen = new Set<string>();
+          pendentes.forEach((p) => {
+            const k = groupKey(p);
+            if (!seen.has(k)) { seen.add(k); grupos.push(k); }
+          });
+          // Ordena: acordos primeiro, depois empréstimos
+          grupos.sort((a, b) => {
+            if (a.startsWith('acordo:') && !b.startsWith('acordo:')) return -1;
+            if (!a.startsWith('acordo:') && b.startsWith('acordo:')) return 1;
+            return 0;
+          });
+          return (
           <Accordion
             type="multiple"
-            defaultValue={[...new Set(pendentes.map((p) => p.emprestimoId))]}
-            className="space-y-2"
+            defaultValue={grupos}
+            className="space-y-0 border rounded-lg"
           >
-            {[...new Set(pendentes.map((p) => p.emprestimoId))].map((empId) => {
-              const emp = emprestimoById.get(empId);
-              const parcelasDoEmp = pendentes
-                .filter((p) => p.emprestimoId === empId)
+            {grupos.map((gKey) => {
+              const isAcordo = gKey.startsWith('acordo:');
+              const gId = gKey.split(':')[1];
+              const acordo = isAcordo ? acordos.find((a) => a.id === gId) : null;
+              const emp = !isAcordo ? emprestimoById.get(gId) : null;
+              const parcelasDoGrupo = pendentes
+                .filter((p) => groupKey(p) === gKey)
                 .sort((a, b) => a.numero - b.numero);
-              const totalEmp = parcelasDoEmp.reduce((s, p) => s + computeValores(p).total, 0);
-              const temVencidaEmp = parcelasDoEmp.some((p) => p.status === 'vencida');
+              const totalGrupo = parcelasDoGrupo.reduce((s, p) => s + computeValores(p).total, 0);
+              const temVencidaGrupo = parcelasDoGrupo.some((p) => p.status === 'vencida');
               return (
-                <AccordionItem key={empId} value={empId} className="border rounded-lg">
-                  <AccordionTrigger className="px-3 py-2 hover:no-underline hover:bg-muted/30 rounded-t-lg [&[data-state=closed]]:rounded-lg">
+                <AccordionItem key={gKey} value={gKey} className="border rounded-lg">
+                  <AccordionTrigger className={`px-3 py-2 hover:no-underline hover:bg-muted/30 rounded-t-lg [&[data-state=closed]]:rounded-lg ${isAcordo ? 'bg-blue-50/50' : ''}`}>
                     <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="font-semibold text-sm">{emp ? formatCurrency(emp.valor) : 'Empréstimo'}</span>
-                      {emp && <span className="text-muted-foreground">{emp.parcelas}x · {emp.tipoJuros} · {formatDate(emp.dataContrato)}</span>}
-                      <Badge className={`text-[10px] ${temVencidaEmp ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                        {parcelasDoEmp.length} pendente{parcelasDoEmp.length !== 1 ? 's' : ''}
+                      {isAcordo ? (
+                        <>
+                          <HandshakeIcon className="w-3.5 h-3.5 text-blue-700" />
+                          <span className="font-semibold text-sm text-blue-900">
+                            Acordo {acordo ? formatCurrency(acordo.valor_divida_original) : ''}
+                          </span>
+                          {acordo && (
+                            <span className="text-muted-foreground">
+                              {acordo.num_parcelas}x · {formatCurrency(acordo.valor_parcela)}/parcela · {formatDate(acordo.created_at)}
+                            </span>
+                          )}
+                          {acordo && (
+                            <Badge className={`text-[10px] ${acordo.entrada_paga ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+                              entrada {acordo.entrada_paga ? 'paga' : 'pendente'}
+                            </Badge>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-semibold text-sm">{emp ? formatCurrency(emp.valor) : 'Empréstimo'}</span>
+                          {emp && <span className="text-muted-foreground">{emp.parcelas}x · {emp.tipoJuros} · {formatDate(emp.dataContrato)}</span>}
+                        </>
+                      )}
+                      <Badge className={`text-[10px] ${temVencidaGrupo ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                        {parcelasDoGrupo.length} pendente{parcelasDoGrupo.length !== 1 ? 's' : ''}
                       </Badge>
                       {emp && (
                         <Badge className={`text-[10px] ${emp.status === 'inadimplente' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'}`}>
                           {emp.status}
                         </Badge>
                       )}
-                      <span className="text-muted-foreground">saldo: <b className="text-foreground">{formatCurrency(totalEmp)}</b></span>
+                      <span className="text-muted-foreground">saldo: <b className="text-foreground">{formatCurrency(totalGrupo)}</b></span>
                     </div>
                   </AccordionTrigger>
                   <AccordionContent className="px-0 pb-0">
@@ -1135,7 +1415,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                           </tr>
                         </thead>
                         <tbody>
-                          {parcelasDoEmp.map((p) => {
+                          {parcelasDoGrupo.map((p) => {
                   const { total, juros: jurosCalc, congelado, bloqueada } = computeValores(p);
                   const isEditing = (f: EditField) =>
                     edit?.id === p.id &&
@@ -1370,7 +1650,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
               );
             })}
           </Accordion>
-        )}
+          );
+        })()}
       </section>
 
       {/* ── Modal: Efetuar Pagamento (completo / parcial) ── */}

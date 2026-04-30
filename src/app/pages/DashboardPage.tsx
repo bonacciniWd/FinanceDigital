@@ -200,23 +200,10 @@ export default function DashboardPage() {
         <p className="text-muted-foreground mt-1">Acompanhe as principais métricas da sua operação</p>
       </div>
 
-      {/* Filtros */}
+      {/* Filtros secundários */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-wrap gap-4">
-            <Select value={periodo} onValueChange={setPeriodo}>
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="Período" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="1">Hoje</SelectItem>
-                <SelectItem value="7">Últimos 7 dias</SelectItem>
-                <SelectItem value="30">Últimos 30 dias</SelectItem>
-                <SelectItem value="90">Últimos 90 dias</SelectItem>
-                <SelectItem value="365">Último ano</SelectItem>
-              </SelectContent>
-            </Select>
-
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="Status" />
@@ -322,8 +309,29 @@ export default function DashboardPage() {
       {/* Gráficos */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2">
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-4 flex-wrap">
             <CardTitle>Evolução de Receita x Inadimplência</CardTitle>
+            <div className="flex items-center gap-1 bg-muted/50 rounded-xl p-1 border border-border/40">
+              {([
+                { label: 'Hoje', value: '1' },
+                { label: '7d', value: '7' },
+                { label: '30d', value: '30' },
+                { label: '90d', value: '90' },
+                { label: '1 ano', value: '365' },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setPeriodo(opt.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
+                    periodo === opt.value
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </CardHeader>
           <CardContent>
             <LWCChart
