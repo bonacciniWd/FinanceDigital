@@ -791,6 +791,11 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   });
   const [addParcelaSubmitting, setAddParcelaSubmitting] = useState(false);
 
+  // Anular parcela — dialog de motivo (window.prompt não funciona em Electron prod)
+  const [anularTarget, setAnularTarget] = useState<Parcela | null>(null);
+  const [anularMotivo, setAnularMotivo] = useState('');
+  const [anularSaving, setAnularSaving] = useState(false);
+
   // Infere a periodicidade (em dias) entre as parcelas existentes do empréstimo.
   // Usa a mediana dos deltas entre vencimentos consecutivos. Default: 30 dias.
   const inferirPeriodoDias = (empId: string): number => {
@@ -838,26 +843,31 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   }, [showAddParcelaModal, addParcelaEmprestimoId]);
 
   // Anular parcela (status=cancelada). Nunca excluir — anti-fraude.
-  const handleAnularParcela = async (p: Parcela) => {
+  const handleAnularParcela = (p: Parcela) => {
     if (p.acordoId || p.congelada) {
       toast.error('Parcela bloqueada (acordo/congelada). Anulação não permitida.');
       return;
     }
-    const motivo = window.prompt(
-      `Anular parcela ${p.numero}?\n\nA parcela permanecerá no histórico (auditoria), mas não será cobrada. Informe o motivo:`,
-      '',
-    );
-    if (motivo === null) return;
+    setAnularMotivo('');
+    setAnularTarget(p);
+  };
+
+  const confirmAnularParcela = async () => {
+    if (!anularTarget) return;
+    setAnularSaving(true);
     try {
-      const obs = `[ANULADA${motivo ? ' — ' + motivo : ''}]${p.observacao ? '\n' + p.observacao : ''}`;
+      const obs = `[ANULADA${anularMotivo ? ' — ' + anularMotivo : ''}]${anularTarget.observacao ? '\n' + anularTarget.observacao : ''}`;
       await updateParcela.mutateAsync({
-        id: p.id,
+        id: anularTarget.id,
         data: { status: 'cancelada', observacao: obs },
       });
-      await syncEmprestimoStatus.mutateAsync(p.emprestimoId);
-      toast.success(`Parcela ${p.numero} anulada`);
+      await syncEmprestimoStatus.mutateAsync(anularTarget.emprestimoId);
+      toast.success(`Parcela ${anularTarget.numero} anulada`);
+      setAnularTarget(null);
     } catch (err) {
       toast.error(`Erro: ${(err as Error).message}`);
+    } finally {
+      setAnularSaving(false);
     }
   };
 
@@ -1901,6 +1911,46 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
       })()}
 
       {/* ── Adicionar parcela: agora é inline na seção acima (sem modal) ── */}
+
+      {/* ── Dialog: Anular parcela (substitui window.prompt — não funciona em Electron prod) ── */}
+      <Dialog open={!!anularTarget} onOpenChange={(o) => { if (!o) setAnularTarget(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="w-4 h-4 text-red-500" />
+              Anular parcela {anularTarget?.numero}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            A parcela permanecerá no histórico (auditoria), mas não será cobrada.
+          </p>
+          <div className="space-y-1">
+            <Label className="text-xs">Motivo (opcional)</Label>
+            <Input
+              autoFocus
+              placeholder="Ex.: Erro de lançamento"
+              value={anularMotivo}
+              onChange={(e) => setAnularMotivo(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') confirmAnularParcela(); }}
+              disabled={anularSaving}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setAnularTarget(null)} disabled={anularSaving}>
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={confirmAnularParcela}
+              disabled={anularSaving}
+            >
+              {anularSaving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Ban className="w-4 h-4 mr-1" />}
+              Anular
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Modal: Confirmar Pagamento Manual com Comprovante ── */}
       {showComprovanteModal && comprovanteParcela && (() => {
