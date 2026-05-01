@@ -6,6 +6,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.5.1] — 2026-05-01
+
+### Fixed
+- Anular parcela: substituído `window.prompt` por Dialog React — funciona corretamente no app Electron (produção)
+
+---
+
 ## [1.5.0] — 2026-04-30
 
 ### Adicionado

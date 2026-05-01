@@ -123,7 +123,10 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.5.0', date: '30 Abr 2026', isLatest: true, items: [
+  { version: '1.5.1', date: '01 Mai 2026', isLatest: true, items: [
+    'Fix: botão Anular parcela agora funciona no app Electron (substituído window.prompt por dialog nativo)',
+  ]},
+  { version: '1.5.0', date: '30 Abr 2026', isLatest: false, items: [
     'Análise de Crédito: refresh em tempo real (Realtime + botão Atualizar) — fim do "fechar e abrir o app" para ver novos dados',
     'Verificação: mensagens de WhatsApp distintas para reenvio, rejeição com motivo e recusa final',
     'Adicionar parcela inline (sem modal): formulário fica aberto, número e vencimento avançam automaticamente para cadastrar várias seguidas',
