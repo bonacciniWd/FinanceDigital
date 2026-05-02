@@ -6,6 +6,58 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.6.0] — 2026-05-02
+
+### Adicionado — Bot WhatsApp robusto + atendimento humano
+- **Idempotência por `message_id_wpp`** no `webhook-whatsapp`: se a Evolution API reenvia o mesmo evento (retry/duplicate), a edge function detecta a mensagem já gravada em `whatsapp_mensagens_log` (direção=entrada) e devolve `skipped: duplicate_message_id` sem reprocessar o fluxo. Resolve o sintoma de "bot repete a mesma resposta" quando há latência ou perda de ACK no webhook.
+- **Comandos universais** disponíveis em qualquer etapa de qualquer fluxo, com normalização NFD (sem acento) e case-insensitive:
+  - `sair` / `cancelar` / `encerrar` / `parar` / `stop` / `tchau` → finaliza todas as sessões ativas e envia mensagem de despedida.
+  - `menu` / `voltar` / `reiniciar` / `início` / `começar` → finaliza sessões e cai no matcher de palavras-chave para reentrar no fluxo.
+  - `atendente` / `humano` / `operador` / `pessoa` / `falar com atendente` → transferência imediata para humano (ver abaixo).
+- **Timeout de sessão ociosa (30 min)**: sessões com `updated_at` mais antigo que 30 minutos são automaticamente finalizadas no próximo turno. Evita que um cliente que abandonou a conversa volte e fique "preso" em uma etapa antiga.
+- **Validação de resposta com retry counter (3 tentativas)**: quando a etapa exige escolha (botões/lista) e o cliente envia algo não esperado, o bot:
+  1. Repete as opções com mensagem `❓ Não entendi sua resposta...` e contador `_retry_count` no `contexto`.
+  2. Após 3 tentativas inválidas seguidas, transfere para atendimento humano automaticamente.
+  3. Em qualquer momento o cliente pode digitar `atendente` para escapar do fluxo.
+- **Pause automático do bot quando há ticket em atendimento humano** (`status` = `em_atendimento` com `atendente_id` setado): o webhook devolve `event: human_handling` e ignora a mensagem para o motor de fluxo, evitando que o bot atrapalhe a conversa em andamento entre cliente e operador.
+- **Normalização de acentos (NFD)** no matcher de palavras-chave dos fluxos: `começar`, `comecar` e `Começar` agora disparam a mesma palavra-chave registrada como `comecar`.
+
+### Adicionado — Handover humano com atendimento prioritário
+- **Edge function `webhook-whatsapp` agora encaminha para o atendente certo** baseado em 4 níveis de fallback:
+  1. **Dono da instância** WhatsApp (`whatsapp_instancias.created_by` → `funcionarios.user_id`) se não estiver `offline`.
+  2. **Online por prioridade de role** — `atendimento` > `cobranca` > `comercial` > `gerencia` > `admin`, ordenado por `ultima_atividade` desc.
+  3. **Qualquer funcionário não-offline** (último recurso pré-admin).
+  4. **Admin/gerência ativo** (catch-all para nunca deixar ticket sem dono).
+- **Ticket de atendimento criado/atualizado** com:
+  - `atendente_id` setado conforme regra acima (ou `null` se ninguém disponível).
+  - `status` = `em_atendimento` (se atribuído) ou `aberto` (sem atendente).
+  - `prioridade` = `alta`.
+  - `assunto` = `🚨 Atendimento humano solicitado — {pushName}`.
+  - `descricao` com motivo do handover (`solicitação_cliente` / `retry_excedido`), telefone, nome WhatsApp e **transcrição das últimas 8 mensagens** formatadas com timestamp pt-BR e emoji 👤/🤖 — operador entra na conversa com contexto completo.
+- **Mensagem ao cliente** confirmando o handover: `✅ Vou te conectar com {primeiroNome}, da nossa equipe...` (ou fallback genérico se ninguém disponível).
+- **Reuso de ticket existente**: se já houver ticket `aberto` / `em_atendimento` / `aguardando_cliente` para o cliente, atualiza ao invés de criar duplicado.
+
+### Corrigido — UX de cobrança
+- **Modal "Efetuar Pagamento" recalcula juros pela data de pagamento informada**: ao selecionar manualmente a data do pagamento, juros e total são recalculados em tempo real. Setar pagamento = vencimento ⇒ `diasAtraso = 0` ⇒ `juros = 0` ⇒ total = valor original. Imprescindível para transição de sistemas / lançamento retroativo de pagamentos. O valor gravado no banco (`parcelas.juros`) também passa a refletir essa data.
+- **Juros editável manualmente para parcelas inadimplentes** (vencidas, não-congeladas e não vinculadas a acordo): a célula de juros na aba Cobrança agora aceita clique e edição inline, igual aos campos de multa/desconto. Necessário para casos em que o operador negocia juros diferente do automático sem precisar criar acordo. Parcelas de acordo / congeladas continuam bloqueadas.
+
+### Adicionado — Configuração de acordo com datas manuais
+- **AcordoFormModal**: novo campo **"Data da entrada"** (datepicker) — passa a ser a âncora a partir da qual o cronograma das parcelas é calculado conforme a periodicidade selecionada (diário / semanal / quinzenal / mensal / personalizado). Antes, o cronograma sempre partia do dia atual.
+- **Datas e valores individuais por parcela** no mesmo grid: cada parcela do acordo agora exibe lado a lado o campo de **valor** e o campo de **vencimento**. O vencimento mostra a data auto-gerada pela periodicidade, mas pode ser sobrescrito manualmente — útil para ajustes pontuais (feriados, conveniência do cliente, conciliação com pagamentos esperados).
+- **Pix da entrada respeita a data informada**: a cobrança EFI da entrada do acordo agora vence na `dataEntrada` (em vez de "sempre amanhã"). Datas passadas caem para amanhã automaticamente — não quebra acordos retroativos.
+
+### Adicionado — Relatório Executivo PDF (Pagamentos Pix)
+- **Botão "Exportar Relatório PDF"** no header da página **Pagamentos Pix** gera um relatório executivo em PDF do período selecionado, com cabeçalho contendo a **logo da fintech** e seções resumidas:
+  - **KPIs**: empréstimos cadastrados (qtd + valor), entradas (Pix recebidos: qtd + valor), saídas (Pix enviados: qtd + valor) e saldo do período (entradas − saídas, com saldo EFI no momento da geração).
+  - **Tabela de empréstimos cadastrados** no período (data, cliente, valor, status, desembolsado).
+  - **Tabela de entradas** (Pix recebidos do extrato EFI: data/hora, pagador, descrição, valor).
+  - **Tabela de saídas** (Pix enviados do extrato EFI: data/hora, favorecido, descrição, valor).
+  - Rodapé com nome da empresa, data/hora de geração e numeração de páginas.
+- **Cobranças intencionalmente fora do relatório**: como a maioria dos pagamentos é conciliada via extrato bancário (entrada Pix direta), o relatório foca em **fluxo real de caixa** (extrato) ao invés de cobranças geradas que podem nunca ser pagas pela plataforma. Aviso explícito é impresso no PDF para o leitor.
+- **Dependências adicionadas**: `jspdf` (4.x) e `jspdf-autotable` (5.x).
+
+---
+
 ## [1.5.1] — 2026-05-01
 
 ### Fixed

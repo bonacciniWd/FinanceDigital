@@ -206,6 +206,10 @@ export default function AcordoFormModal({
   const [datasPersonalizadas, setDatasPersonalizadas] = useState<Date[]>([]);
   const [diaUtil, setDiaUtil] = useState(false);
   const [valoresParcelas, setValoresParcelas] = useState<string[]>([]);
+  // Data da entrada (configurável manualmente — afeta as datas-base das demais parcelas)
+  const [dataEntrada, setDataEntrada] = useState<string>(toIsoDate(new Date()));
+  // Override manual por parcela (vazio = usa a data auto-gerada pela periodicidade)
+  const [datasParcelasManual, setDatasParcelasManual] = useState<string[]>([]);
   const [observacao, setObservacao] = useState('');
   const [gerarPixEntrada, setGerarPixEntrada] = useState(true);
 
@@ -225,6 +229,8 @@ export default function AcordoFormModal({
     setDatasPersonalizadas([]);
     setDiaUtil(false);
     setValoresParcelas([]);
+    setDataEntrada(toIsoDate(new Date()));
+    setDatasParcelasManual([]);
     setObservacao('');
     setGerarPixEntrada(true);
   }, [open, valorDividaSugerido, configSistema?.acordo_entrada_percentual]);
@@ -253,17 +259,26 @@ export default function AcordoFormModal({
 
   const valorParcelaPadrao = nP > 0 ? Math.round((valorRestante / nP) * 100) / 100 : 0;
 
+  // Datas geradas pela periodicidade — partindo da data da entrada como âncora.
+  // Cada parcela pode ser sobrescrita manualmente em `datasParcelasManual[i]`.
   const datasGeradas = useMemo(() => {
-    return gerarDatasAcordo({
+    const inicio = dataEntrada
+      ? new Date(dataEntrada + 'T00:00:00')
+      : new Date();
+    const auto = gerarDatasAcordo({
       numParcelas: nP,
       periodicidade,
       diaPagamento: diaPagamento ? parseInt(diaPagamento) : undefined,
       intervaloDias: intervaloDias ? parseInt(intervaloDias) : undefined,
       datasPersonalizadas,
       diaUtil,
-      inicio: new Date(),
+      inicio,
     });
-  }, [nP, periodicidade, diaPagamento, intervaloDias, datasPersonalizadas, diaUtil]);
+    return Array.from({ length: nP }, (_, i) => {
+      const manual = datasParcelasManual[i];
+      return manual && /^\d{4}-\d{2}-\d{2}$/.test(manual) ? manual : auto[i];
+    });
+  }, [nP, periodicidade, diaPagamento, intervaloDias, datasPersonalizadas, diaUtil, dataEntrada, datasParcelasManual]);
 
   // ── Submit ──────────────────────────────────────────────
   const [submitting, setSubmitting] = useState(false);
@@ -348,10 +363,15 @@ export default function AcordoFormModal({
           const nome = cli?.nome || clienteNome || 'Cliente';
           const cpf = cli?.cpf || undefined;
           const telefone = cli?.telefone || '';
-          // Vencimento: amanhã (entrada deve ser paga rápido)
-          const venc = new Date();
-          venc.setDate(venc.getDate() + 1);
-          const vencIso = toIsoDate(venc);
+          // Vencimento da entrada: usa a data informada manualmente; se for passada, força amanhã.
+          const hojeIso = toIsoDate(new Date());
+          let vencIso = dataEntrada || hojeIso;
+          if (vencIso < hojeIso) {
+            const amanha = new Date();
+            amanha.setDate(amanha.getDate() + 1);
+            vencIso = toIsoDate(amanha);
+          }
+          const venc = new Date(vencIso + 'T00:00:00');
           const cobv = await criarCobvEfi.mutateAsync({
             cliente_id: clienteId,
             valor: valorEntrada,
@@ -500,6 +520,20 @@ export default function AcordoFormModal({
             <p className="text-xs text-muted-foreground">
               Entrada: <strong>{formatCurrency(valorEntrada)}</strong> · Restante: <strong>{formatCurrency(valorRestante)}</strong>
             </p>
+            {/* Data da entrada — âncora para o cronograma das parcelas */}
+            <div className="pt-2">
+              <Label htmlFor="acordo-data-entrada" className="text-xs">Data da entrada *</Label>
+              <Input
+                id="acordo-data-entrada"
+                type="date"
+                value={dataEntrada}
+                onChange={(e) => setDataEntrada(e.target.value)}
+                className="h-8 text-sm"
+              />
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                As parcelas seguintes são calculadas a partir desta data conforme a periodicidade.
+              </p>
+            </div>
           </div>
 
           {/* Configuração das parcelas */}
@@ -652,37 +686,54 @@ export default function AcordoFormModal({
               </div>
             )}
 
-            {/* Valores individuais */}
+            {/* Valores individuais + datas manuais por parcela */}
             {nP > 0 && nP <= 60 && (
               <div className="mt-4 p-3 rounded-lg border border-dashed">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-xs font-medium text-muted-foreground">
-                    Valores individuais por parcela <span className="font-normal">(opcional)</span>
+                    Valores e datas individuais por parcela <span className="font-normal">(opcional — sobrescreve o cálculo automático)</span>
                   </p>
                   <button
                     type="button"
                     className="text-[11px] text-muted-foreground hover:text-foreground underline"
-                    onClick={() => setValoresParcelas([])}
+                    onClick={() => { setValoresParcelas([]); setDatasParcelasManual([]); }}
                   >
                     Resetar
                   </button>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {Array.from({ length: nP }).map((_, i) => {
                     const v = valoresParcelas[i] ?? (valorParcelaPadrao > 0 ? valorParcelaPadrao.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
+                    const dAuto = datasGeradas[i] ?? '';
+                    const dManual = datasParcelasManual[i] ?? '';
                     return (
-                      <div key={i}>
-                        <Label className="text-[11px]">Parcela {i + 1}</Label>
-                        <div className="relative">
-                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R$</span>
+                      <div key={i} className="grid grid-cols-2 gap-1 items-end">
+                        <div>
+                          <Label className="text-[11px]">Parcela {i + 1} — valor</Label>
+                          <div className="relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">R$</span>
+                            <Input
+                              className="pl-8 h-8 text-sm"
+                              placeholder="0,00"
+                              value={v}
+                              onChange={(e) => {
+                                const arr = Array.from({ length: nP }, (_, j) => valoresParcelas[j] ?? '');
+                                arr[i] = formatBRL(e.target.value);
+                                setValoresParcelas(arr);
+                              }}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[11px]">Vencimento</Label>
                           <Input
-                            className="pl-8 h-8 text-sm"
-                            placeholder="0,00"
-                            value={v}
+                            type="date"
+                            className="h-8 text-sm"
+                            value={dManual || dAuto}
                             onChange={(e) => {
-                              const arr = Array.from({ length: nP }, (_, j) => valoresParcelas[j] ?? '');
-                              arr[i] = formatBRL(e.target.value);
-                              setValoresParcelas(arr);
+                              const arr = Array.from({ length: nP }, (_, j) => datasParcelasManual[j] ?? '');
+                              arr[i] = e.target.value;
+                              setDatasParcelasManual(arr);
                             }}
                           />
                         </div>

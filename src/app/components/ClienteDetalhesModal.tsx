@@ -77,7 +77,7 @@ import EmprestimoEditModal from './EmprestimoEditModal';
 import ComprovanteUploader from './ComprovanteUploader';
 import type { ClienteUpdate, ParcelaUpdate } from '../lib/database.types';
 import type { Parcela } from '../lib/view-types';
-import { valorCorrigido, diasDeAtraso, JUROS_DIAS_MAX } from '../lib/juros';
+import { valorCorrigido, diasDeAtraso, calcularJurosAtraso, JUROS_DIAS_MAX } from '../lib/juros';
 
 interface Props {
   clienteId: string | null;
@@ -938,7 +938,19 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
 
   const handleEfetuarPagamento = (parcela: Parcela) => {
     const desconto = parseFloat(pagamentoDesconto) || 0;
-    const { juros: jurosCalc } = computeValores(parcela);
+    // Juros baseado na data de pagamento informada (não em "hoje").
+    // Garante que se o operador setar pagamentoData = vencimento, juros zera
+    // e o empréstimo é quitado pelo valor original — espelha o que o modal exibe.
+    const diasAtrasoPag = (() => {
+      const venc = new Date(parcela.dataVencimento);
+      const pagDt = new Date(pagamentoData);
+      const diff = Math.floor((pagDt.getTime() - venc.getTime()) / 86400000);
+      return Math.max(diff, 0);
+    })();
+    const congeladoPag = !!parcela.acordoId || !!parcela.congelada || diasDeAtraso(parcela.dataVencimento) > JUROS_DIAS_MAX;
+    const jurosCalc = congeladoPag
+      ? (parcela.juros > 0 ? parcela.juros : 0)
+      : calcularJurosAtraso(parcela.valorOriginal, diasAtrasoPag);
     const valorComJuros = parcela.valorOriginal + jurosCalc + parcela.multa;
     const totalPagar = Math.max(valorComJuros - desconto, 0);
 
@@ -1566,16 +1578,17 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                         )}
                       </td>
 
-                      {/* Juros (auto-calc; só editável quando congelada/atalho) */}
+                      {/* Juros — editável manualmente (inclusive para inadimplentes não-congeladas).
+                          Quando o operador grava juros>0, valorCorrigido() respeita o manual; senão calcula auto. */}
                       <td
-                        className={`${cellCls('juros')} ${congelado ? '' : 'text-muted-foreground'}`}
-                        onClick={!isEditing('juros') && congelado && !bloqueada ? onCellClick('juros') : undefined}
+                        className={cellCls('juros')}
+                        onClick={!isEditing('juros') && !bloqueada ? onCellClick('juros') : undefined}
                         title={
                           bloqueada
-                            ? 'Parcela bloqueada'
+                            ? 'Parcela bloqueada (acordo/congelada)'
                             : congelado
-                            ? 'Clique para editar (juros congelado)'
-                            : 'Juros calculado automaticamente'
+                            ? 'Clique para editar (juros congelado por >365 dias de atraso)'
+                            : 'Clique para editar manualmente (sobrescreve o cálculo automático)'
                         }
                       >
                         {isEditing('juros') ? (
@@ -1752,15 +1765,22 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
       {pagamentoParcela && (() => {
         const parcela = pagamentoParcela;
         const desconto = parseFloat(pagamentoDesconto) || 0;
-        const { juros: jurosCalc } = computeValores(parcela);
-        const valorComJuros = parcela.valorOriginal + jurosCalc + parcela.multa;
-        const totalPagar = Math.max(valorComJuros - desconto, 0);
+        // Juros recalculado conforme a data de pagamento escolhida pelo operador.
+        // Se a parcela está bloqueada por acordo/congelada (>365d), preserva juros gravado.
+        // Caso contrário, calcula em função dos dias entre vencimento e pagamentoData.
+        // Quando pagamentoData = vencimento ⇒ diasAtraso = 0 ⇒ juros = 0 (zera).
         const diasAtraso = (() => {
           const venc = new Date(parcela.dataVencimento);
           const pagDt = new Date(pagamentoData);
           const diff = Math.floor((pagDt.getTime() - venc.getTime()) / 86400000);
           return Math.max(diff, 0);
         })();
+        const congeladoState = !!parcela.acordoId || !!parcela.congelada || diasDeAtraso(parcela.dataVencimento) > JUROS_DIAS_MAX;
+        const jurosCalc = congeladoState
+          ? (parcela.juros > 0 ? parcela.juros : 0)
+          : calcularJurosAtraso(parcela.valorOriginal, diasAtraso);
+        const valorComJuros = parcela.valorOriginal + jurosCalc + parcela.multa;
+        const totalPagar = Math.max(valorComJuros - desconto, 0);
         const isUltima = pendentesCount <= 1;
 
         return (

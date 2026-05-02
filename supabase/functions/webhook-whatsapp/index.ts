@@ -233,6 +233,25 @@ Deno.serve(async (req: Request) => {
         });
       }
 
+      // ── Idempotência: ignorar reentregas do mesmo message_id ──
+      // A Evolution API faz retry de webhooks. Sem isso, o fluxo é disparado
+      // múltiplas vezes para a mesma mensagem do cliente.
+      if (messageId) {
+        const { data: jaProcessada } = await adminClient
+          .from("whatsapp_mensagens_log")
+          .select("id")
+          .eq("message_id_wpp", messageId)
+          .eq("direcao", "entrada")
+          .limit(1)
+          .maybeSingle();
+        if (jaProcessada) {
+          console.log(`[webhook-whatsapp] Mensagem ${messageId} já processada, ignorando duplicata`);
+          return new Response(JSON.stringify({ ok: true, skipped: "duplicate_message_id" }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+
       // Extrair conteúdo conforme tipo
       let conteudo = "";
       let tipo = "text";
@@ -1623,13 +1642,255 @@ Deno.serve(async (req: Request) => {
         await adminClient.from("chatbot_sessoes").update({ status: "finalizado", contexto }).eq("id", sessaoId);
       };
 
+      // ── Helpers de robustez do bot ────────────────────────
+      // Normalizar texto: minúsculas, sem acento, sem espaços extras
+      const normalize = (s: string): string =>
+        (s || "")
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .trim();
+
+      // Tempo máximo de inatividade antes de descartar uma sessão (30 min)
+      const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+
+      // Comandos universais — funcionam em qualquer estado do fluxo
+      const UNIVERSAL_CMDS = {
+        sair: ["sair", "cancelar", "encerrar", "parar", "stop", "tchau"],
+        menu: ["menu", "voltar", "reiniciar", "inicio", "começar", "comecar"],
+        atendente: ["atendente", "humano", "operador", "pessoa", "ajuda humana", "falar com atendente", "quero atendente"],
+      };
+
+      const detectarComandoUniversal = (texto: string): "sair" | "menu" | "atendente" | null => {
+        const n = normalize(texto);
+        if (!n) return null;
+        for (const [cmd, palavras] of Object.entries(UNIVERSAL_CMDS)) {
+          if (palavras.some((p) => n === normalize(p) || n.includes(normalize(p)))) {
+            return cmd as "sair" | "menu" | "atendente";
+          }
+        }
+        return null;
+      };
+
+      // Buscar atendente apropriado para handover
+      // Prioridade:
+      //   1. Dono da instância WhatsApp (created_by → funcionarios.user_id), se ativo
+      //   2. Funcionário online com role "atendimento" / "cobranca" / "comercial"
+      //   3. Qualquer funcionário ativo (não offline)
+      const buscarAtendente = async (instanciaId: string): Promise<{ id: string; nome: string; user_id: string; role: string } | null> => {
+        // 1. Tentar o dono da instância
+        const { data: inst } = await adminClient
+          .from("whatsapp_instancias")
+          .select("created_by")
+          .eq("id", instanciaId)
+          .maybeSingle();
+        if (inst?.created_by) {
+          const { data: dono } = await adminClient
+            .from("funcionarios")
+            .select("id, nome, user_id, role, status")
+            .eq("user_id", inst.created_by)
+            .maybeSingle();
+          if (dono && dono.status !== "offline") {
+            return { id: dono.id, nome: dono.nome, user_id: dono.user_id, role: dono.role };
+          }
+        }
+
+        // 2. Online com role apropriado
+        const rolesPrioritarios = ["atendimento", "cobranca", "comercial", "gerencia", "admin"];
+        for (const r of rolesPrioritarios) {
+          const { data: candidato } = await adminClient
+            .from("funcionarios")
+            .select("id, nome, user_id, role, status")
+            .eq("role", r)
+            .eq("status", "online")
+            .order("ultima_atividade", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (candidato) return { id: candidato.id, nome: candidato.nome, user_id: candidato.user_id, role: candidato.role };
+        }
+
+        // 3. Fallback: qualquer não-offline
+        const { data: qualquer } = await adminClient
+          .from("funcionarios")
+          .select("id, nome, user_id, role, status")
+          .neq("status", "offline")
+          .limit(1)
+          .maybeSingle();
+        if (qualquer) return { id: qualquer.id, nome: qualquer.nome, user_id: qualquer.user_id, role: qualquer.role };
+
+        // 4. Último recurso: qualquer admin/gerencia
+        const { data: admin } = await adminClient
+          .from("funcionarios")
+          .select("id, nome, user_id, role, status")
+          .in("role", ["admin", "gerencia"])
+          .limit(1)
+          .maybeSingle();
+        return admin ? { id: admin.id, nome: admin.nome, user_id: admin.user_id, role: admin.role } : null;
+      };
+
+      // Montar transcrição das últimas N mensagens da conversa para contexto do atendente
+      const montarTranscricao = async (limite = 8): Promise<string> => {
+        const { data: msgs } = await adminClient
+          .from("whatsapp_mensagens_log")
+          .select("direcao, conteudo, tipo, created_at")
+          .eq("telefone", telefone)
+          .order("created_at", { ascending: false })
+          .limit(limite);
+        if (!msgs || msgs.length === 0) return "(sem histórico)";
+        const ordenadas = [...msgs].reverse();
+        return ordenadas.map((m) => {
+          const quem = m.direcao === "entrada" ? "👤 Cliente" : "🤖 Bot";
+          const hora = new Date(m.created_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+          const corpo = m.tipo === "text" ? (m.conteudo || "").slice(0, 200) : `[${m.tipo}]`;
+          return `${quem} (${hora}): ${corpo}`;
+        }).join("\n");
+      };
+
+      // Encerrar sessão ativa do chatbot e transferir para atendente humano.
+      // Cria/atribui ticket, anexa transcrição, opcionalmente avisa o atendente
+      // por WhatsApp (se a instância tiver número do atendente cadastrado).
+      const transferirParaHumano = async (motivo: string, sessaoId?: string): Promise<void> => {
+        if (!instancia) return;
+
+        // Encerrar sessão se existir
+        if (sessaoId) {
+          await adminClient.from("chatbot_sessoes").update({ status: "finalizado" }).eq("id", sessaoId);
+        }
+
+        // Garantir cliente
+        let cId = cliente?.id;
+        if (!cId) {
+          const { data: c } = await adminClient.from("clientes").select("id").eq("telefone", telefone).maybeSingle();
+          cId = c?.id;
+        }
+
+        // Buscar atendente
+        const atendente = await buscarAtendente(instancia.id);
+        const transcricao = await montarTranscricao(10);
+        const pushName = message.pushName || telefone;
+
+        const descricao =
+          `🤖 Atendimento transferido pelo chatbot.\n` +
+          `Motivo: ${motivo}\n` +
+          `Cliente: ${pushName} (${telefone})\n\n` +
+          `📜 Últimas mensagens:\n${transcricao}`;
+
+        // Procurar ticket aberto deste cliente
+        let ticketId: string | null = null;
+        if (cId) {
+          const { data: existing } = await adminClient
+            .from("tickets_atendimento")
+            .select("id")
+            .eq("cliente_id", cId)
+            .in("status", ["aberto", "em_atendimento", "aguardando_cliente"])
+            .limit(1)
+            .maybeSingle();
+          ticketId = existing?.id || null;
+        }
+
+        if (ticketId) {
+          // Atualizar ticket existente
+          await adminClient.from("tickets_atendimento").update({
+            atendente_id: atendente?.id || null,
+            status: atendente ? "em_atendimento" : "aberto",
+            prioridade: "alta",
+            descricao,
+            assunto: `🚨 Atendimento humano solicitado — ${pushName}`,
+          }).eq("id", ticketId);
+        } else if (cId) {
+          // Criar novo ticket
+          const { data: novoTicket } = await adminClient.from("tickets_atendimento").insert({
+            cliente_id: cId,
+            atendente_id: atendente?.id || null,
+            assunto: `🚨 Atendimento humano solicitado — ${pushName}`,
+            descricao,
+            canal: "whatsapp",
+            status: atendente ? "em_atendimento" : "aberto",
+            prioridade: "alta",
+          }).select("id").single();
+          ticketId = novoTicket?.id || null;
+        }
+
+        // Mensagem para o cliente confirmando transferência
+        const msgCliente = atendente
+          ? `✅ Tudo bem! Vou te conectar com *${atendente.nome.split(" ")[0]}*, da nossa equipe de atendimento.\n\nEm instantes alguém responderá por aqui mesmo. 💬`
+          : `✅ Tudo bem! Sua solicitação foi registrada e nossa equipe responderá em breve por aqui. 💬`;
+        await enviarTexto(msgCliente);
+
+        console.log(`[chatbot] Handover humano: cliente=${pushName} atendente=${atendente?.nome || "nenhum"} ticket=${ticketId} motivo="${motivo}"`);
+      };
+
+      // Verificar se cliente já tem ticket em atendimento humano ativo.
+      // Se sim, o bot fica mudo (não dispara fluxo nem auto-resposta) para
+      // não atropelar a conversa do atendente.
+      const temAtendimentoHumanoAtivo = async (): Promise<boolean> => {
+        if (!cliente?.id) return false;
+        const { data } = await adminClient
+          .from("tickets_atendimento")
+          .select("id, atendente_id, status")
+          .eq("cliente_id", cliente.id)
+          .eq("status", "em_atendimento")
+          .not("atendente_id", "is", null)
+          .limit(1)
+          .maybeSingle();
+        return !!data;
+      };
+
       // ── Verificar sessão ativa existente ──────────────
       if (tipo === "text" && conteudo && instancia) {
+        // ── Gate 0: Se já há atendimento humano ativo, bot fica mudo ──
+        if (await temAtendimentoHumanoAtivo()) {
+          console.log(`[chatbot] Cliente ${telefone} em atendimento humano — bot mudo`);
+          return new Response(
+            JSON.stringify({ ok: true, event: "human_handling" }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        // ── Gate 1: Comandos universais (atendente, menu, sair) ──
+        const cmdUniv = detectarComandoUniversal(conteudo);
+        if (cmdUniv === "atendente") {
+          // Buscar sessão para encerrar
+          const { data: sessAtual } = await adminClient
+            .from("chatbot_sessoes")
+            .select("id")
+            .eq("instancia_id", instancia.id)
+            .eq("telefone", telefone)
+            .in("status", ["ativo", "aguardando_resposta", "espera"])
+            .maybeSingle();
+          await transferirParaHumano("Cliente solicitou atendente humano", sessAtual?.id);
+          return new Response(
+            JSON.stringify({ ok: true, event: "handover_human" }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        if (cmdUniv === "sair") {
+          await adminClient.from("chatbot_sessoes")
+            .update({ status: "finalizado" })
+            .eq("instancia_id", instancia.id)
+            .eq("telefone", telefone)
+            .in("status", ["ativo", "aguardando_resposta", "espera"]);
+          await enviarTexto(`👋 Atendimento encerrado. Quando precisar, é só mandar uma mensagem!\n\n_Digite *menu* para reiniciar ou *atendente* para falar com nossa equipe._`);
+          return new Response(
+            JSON.stringify({ ok: true, event: "session_cancelled" }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        if (cmdUniv === "menu") {
+          // Encerra sessão atual e deixa o keyword matcher reiniciar
+          await adminClient.from("chatbot_sessoes")
+            .update({ status: "finalizado" })
+            .eq("instancia_id", instancia.id)
+            .eq("telefone", telefone)
+            .in("status", ["ativo", "aguardando_resposta", "espera"]);
+          // Continua o fluxo abaixo — vai cair no keyword matcher
+        }
+
         let sessaoAtiva: Record<string, unknown> | null = null;
         try {
           const { data: sessaoData, error: sessaoErr } = await adminClient
             .from("chatbot_sessoes")
-            .select("id, fluxo_id, etapa_atual_id, status, contexto, espera_ate")
+            .select("id, fluxo_id, etapa_atual_id, status, contexto, espera_ate, updated_at")
             .eq("instancia_id", instancia.id)
             .eq("telefone", telefone)
             .in("status", ["aguardando_resposta", "espera"])
@@ -1642,6 +1903,19 @@ Deno.serve(async (req: Request) => {
           }
         } catch (sessErr) {
           console.error(`[chatbot] Exceção ao buscar sessão:`, sessErr);
+        }
+
+        // ── Gate 2: Sessão ociosa (>30min) → descarta e trata como nova ──
+        if (sessaoAtiva && sessaoAtiva.updated_at) {
+          const updatedAt = new Date(sessaoAtiva.updated_at as string).getTime();
+          const idadeMs = Date.now() - updatedAt;
+          if (idadeMs > SESSION_TIMEOUT_MS) {
+            console.log(`[chatbot] Sessão ${sessaoAtiva.id} ociosa há ${Math.round(idadeMs/60000)}min, descartando`);
+            await adminClient.from("chatbot_sessoes")
+              .update({ status: "finalizado" })
+              .eq("id", sessaoAtiva.id);
+            sessaoAtiva = null; // tratar como nova mensagem
+          }
         }
 
         if (sessaoAtiva) {
@@ -1679,28 +1953,72 @@ Deno.serve(async (req: Request) => {
             }
           } else if (sessaoAtiva.status === "aguardando_resposta" && etapaAtual) {
             // Processar resposta do usuário
-            const conteudoLower = conteudo.toLowerCase().trim();
+            const conteudoLower = normalize(conteudo);
             const etapaConfig = (etapaAtual.config || {}) as Record<string, unknown>;
             const btns = Array.isArray(etapaConfig.buttons)
               ? (etapaConfig.buttons as Array<{ label?: string; value?: string }>).filter((b) => b.label)
               : [];
+            const tipoEtapaAtual = String(etapaAtual.tipo || "");
 
-            // Resolver resposta: por número (1, 2, 3) ou por valor do botão
+            // ── Validação de resposta para etapas com botões ──
+            // Antes só aceitava por número/label sem validar; respostas off-script
+            // avançavam mesmo assim (causando "bot burro"). Agora se a etapa tem
+            // botões e o cliente não escolheu nenhum, reenviamos a pergunta com
+            // contagem de tentativa, e após 3 erros transferimos para humano.
             let respostaValor = conteudoLower;
-            const numResp = parseInt(conteudoLower);
-            if (!isNaN(numResp) && numResp >= 1 && numResp <= btns.length) {
-              respostaValor = btns[numResp - 1].value || btns[numResp - 1].label || conteudoLower;
-              respostaValor = respostaValor.toLowerCase();
-            } else {
-              // Tentar match por value ou label do botão
-              const matchedBtn = btns.find(
-                (b) => b.value?.toLowerCase() === conteudoLower || b.label?.toLowerCase() === conteudoLower
-              );
-              if (matchedBtn) {
-                respostaValor = (matchedBtn.value || matchedBtn.label || "").toLowerCase();
+            let matchedBtn = false;
+
+            if (btns.length > 0) {
+              const numResp = parseInt(conteudoLower);
+              if (!isNaN(numResp) && numResp >= 1 && numResp <= btns.length) {
+                respostaValor = normalize(btns[numResp - 1].value || btns[numResp - 1].label || "");
+                matchedBtn = true;
+              } else {
+                const found = btns.find(
+                  (b) => normalize(b.value || "") === conteudoLower || normalize(b.label || "") === conteudoLower
+                );
+                if (found) {
+                  respostaValor = normalize(found.value || found.label || "");
+                  matchedBtn = true;
+                }
+              }
+
+              // Se etapa exige botão e nada bateu → retry, NÃO avança
+              if (!matchedBtn && tipoEtapaAtual !== "acao") {
+                const retries = ((contexto._retry_count as number) || 0) + 1;
+                contexto._retry_count = retries;
+
+                if (retries >= 3) {
+                  // 3 falhas → transferir para humano
+                  await transferirParaHumano(
+                    `Cliente respondeu fora das opções 3 vezes na etapa "${(etapaAtual.conteudo || "").toString().slice(0, 60)}"`,
+                    sessaoAtiva.id as string
+                  );
+                  return new Response(
+                    JSON.stringify({ ok: true, event: "handover_after_retries" }),
+                    { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                  );
+                }
+
+                // Reenvia a pergunta com aviso
+                const opcoesTxt = btns.map((b, i) => `*${i + 1}.* ${b.label}`).join("\n");
+                const aviso = `❓ Não entendi sua resposta. Por favor, escolha uma das opções:\n\n${opcoesTxt}\n\n_Tentativa ${retries} de 3. Digite *atendente* para falar com nossa equipe._`;
+                await enviarTexto(aviso);
+
+                // Salva contexto com retry counter
+                await adminClient.from("chatbot_sessoes")
+                  .update({ contexto, status: "aguardando_resposta" })
+                  .eq("id", sessaoAtiva.id);
+
+                return new Response(
+                  JSON.stringify({ ok: true, event: "retry_prompt" }),
+                  { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
               }
             }
 
+            // Resposta válida → resetar retry counter
+            delete contexto._retry_count;
             contexto.resposta = respostaValor;
             contexto.resposta_raw = conteudo;
             console.log(`[chatbot] Resposta processada: "${conteudo}" → value="${respostaValor}"`);
@@ -1713,7 +2031,6 @@ Deno.serve(async (req: Request) => {
             } catch { /* ignore */ }
 
             // Se a etapa atual é uma ação (wait_for_input da ação), re-executar a mesma etapa
-            const tipoEtapaAtual = String(etapaAtual.tipo || "");
             if (tipoEtapaAtual === "acao") {
               console.log(`[chatbot] Re-executando ação com resposta do usuário`);
               await executarCadeia(etapaAtual as Record<string, unknown>, todasEtapas, sessaoAtiva.id, contexto, fluxo.id);
@@ -1743,7 +2060,7 @@ Deno.serve(async (req: Request) => {
 
       // ── Chatbot: verificar match de palavra-chave (novo fluxo) ───────
       if (tipo === "text" && conteudo && instancia) {
-        const conteudoLower = conteudo.toLowerCase().trim();
+        const conteudoLower = normalize(conteudo);
 
         try {
         const { data: fluxos, error: fluxosErr } = await adminClient
@@ -1760,9 +2077,9 @@ Deno.serve(async (req: Request) => {
         if (fluxos && fluxos.length > 0) {
           for (const fluxo of fluxos) {
             const keywords = (fluxo.palavra_chave || "")
-              .toLowerCase()
               .split(",")
-              .map((k: string) => k.trim());
+              .map((k: string) => normalize(k))
+              .filter((k: string) => k.length > 0);
 
             const matched = keywords.some(
               (kw: string) => kw && conteudoLower.includes(kw)

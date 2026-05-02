@@ -123,7 +123,17 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.5.1', date: '01 Mai 2026', isLatest: true, items: [
+  { version: '1.6.0', date: '02 Mai 2026', isLatest: true, items: [
+    'Bot WhatsApp robusto: idempotência por message_id, comandos universais (sair/menu/atendente), timeout de sessão (30min), validação de resposta com 3 tentativas, normalização de acentos',
+    'Atendimento humano automático: bot encaminha para o dono da instância ou atendente online por prioridade de role, com transcrição das últimas 8 mensagens no ticket',
+    'Bot pausa automaticamente quando há ticket em atendimento humano (não atrapalha mais a conversa)',
+    'Pagamento: juros recalculado pela data de pagamento informada — setar pagamento = vencimento zera o juros corretamente',
+    'Tabela de cobrança: célula de juros agora editável manualmente para parcelas inadimplentes (não-congeladas)',
+    'Acordo: novo campo "Data da entrada" + datas individuais por parcela (sobrescreve o cálculo automático da periodicidade)',
+    'Pix da entrada do acordo respeita a data informada (em vez de "sempre amanhã")',
+    'Relatório Executivo PDF na página Pagamentos Pix: logo da fintech + KPIs + tabelas de empréstimos, entradas e saídas do período',
+  ]},
+  { version: '1.5.1', date: '01 Mai 2026', isLatest: false, items: [
     'Fix: botão Anular parcela agora funciona no app Electron (substituído window.prompt por dialog nativo)',
   ]},
   { version: '1.5.0', date: '30 Abr 2026', isLatest: false, items: [

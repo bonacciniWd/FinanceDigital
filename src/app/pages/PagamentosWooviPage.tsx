@@ -79,6 +79,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { toast } from 'sonner';
 import { valorCorrigido } from '../lib/juros';
+import { gerarRelatorioExecutivoPdf } from '../lib/pdf-report';
 import type { Parcela } from '../lib/view-types';
 
 function formatCurrency(value: number): string {
@@ -571,6 +572,59 @@ export default function PagamentosWooviPage() {
     }
   };
 
+  // ── Exportar Relatório Executivo PDF ─────────────────────────
+  // Pull mês corrente como default — o filtro já cobre seleção custom
+  const [exportandoPdf, setExportandoPdf] = useState(false);
+  const handleExportarRelatorioPdf = async () => {
+    setExportandoPdf(true);
+    try {
+      const inicioIso = format(periodoInicio, 'yyyy-MM-dd');
+      const fimIso = format(periodoFim, 'yyyy-MM-dd');
+      // Empréstimos cadastrados no período (data de contrato)
+      const fromTs = periodoInicio.getTime();
+      const toTs = periodoFim.getTime();
+      const cliMap = new Map(clientes.map((c) => [c.id, c.nome]));
+      const empPeriodo = emprestimos
+        .filter((e) => {
+          const t = new Date(e.dataContrato).getTime();
+          return t >= fromTs && t <= toTs;
+        })
+        .map((e) => ({
+          dataContrato: e.dataContrato,
+          clienteNome: cliMap.get(e.clienteId) || '—',
+          valor: e.valor,
+          status: e.status,
+          desembolsado: !!e.desembolsado,
+        }));
+
+      const saldoEfiNum = efiBalanceData?.balance?.saldo != null
+        ? parseFloat(efiBalanceData.balance.saldo)
+        : undefined;
+
+      await gerarRelatorioExecutivoPdf({
+        periodoInicio: inicioIso,
+        periodoFim: fimIso,
+        emprestimos: empPeriodo,
+        extrato: extratoItemsMerged.map((i) => ({
+          horario: i.horario,
+          direction: i.direction,
+          nome: i.nome,
+          descricao: i.descricao,
+          valor: i.valor,
+          e2eId: i.e2eId,
+          status: i.status,
+        })),
+        saldoEfi: saldoEfiNum,
+        subtitulo: user?.name ? `Gerado por ${user.name}` : undefined,
+      });
+      toast.success('Relatório executivo gerado');
+    } catch (err) {
+      toast.error(`Erro ao gerar PDF: ${(err as Error).message}`);
+    } finally {
+      setExportandoPdf(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -582,6 +636,19 @@ export default function PagamentosWooviPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleExportarRelatorioPdf}
+            disabled={exportandoPdf || loadingExtrato}
+            title="Gera PDF executivo do período selecionado (empréstimos + extrato entradas/saídas)"
+          >
+            {exportandoPdf ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <FileText className="mr-2 h-4 w-4" />
+            )}
+            Exportar Relatório PDF
+          </Button>
           <Button onClick={() => setShowNovaCobranca(true)}>
             <Plus className="mr-2 h-4 w-4" />
             Nova Cobrança
