@@ -123,7 +123,12 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.8.1', date: '05 Mai 2026', isLatest: true, items: [
+  { version: '1.8.2', date: '05 Mai 2026', isLatest: true, items: [
+    'Saídas Órfãs · Busca de empréstimos: migrado para join direto com clientes — nome do cliente agora sempre aparece na busca manual',
+    'Saídas Órfãs · Removido filtro de análise de crédito: todos os empréstimos não desembolsados aparecem como candidatos',
+    'Saídas Órfãs · Vínculo com categoria de gasto: corrigido erro ON CONFLICT em index parcial (migration 068)',
+  ]},
+  { version: '1.8.1', date: '05 Mai 2026', isLatest: false, items: [
     'Cobrança · Pagamento parcial (amortização): corrigido bug em que o botão "Efetuar Pagamento" parecia não funcionar — agora a coluna Original e o Total refletem o saldo amortizado imediatamente',
     'Cobrança · Conta bancária fixada em EFI BANK (PIX): seletor de conta removido do modal de pagamento (única conta utilizada)',
   ]},

@@ -342,35 +342,26 @@ function VincularModal({ orfa, onClose }: { orfa: SaidaOrfa; onClose: () => void
   useEffect(() => {
     (async () => {
       setLoading(true);
-      // Carrega empréstimos aprovados não desembolsados + análises + clientes
-      const [empResp, anaResp, cliResp, catResp] = await Promise.all([
+      // Join direto: empréstimos não desembolsados com dados do cliente embutidos
+      const [empResp, catResp] = await Promise.all([
         supabase
           .from('emprestimos')
-          .select('id, cliente_id, valor, desembolsado, analise_id')
+          .select('id, cliente_id, valor, desembolsado, clientes(nome, pix_key, cpf)')
           .eq('desembolsado', false),
-        supabase.from('analises').select('id, status, cliente_nome'),
-        supabase.from('clientes').select('id, nome, pix_key, cpf'),
         supabase.from('categorias_gastos').select('id, nome, cor, ativo').eq('ativo', true).order('nome'),
       ]);
 
       if (empResp.error) toast.error('Erro: ' + empResp.error.message);
-      const aprovadas = new Set(
-        (anaResp.data || []).filter((a: { status: string }) => a.status === 'aprovado').map((a: { id: string }) => a.id),
-      );
-      const cliMap = new Map((cliResp.data || []).map((c: { id: string; nome: string; pix_key: string | null; cpf: string | null }) => [c.id, c]));
+      // Inclui todos os empréstimos não desembolsados (com ou sem análise de crédito)
       const candidatos: EmprestimoCandidato[] = (empResp.data || [])
-        .filter((e: { analise_id: string | null }) => e.analise_id && aprovadas.has(e.analise_id))
-        .map((e: { id: string; cliente_id: string; valor: number; desembolsado: boolean; analise_id: string | null }) => {
-          const cli = cliMap.get(e.cliente_id);
-          return {
-            id: e.id,
-            cliente_id: e.cliente_id,
-            valor: Number(e.valor),
-            desembolsado: e.desembolsado,
-            cliente_nome: cli?.nome,
-            cliente_pix: cli?.pix_key,
-          };
-        });
+        .map((e: { id: string; cliente_id: string; valor: number; desembolsado: boolean; clientes: { nome: string; pix_key: string | null; cpf: string | null } | null }) => ({
+          id: e.id,
+          cliente_id: e.cliente_id,
+          valor: Number(e.valor),
+          desembolsado: e.desembolsado,
+          cliente_nome: e.clientes?.nome,
+          cliente_pix: e.clientes?.pix_key,
+        }));
       setEmprestimos(candidatos);
       setCategorias((catResp.data as CategoriaGasto[]) || []);
       setLoading(false);
@@ -391,7 +382,8 @@ function VincularModal({ orfa, onClose }: { orfa: SaidaOrfa; onClose: () => void
         if (buscaNorm) {
           return (
             (emp.cliente_nome || '').toLowerCase().includes(buscaNorm) ||
-            (emp.cliente_pix || '').toLowerCase().includes(buscaNorm)
+            (emp.cliente_pix || '').toLowerCase().includes(buscaNorm) ||
+            emp.id.toLowerCase().includes(buscaNorm)
           );
         }
         return mesmaChave || diff <= 10;

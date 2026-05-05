@@ -6,6 +6,19 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.8.2] — 2026-05-05
+
+### Corrigido — Saídas Órfãs: busca de empréstimos e vínculo com categoria
+
+**SaidasOrfasPage**
+- Busca de empréstimos: migrado de duas queries separadas (empréstimos + clientes via Map) para join direto `clientes(nome, pix_key)` embutido na query — elimina casos em que o nome do cliente não aparecia mesmo com o empréstimo cadastrado corretamente.
+- Removido filtro `analise_id` que excluía empréstimos criados sem análise de crédito; agora todos os empréstimos `desembolsado = false` aparecem como candidatos.
+
+**Migration 068 — `vincular_saida_orfa_categoria`**
+- Corrigido erro `there is no unique or exclusion constraint matching the ON CONFLICT specification`: o index `uniq_gastos_internos_e2e` é parcial (`WHERE e2e_id IS NOT NULL`), exigindo `ON CONFLICT (e2e_id) WHERE e2e_id IS NOT NULL` na função PL/pgSQL.
+
+---
+
 ## [1.8.1] — 2026-05-05
 
 ### Corrigido — Cobrança: amortização parcial e seleção de conta
