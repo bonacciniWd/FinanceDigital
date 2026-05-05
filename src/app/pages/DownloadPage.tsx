@@ -123,7 +123,11 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.8.0', date: '05 Mai 2026', isLatest: true, items: [
+  { version: '1.8.1', date: '05 Mai 2026', isLatest: true, items: [
+    'Cobrança · Pagamento parcial (amortização): corrigido bug em que o botão "Efetuar Pagamento" parecia não funcionar — agora a coluna Original e o Total refletem o saldo amortizado imediatamente',
+    'Cobrança · Conta bancária fixada em EFI BANK (PIX): seletor de conta removido do modal de pagamento (única conta utilizada)',
+  ]},
+  { version: '1.8.0', date: '05 Mai 2026', isLatest: false, items: [
     'Cadastro público: 10 migrações RLS corrigidas — anon agora pode inserir, atualizar e fazer upload de documentos sem erros de policy',
     'Storage client-documents: política DELETE para anon adicionada (necessária para upsert de documentos); HEIC/HEIF adicionados aos MIME types permitidos',
     'Análise de documentos: fotos tiradas com câmera nativa do iPhone (HEIC/HEIF) não são mais marcadas como suspeitas — falso positivo eliminado',

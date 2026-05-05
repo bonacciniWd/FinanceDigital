@@ -70,7 +70,6 @@ import { useAcordosByCliente } from '../hooks/useAcordos';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useAdminUsers } from '../hooks/useAdminUsers';
-import { useContasBancarias } from '../hooks/useContasBancarias';
 import { useCriarCobvEfi } from '../hooks/useWoovi';
 import { supabase } from '../lib/supabase';
 import AcordoFormModal from './AcordoFormModal';
@@ -712,7 +711,6 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   const { data: parcelas = [] } = useParcelasByCliente(clienteId);
   const { data: emprestimos = [] } = useEmprestimosByCliente(clienteId);
   const { data: acordos = [] } = useAcordosByCliente(clienteId);
-  const { data: contasBancarias = [] } = useContasBancarias();
   const { data: instancias = [] } = useInstancias();
   const updateParcela = useUpdateParcela();
   const registrarPagamento = useRegistrarPagamento();
@@ -1006,11 +1004,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
     setPagamentoData(new Date().toISOString().slice(0, 10));
     setPagamentoDesconto('0');
     setPagamentoValorParcial('');
-    const emp = emprestimoById.get(parcela.emprestimoId);
-    const gw = emp?.gateway;
-    const contaGateway = gw ? contasBancarias.find((c) => c.tipo === 'gateway' && c.nome.toLowerCase().includes(gw)) : null;
-    const contaPadrao = contasBancarias.find((c) => c.padrao);
-    setPagamentoConta(contaGateway?.nome ?? contaPadrao?.nome ?? (gw === 'efi' ? 'EFI BANK' : 'CONTA PRINCIPAL'));
+    setPagamentoConta('EFI BANK');
   };
 
   const closePagamentoModal = () => setPagamentoParcelaId(null);
@@ -1039,19 +1033,28 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         toast.error('Valor parcial deve ser maior que zero e menor que o total.');
         return;
       }
-      const restante = totalPagar - valorPago;
+      const restante = Math.max(totalPagar - valorPago, 0);
+      // Amortização: novo principal = restante; juros/multa/desconto absorvidos no pagamento.
+      // Atualiza `valor_original` (que alimenta a coluna "Original" e o cálculo de Total via computeValores).
+      const obsAmortizacao = `[Amortização ${new Date(pagamentoData).toLocaleDateString('pt-BR')}] Pago: ${formatCurrency(valorPago)} · Restante: ${formatCurrency(restante)}${pagamentoObs ? ' — ' + pagamentoObs : ''}${parcela.observacao ? '\n' + parcela.observacao : ''}`;
       updateParcela.mutate(
         {
           id: parcela.id,
           data: {
-            valor: Math.max(restante, 0),
-            desconto,
-            observacao: pagamentoObs || null,
+            valor_original: restante,
+            valor: restante,
+            juros: 0,
+            multa: 0,
+            desconto: 0,
+            data_vencimento: pagamentoData,
+            observacao: obsAmortizacao,
             conta_bancaria: pagamentoConta || null,
           },
         },
         {
           onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['parcelas'] });
+            queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
             toast.success(`Amortização registrada · Pago: ${formatCurrency(valorPago)} · Restante: ${formatCurrency(restante)}`);
             closePagamentoModal();
           },
@@ -2006,31 +2009,6 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                     </div>
                   </TabsContent>
                 </Tabs>
-
-                <div>
-                  <Label className="text-xs">Conta Bancária</Label>
-                  <Select value={pagamentoConta} onValueChange={setPagamentoConta}>
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {contasBancarias.length > 0 ? (
-                        contasBancarias.map((c) => (
-                          <SelectItem key={c.id} value={c.nome}>
-                            {c.nome}{c.padrao ? ' — Padrão' : ''}
-                          </SelectItem>
-                        ))
-                      ) : (
-                        <>
-                          <SelectItem value="EFI BANK">EFI Bank (Gateway PIX)</SelectItem>
-                          <SelectItem value="CONTA PRINCIPAL">CONTA PRINCIPAL</SelectItem>
-                          <SelectItem value="CONTA SECUNDÁRIA">CONTA SECUNDÁRIA</SelectItem>
-                          <SelectItem value="CAIXA">CAIXA</SelectItem>
-                        </>
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
 
                 <div className="flex gap-3 justify-end pt-2">
                   <Button variant="outline" onClick={closePagamentoModal}>Cancelar</Button>

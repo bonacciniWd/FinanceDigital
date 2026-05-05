@@ -6,6 +6,18 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.8.1] — 2026-05-05
+
+### Corrigido — Cobrança: amortização parcial e seleção de conta
+
+**ClienteDetalhesModal — aba Cobrança**
+- **Pagamento parcial (amortização)**: correção do bug em que o botão "Efetuar Pagamento" parecia não funcionar. Agora atualiza `valor_original` (além de `valor`), zera juros/multa/desconto absorvidos no pagamento e move `data_vencimento` para a data de pagamento informada — a coluna "Original" e o cálculo de "Total" passam a refletir o saldo amortizado imediatamente.
+- Append automático em `observacao` com timestamp e valores pago/restante (auditoria).
+- Invalidação explícita das queries `parcelas` e `emprestimos` após a amortização para refresh imediato da UI.
+- **Conta bancária fixa em EFI BANK**: removido o seletor de conta no modal de pagamento. Como só utilizamos a EFI (PIX), todos os pagamentos quitados/amortizados gravam `conta_bancaria = 'EFI BANK'` automaticamente.
+
+---
+
 ## [1.8.0] — 2026-05-05
 
 ### Corrigido — Cadastro público: RLS, documentos e análise de metadados
