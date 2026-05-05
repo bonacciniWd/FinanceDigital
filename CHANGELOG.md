@@ -6,6 +6,79 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.8.0] — 2026-05-05
+
+### Corrigido — Cadastro público: RLS, documentos e análise de metadados
+
+**RLS anon (Migrations 058–067)**
+- Migrations 058–064: correções em cascata nas políticas RLS para `anon` em `clientes` e `cadastro_links` (enum errado, subquery stacking em WITH CHECK, falta de GRANT explícito, políticas sem role explícito aplicando a todos).
+- Migration 065: política DELETE para `anon` em `storage.objects` — sem ela, o `upsert: true` do storage fazia DELETE + INSERT e bloqueava com RLS violation no reenvio de documentos.
+- Migration 066: políticas de storage sem restrição de role (`FOR ALL`) para `client-documents` — garante que qualquer JWT (anon ou autenticado) passe pelo INSERT/UPDATE/DELETE/SELECT.
+- Migration 067: `image/heic` e `image/heif` adicionados à lista `allowed_mime_types` do bucket `client-documents` (fotos nativas do iPhone eram rejeitadas pelo bucket).
+
+**Análise de documentos — `exif-analyzer.ts`**
+- `image/heic` / `image/heif`: tratados como `camera_nativa`, score 0, label `ok` — falso positivo eliminado para fotos tiradas com câmera nativa do iPhone.
+- `image/png` / `image/webp` / outros formatos comuns: score 0, sem penalidade.
+- `formato_inesperado` (score 1) reservado apenas para tipos realmente suspeitos (PDF disfaçado como imagem, binários, etc.).
+
+**CadastroReviewDialog**
+- Badge de alerta: trocado Tailwind classes por `style` inline com cores hex fixas — evita override do shadcn/ui Badge em dark mode; âmbar agora é `#d97706` com texto branco (contraste WCAG AA garantido).
+
+**ClienteDetalhesModal — aba Dados — Documentos**
+- Migrado de `getPublicUrl` (incompatível com bucket privado) para `createSignedUrl` (1h de validade) via `useQuery`.
+- Novo componente `DocSlot` com lightbox: clique na miniatura abre dialog com imagem em tamanho real (`object-contain`, até 75vh) + link "Abrir em nova aba".
+- `staleTime: 0` — thumbnails sempre carregam URL fresca ao montar (sem cache de URL expirada).
+- Após upload, invalida `['signed_url', ...]` no React Query para atualizar thumbnail imediatamente sem fechar o modal.
+
+---
+
+## [1.7.0] — 2026-05-04
+
+### Adicionado — Link público de cadastro / atualização cadastral
+
+**Migration 054** (`supabase/migrations/054_cadastro_links.sql`)
+- Coluna `clientes.cadastro_atualizado_em TIMESTAMPTZ` (rastreia última atualização self-service do próprio cliente).
+- Tabela `cadastro_links` (`token` único, `cliente_id` opcional, `expires_at` 7 dias, `used_at`, `used_cliente_id`, `whatsapp_enviado`, `criado_por`).
+- RLS: `authenticated` ALL; `anon` SELECT/UPDATE somente em links não-usados e não-expirados.
+- RLS em `clientes` para `anon`: SELECT/UPDATE quando existe link válido vinculando o cliente; INSERT quando existe link genérico válido (cadastro novo).
+- Storage `client-documents`: políticas anon INSERT/SELECT/UPDATE/DELETE (cliente sobe documentos pelo link público).
+
+**Edge Function `send-registration-link`** (`supabase/functions/send-registration-link/index.ts`)
+- Body: `{ cliente_id?, instancia_id?, send_whatsapp?, telefone_destino?, nome_destino? }`.
+- Gera token hex de 24 bytes, insere em `cadastro_links`, retorna `{ link, token, expires_at, sent, is_update, warning? }`.
+- Se `send_whatsapp=true` e telefone disponível, dispara mensagem via Evolution API (mesmo padrão de `send-verification-link`); registra em `whatsapp_mensagens_log`.
+- Mensagens distintas para cadastro novo (lead) e atualização (cliente migrado/legado).
+- Roles permitidos: `admin`, `gerencia`, `atendente`.
+
+**Página pública `/cadastro/:token`** (`CadastroClientePage.tsx`)
+- Single-page sem wizard — formulário enxuto com todas as seções: dados pessoais, endereço (auto-preenchimento ViaCEP), Pix, documentos (Doc Frente / Verso / Comprovante), 3 contatos de referência.
+- Detecta automaticamente se o token é para cadastro novo (`cliente_id IS NULL`) ou atualização (carrega dados existentes).
+- Para clientes migrados (email contém `@migracao`), o campo email vem em branco para o cliente preencher um real.
+- Email é **opcional** (foi removida a obrigatoriedade no cadastro novo e na atualização).
+- Upload direto no bucket `client-documents` via anon key (RLS por bucket_id).
+- Estados da página: `loading`, `form`, `submitting`, `done`, `error`, `expired`, `used`.
+- Após submit: marca `cadastro_links.used_at`, atualiza `clientes.cadastro_atualizado_em`.
+
+**Componente `CadastroLinkDialog`** (`src/app/components/CadastroLinkDialog.tsx`)
+- Dois botões: `Gerar e copiar link` (offline) e `Enviar via WhatsApp` (online).
+- Mostra o link gerado com botão copiar inline; valida 7 dias.
+- Avisa quando cliente está sem telefone (apenas modo "copiar").
+
+**Integração na UI**
+- `ClientesPage` cabeçalho: novo botão `Link de Cadastro` ao lado de `Novo Cliente` (gera link genérico para lead).
+- Modal `Editar Cliente`: novo botão `Link p/ cliente atualizar` no rodapé (modo edição).
+- `ClienteDetalhesModal` aba Dados: nova seção `Atualização cadastral pelo cliente` com indicador visual amber se desatualizado + botão `Gerar link`.
+- Cards da listagem de clientes: badge clicável `⚠ Cadastro desatualizado` (abre o dialog direto) quando email contém `@migracao` OU `cadastro_atualizado_em` é `NULL` OU > 180 dias.
+
+**Tipos**
+- `Cliente.cadastroAtualizadoEm?: string | null` em `view-types.ts`.
+- Adapter `dbClienteToView` mapeia `cadastro_atualizado_em` → `cadastroAtualizadoEm`.
+
+### Alterado
+- **Email opcional no cadastro de clientes**: removida a obrigatoriedade no `handleSave` da `ClientesPage` e o asterisco do label. Validação reduzida a `nome` + `telefone`.
+
+---
+
 ## [1.6.0] — 2026-05-02
 
 ### Adicionado — Bot WhatsApp robusto + atendimento humano

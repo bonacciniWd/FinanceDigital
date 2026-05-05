@@ -106,6 +106,7 @@ export function dbClienteToView(
     comprovanteEnderecoUrl: c.comprovante_endereco_url ?? undefined,
     contatosReferencia: (c.contatos_referencia as any[]) ?? undefined,
     rendaMensal: (c as any).renda_mensal ?? undefined,
+    cadastroAtualizadoEm: (c as any).cadastro_atualizado_em ?? null,
     indicadoPor: c.indicado_por ?? undefined,
     indicou: indicou ?? [],
   };

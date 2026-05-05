@@ -56,6 +56,7 @@ const PagamentosWooviPage = lazy(() => import('./pages/PagamentosWooviPage'));
 const PagamentosOrfaosPage = lazy(() => import('./pages/PagamentosOrfaosPage'));
 const SaidasOrfasPage = lazy(() => import('./pages/SaidasOrfasPage'));
 const VerifyIdentityPage = lazy(() => import('./pages/VerifyIdentityPage'));
+const CadastroClientePage = lazy(() => import('./pages/CadastroClientePage'));
 const IpWhitelistPage = lazy(() => import('./pages/IpWhitelistPage'));
 const DownloadPage = lazy(() => import('./pages/DownloadPage'));
 const DocsPage = lazy(() => import('./pages/DocsPage'));
@@ -101,6 +102,11 @@ export const router = createBrowserRouter([
   {
     path: '/verify-identity',
     element: lz(<VerifyIdentityPage />),
+  },
+  // Cadastro / atualização cadastral — público, tokenizado
+  {
+    path: '/cadastro/:token',
+    element: lz(<CadastroClientePage />),
   },
   // Download page — protegida por IP whitelist via Vercel middleware
   {

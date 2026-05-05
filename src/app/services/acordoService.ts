@@ -16,8 +16,29 @@ const ACORDO_SELECT = `
   clientes(nome, telefone)
 `;
 
+/**
+ * Quantidade de dias após a criação em que um acordo sem qualquer pagamento
+ * é automaticamente quebrado e o cliente vai parar em N3 (vencido · 46+ dias).
+ * Mantenha sincronizado com a função SQL `expire_overdue_acordos`.
+ */
+export const ACORDO_EXPIRACAO_DIAS = 15;
+
+/**
+ * Roda a expiração automática de acordos vencidos no servidor.
+ * Idempotente — pode ser chamada com frequência. Erros são engolidos para
+ * não bloquear a UI.
+ */
+async function runExpiracaoAcordos(): Promise<void> {
+  try {
+    await supabase.rpc('expire_overdue_acordos');
+  } catch (e) {
+    console.error('[acordoService] expire_overdue_acordos falhou:', e);
+  }
+}
+
 /** Lista todos os acordos (com nome do cliente). */
 export async function listAcordos(): Promise<AcordoComCliente[]> {
+  await runExpiracaoAcordos();
   const { data, error } = await supabase
     .from('acordos')
     .select(ACORDO_SELECT)
@@ -29,6 +50,7 @@ export async function listAcordos(): Promise<AcordoComCliente[]> {
 
 /** Lista acordos de um cliente específico. */
 export async function listAcordosByCliente(clienteId: string): Promise<AcordoComCliente[]> {
+  await runExpiracaoAcordos();
   const { data, error } = await supabase
     .from('acordos')
     .select(ACORDO_SELECT)

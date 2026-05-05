@@ -22,11 +22,13 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
-import { Search, Edit, History, Ban, Eye, Phone, Loader2, Plus, ChevronsUpDown, Check, MapPin, Upload, X, FileImage, Users } from 'lucide-react';
+import { Search, Edit, History, Ban, Eye, Phone, Loader2, Plus, ChevronsUpDown, Check, MapPin, Upload, X, FileImage, Users, Link as LinkIcon, AlertTriangle } from 'lucide-react';
 import { useClientes, useIndicados, useCreateCliente, useUpdateCliente } from '../hooks/useClientes';
 import { useParcelasByCliente } from '../hooks/useParcelas';
 import { StatusBadge } from '../components/StatusBadge';
 import BrazilMap from '../components/BrazilMap';
+import { CadastroLinkDialog } from '../components/CadastroLinkDialog';
+import { CadastroReviewDialog, usePendingCadastrosCount } from '../components/CadastroReviewDialog';
 import { toast } from 'sonner';
 import { cn } from '../components/ui/utils';
 import { supabase } from '../lib/supabase';
@@ -86,6 +88,14 @@ export default function ClientesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<ClienteFormData>(EMPTY_FORM);
+
+  // Cadastro link dialog
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkDialogTarget, setLinkDialogTarget] = useState<{ id: string | null; nome?: string; telefone?: string }>({ id: null });
+
+  // Review dialog
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const { data: pendingCount = 0 } = usePendingCadastrosCount();
 
   const { data: clientes = [], isLoading } = useClientes();
   const { data: indicados = [] } = useIndicados(selectedClient?.id);
@@ -413,8 +423,8 @@ export default function ClientesPage() {
   }, [resetDocState]);
 
   const handleSave = useCallback(async () => {
-    if (!form.nome || !form.email || !form.telefone) {
-      toast.error('Preencha nome, email e telefone');
+    if (!form.nome || !form.telefone) {
+      toast.error('Preencha nome e telefone');
       return;
     }
 
@@ -563,9 +573,22 @@ export default function ClientesPage() {
             {isLoading ? 'Carregando...' : `${filteredClientes.length} cliente(s) encontrado(s)`}
           </p>
         </div>
-        <Button className="bg-primary hover:bg-primary/90" onClick={openCreateModal}>
-          <Plus className="w-4 h-4 mr-2" />Novo Cliente
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setReviewOpen(true)} className="relative">
+            Revisar cadastros
+            {pendingCount > 0 && (
+              <span className="ml-2 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold bg-amber-500 text-white rounded-full">
+                {pendingCount > 99 ? '99+' : pendingCount}
+              </span>
+            )}
+          </Button>
+          <Button variant="outline" onClick={() => { setLinkDialogTarget({ id: null }); setLinkDialogOpen(true); }}>
+            <LinkIcon className="w-4 h-4 mr-2" />Link de Cadastro
+          </Button>
+          <Button className="bg-primary hover:bg-primary/90" onClick={openCreateModal}>
+            <Plus className="w-4 h-4 mr-2" />Novo Cliente
+          </Button>
+        </div>
       </div>
 
       {/* Filtros */}
@@ -663,7 +686,13 @@ export default function ClientesPage() {
 
       {/* Visualização em Cards (única) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {paginatedClientes.map((cliente) => (
+          {paginatedClientes.map((cliente) => {
+            const isMigrated = (cliente.email ?? '').toLowerCase().includes('@migracao');
+            const ageDays = cliente.cadastroAtualizadoEm
+              ? Math.floor((Date.now() - new Date(cliente.cadastroAtualizadoEm).getTime()) / 86400000)
+              : null;
+            const cadastroDesatualizado = isMigrated || ageDays === null || ageDays > 180;
+            return (
             <Card key={cliente.id} className="hover:shadow-lg transition-shadow">
               <CardHeader>
                 <div className="flex items-start justify-between">
@@ -676,6 +705,20 @@ export default function ClientesPage() {
                       <p className="text-sm text-muted-foreground">{cliente.email}</p>
                     </div>
                   </div>
+                  {cadastroDesatualizado && (
+                    <Badge
+                      variant="outline"
+                      className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-500/10 cursor-pointer"
+                      onClick={() => {
+                        setLinkDialogTarget({ id: cliente.id, nome: cliente.nome, telefone: cliente.telefone });
+                        setLinkDialogOpen(true);
+                      }}
+                      title="Clique para gerar link de atualização"
+                    >
+                      <AlertTriangle className="w-3 h-3 mr-1" />
+                      Cadastro desatualizado
+                    </Badge>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -725,7 +768,8 @@ export default function ClientesPage() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+            );
+          })}
         </div>
 
       {/* Modal de Detalhes */}
@@ -872,8 +916,8 @@ export default function ClientesPage() {
                 <Input value={form.nome} onChange={(e) => setForm(p => ({ ...p, nome: e.target.value }))} placeholder="Nome completo" />
               </div>
               <div>
-                <Label>Email *</Label>
-                <Input type="email" value={form.email} onChange={(e) => setForm(p => ({ ...p, email: e.target.value }))} placeholder="email@exemplo.com" />
+                <Label>Email</Label>
+                <Input type="email" value={form.email} onChange={(e) => setForm(p => ({ ...p, email: e.target.value }))} placeholder="email@exemplo.com (opcional)" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -1129,16 +1173,35 @@ export default function ClientesPage() {
           </div>{/* end 2-col grid */}
 
             <div className="flex gap-3 pt-2">
-              <Button className="flex-1 bg-primary hover:bg-primary/90" onClick={handleSave} disabled={isSaving || !form.nome || !form.email || !form.telefone}>
+              <Button className="flex-1 bg-primary hover:bg-primary/90" onClick={handleSave} disabled={isSaving || !form.nome || !form.telefone}>
                 {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 {editingId ? 'Atualizar' : 'Criar Cliente'}
               </Button>
+              {editingId && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setLinkDialogTarget({ id: editingId, nome: form.nome, telefone: form.telefone });
+                    setLinkDialogOpen(true);
+                  }}
+                >
+                  <LinkIcon className="w-4 h-4 mr-2" />Link p/ cliente atualizar
+                </Button>
+              )}
               <Button className="flex-1" variant="outline" onClick={() => { setModalOpen(false); setEditingId(null); setForm(EMPTY_FORM); resetDocState(); }}>
                 Cancelar
               </Button>
             </div>
         </DialogContent>
       </Dialog>
+      <CadastroLinkDialog
+        open={linkDialogOpen}
+        onOpenChange={setLinkDialogOpen}
+        clienteId={linkDialogTarget.id}
+        clienteNome={linkDialogTarget.nome}
+        clienteTelefone={linkDialogTarget.telefone}
+      />
+      <CadastroReviewDialog open={reviewOpen} onOpenChange={setReviewOpen} />
     </div>
   );
 }

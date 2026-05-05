@@ -123,7 +123,22 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.6.0', date: '02 Mai 2026', isLatest: true, items: [
+  { version: '1.8.0', date: '05 Mai 2026', isLatest: true, items: [
+    'Cadastro público: 10 migrações RLS corrigidas — anon agora pode inserir, atualizar e fazer upload de documentos sem erros de policy',
+    'Storage client-documents: política DELETE para anon adicionada (necessária para upsert de documentos); HEIC/HEIF adicionados aos MIME types permitidos',
+    'Análise de documentos: fotos tiradas com câmera nativa do iPhone (HEIC/HEIF) não são mais marcadas como suspeitas — falso positivo eliminado',
+    'Badge de alerta no CadastroReviewDialog: contraste corrigido (texto branco sobre âmbar, laranja e vermelho — WCAG AA)',
+    'Documentos no modal do cliente: migrado de getPublicUrl para createSignedUrl (bucket privado); thumbnails sempre atualizadas após upload; lightbox com zoom ao clicar na imagem',
+  ]},
+  { version: '1.7.0', date: '04 Mai 2026', isLatest: false, items: [
+    'Link público de cadastro e atualização cadastral: gera link único por cliente ou genérico para lead (válido 7 dias)',
+    'Página /cadastro/:token: wizard com dados pessoais, endereço (ViaCEP), PIX, documentos e contatos de referência',
+    'Verificador de documentos (EXIF): detecta uso de software de edição, datas divergentes e ausência de dados de câmera',
+    'CadastroReviewDialog: fila de cadastros pendentes com análise de metadados, aprovação ou rejeição com motivo',
+    'Envio do link via WhatsApp (Evolution API) com mensagem distinta para lead vs cliente existente',
+    'Email opcional no cadastro — obrigatoriedade removida',
+  ]},
+  { version: '1.6.0', date: '02 Mai 2026', isLatest: false, items: [
     'Bot WhatsApp robusto: idempotência por message_id, comandos universais (sair/menu/atendente), timeout de sessão (30min), validação de resposta com 3 tentativas, normalização de acentos',
     'Atendimento humano automático: bot encaminha para o dono da instância ou atendente online por prioridade de role, com transcrição das últimas 8 mensagens no ticket',
     'Bot pausa automaticamente quando há ticket em atendimento humano (não atrapalha mais a conversa)',

@@ -11,7 +11,7 @@
  *  - Histórico: pagamentos + contatos + tempo de resposta
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
   Dialog,
   DialogContent,
@@ -56,6 +56,7 @@ import {
   QrCode,
   Plus,
   Ban,
+  Link as LinkIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -75,6 +76,7 @@ import { supabase } from '../lib/supabase';
 import AcordoFormModal from './AcordoFormModal';
 import EmprestimoEditModal from './EmprestimoEditModal';
 import ComprovanteUploader from './ComprovanteUploader';
+import { CadastroLinkDialog } from './CadastroLinkDialog';
 import type { ClienteUpdate, ParcelaUpdate } from '../lib/database.types';
 import type { Parcela } from '../lib/view-types';
 import { valorCorrigido, diasDeAtraso, calcularJurosAtraso, JUROS_DIAS_MAX } from '../lib/juros';
@@ -334,6 +336,8 @@ function DadosTab({ cliente, onClose }: { cliente: ReturnType<typeof useCliente>
 
       <DocumentosSection clienteId={cliente.id} cliente={cliente} />
 
+      <CadastroLinkSection clienteId={cliente.id} clienteNome={cliente.nome} clienteTelefone={cliente.telefone} cadastroAtualizadoEm={(cliente as any).cadastroAtualizadoEm ?? (cliente as any).cadastro_atualizado_em ?? null} email={cliente.email} />
+
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="secondary" onClick={onClose}>Fechar</Button>
         <Button onClick={handleSave} disabled={updateCliente.isPending}>
@@ -354,6 +358,107 @@ function Field({ label, children, className }: { label: string; children: React.
   );
 }
 
+// ── DocSlot: exibe documento do bucket privado via signed URL + lightbox ──
+function DocSlot({
+  slotKey, dbKey, label, path, clienteId: _clienteId, uploading, onUpload,
+}: {
+  slotKey: string;
+  dbKey: string;
+  label: string;
+  path: string | null;
+  clienteId: string;
+  uploading: string | null;
+  onUpload: (file: File) => void;
+}) {
+  const [lightbox, setLightbox] = useState(false);
+
+  const { data: url, isLoading } = useQuery({
+    queryKey: ['signed_url', path],
+    queryFn: async () => {
+      if (!path) return null;
+      const { data } = await supabase.storage
+        .from('client-documents')
+        .createSignedUrl(path, 3600);
+      return data?.signedUrl ?? null;
+    },
+    enabled: !!path,
+    staleTime: 0, // sempre busca URL fresca ao montar
+  });
+
+  return (
+    <div className="border rounded-lg p-3 space-y-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      {isLoading ? (
+        <div className="h-24 flex items-center justify-center border rounded bg-muted">
+          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : url ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setLightbox(true)}
+            className="block w-full border rounded overflow-hidden bg-muted cursor-zoom-in hover:opacity-90 transition-opacity"
+          >
+            <img src={url} alt={label} className="w-full h-auto object-cover" />
+          </button>
+          <Dialog open={lightbox} onOpenChange={setLightbox}>
+            <DialogContent className="max-w-3xl p-3 flex flex-col gap-2">
+              <DialogHeader>
+                <DialogTitle className="text-sm">{label}</DialogTitle>
+              </DialogHeader>
+              <div className="flex-1 flex items-center justify-center bg-muted rounded overflow-hidden">
+                <img
+                  src={url}
+                  alt={label}
+                  className="max-h-[75vh] max-w-full object-contain rounded"
+                />
+              </div>
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-center text-muted-foreground hover:underline"
+              >
+                Abrir em nova aba
+              </a>
+            </DialogContent>
+          </Dialog>
+        </>
+      ) : (
+        <div className="h-24 flex items-center justify-center border border-dashed rounded text-xs text-muted-foreground">
+          {path ? 'Erro ao carregar' : 'Sem arquivo'}
+        </div>
+      )}
+      <label className="block">
+        <input
+          type="file"
+          accept="image/*,application/pdf"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) onUpload(file);
+            e.target.value = '';
+          }}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          className="w-full cursor-pointer"
+          asChild
+          disabled={uploading === slotKey}
+        >
+          <span>
+            {uploading === slotKey
+              ? <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+              : <Upload className="w-3 h-3 mr-2" />}
+            {url ? 'Substituir' : 'Enviar'}
+          </span>
+        </Button>
+      </label>
+    </div>
+  );
+}
+
 function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente: NonNullable<ReturnType<typeof useCliente>['data']> }) {
   const updateCliente = useUpdateCliente();
   const [uploading, setUploading] = useState<string | null>(null);
@@ -363,6 +468,8 @@ function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente:
     { key: 'documentoVersoUrl', dbKey: 'documento_verso_url', label: 'Documento (verso)' },
     { key: 'comprovanteEnderecoUrl', dbKey: 'comprovante_endereco_url', label: 'Comprovante de endereço' },
   ];
+
+  const queryClient = useQueryClient();
 
   const uploadDoc = useCallback(async (file: File, slotKey: typeof docs[number]['key'], dbKey: typeof docs[number]['dbKey']) => {
     setUploading(slotKey);
@@ -376,18 +483,15 @@ function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente:
       });
       if (error) throw error;
       await updateCliente.mutateAsync({ id: clienteId, data: { [dbKey]: path } as ClienteUpdate });
+      // Invalida signed URL do path antigo para thumbnail atualizar imediatamente
+      queryClient.invalidateQueries({ queryKey: ['signed_url'] });
       toast.success('Documento enviado');
     } catch (err) {
       toast.error('Falha no upload: ' + (err as Error).message);
     } finally {
       setUploading(null);
     }
-  }, [clienteId, updateCliente]);
-
-  const getPublicUrl = (path?: string | null) => {
-    if (!path) return null;
-    return supabase.storage.from('client-documents').getPublicUrl(path).data.publicUrl;
-  };
+  }, [clienteId, updateCliente, queryClient]);
 
   return (
     <section>
@@ -397,44 +501,17 @@ function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente:
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {docs.map(({ key, dbKey, label }) => {
           const path = cliente[key];
-          const url = getPublicUrl(path);
           return (
-            <div key={key} className="border rounded-lg p-3 space-y-2">
-              <div className="text-xs text-muted-foreground">{label}</div>
-              {url ? (
-                <a href={url} target="_blank" rel="noreferrer" className="block border rounded overflow-hidden bg-muted">
-                  <img src={url} alt={label} className="w-full h-24 object-cover" />
-                </a>
-              ) : (
-                <div className="h-24 flex items-center justify-center border border-dashed rounded text-xs text-muted-foreground">
-                  Sem arquivo
-                </div>
-              )}
-              <label className="block">
-                <input
-                  type="file"
-                  accept="image/*,application/pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) uploadDoc(file, key, dbKey);
-                    e.target.value = '';
-                  }}
-                />
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="w-full cursor-pointer"
-                  asChild
-                  disabled={uploading === key}
-                >
-                  <span>
-                    {uploading === key ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : <Upload className="w-3 h-3 mr-2" />}
-                    {url ? 'Substituir' : 'Enviar'}
-                  </span>
-                </Button>
-              </label>
-            </div>
+            <DocSlot
+              key={key}
+              slotKey={key}
+              dbKey={dbKey}
+              label={label}
+              path={path ?? null}
+              clienteId={clienteId}
+              uploading={uploading}
+              onUpload={(file) => uploadDoc(file, key, dbKey)}
+            />
           );
         })}
       </div>
@@ -483,11 +560,11 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
           recebido += (p.valor ?? 0);
           jurosRecebidos += (p.juros ?? 0);
           pagas++;
-        } else if (p.status === 'cancelada') {
-          // ignora
+        } else if (p.status === 'cancelada' || p.congelada) {
+          // Ignora canceladas e congeladas (estas últimas foram substituídas por acordo)
         } else {
           const dias = diasDeAtraso(p.dataVencimento);
-          const congelado = !!p.acordoId || !!p.congelada || dias > JUROS_DIAS_MAX;
+          const congelado = !!p.acordoId || dias > JUROS_DIAS_MAX;
           const { total } = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, { congelarJuros: congelado });
           saldoCorrigido += total;
           if (p.status === 'vencida') vencidas++;
@@ -668,14 +745,16 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
     return m;
   }, [parcelas]);
 
-  // Calcula valores corrigidos (juros automáticos exceto se congelada/acordo/>365d)
+  // Calcula valores corrigidos (juros automaáticos exceto se congelada/acordo/>365d)
   const computeValores = (p: Parcela) => {
     const dias = diasDeAtraso(p.dataVencimento);
     const congelado = !!p.acordoId || !!p.congelada || dias > JUROS_DIAS_MAX;
     const v = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, {
       congelarJuros: congelado,
     });
-    return { ...v, congelado, bloqueada: !!p.acordoId || !!p.congelada };
+    // Bloqueia apenas parcelas "congeladas" (substituídas por acordo).
+    // Parcelas COM acordoId são as parcelas vigentes do acordo — devem ser editáveis/pagáveis.
+    return { ...v, congelado, bloqueada: !!p.congelada };
   };
 
   const saldoPendente = pendentes.reduce((sum, p) => sum + computeValores(p).total, 0);
@@ -702,8 +781,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const startEditCell = (p: Parcela, field: EditField) => {
-    if (p.acordoId || p.congelada) {
-      toast.error('Parcela bloqueada (acordo/congelada). Edição não permitida.');
+    if (p.congelada) {
+      toast.error('Parcela bloqueada (substituída por acordo). Edição não permitida.');
       return;
     }
     setEdit({
@@ -844,8 +923,8 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
 
   // Anular parcela (status=cancelada). Nunca excluir — anti-fraude.
   const handleAnularParcela = (p: Parcela) => {
-    if (p.acordoId || p.congelada) {
-      toast.error('Parcela bloqueada (acordo/congelada). Anulação não permitida.');
+    if (p.congelada) {
+      toast.error('Parcela bloqueada (substituída por acordo). Anulação não permitida.');
       return;
     }
     setAnularMotivo('');
@@ -1283,9 +1362,45 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                       .eq('charge_id', acordoAtual.entrada_charge_id);
                   }
 
+                  // Re-sincroniza o status dos empréstimos cujas parcelas foram congeladas pelo acordo.
+                  // Sem isso, os empréstimos antigos continuam exibindo "inadimplente" e o cliente "vencido".
+                  try {
+                    const empIds = new Set<string>();
+                    if (acordoAtual?.parcelas_originais_ids?.length) {
+                      const { data: origs } = await supabase
+                        .from('parcelas')
+                        .select('emprestimo_id')
+                        .in('id', acordoAtual.parcelas_originais_ids);
+                      (origs ?? []).forEach((r: any) => r.emprestimo_id && empIds.add(r.emprestimo_id));
+                    }
+                    // Inclui também emprestimos das parcelas do próprio acordo (caso não haja parcelas originais).
+                    const { data: parcAcordo } = await supabase
+                      .from('parcelas')
+                      .select('emprestimo_id')
+                      .eq('acordo_id', acordoId);
+                    (parcAcordo ?? []).forEach((r: any) => r.emprestimo_id && empIds.add(r.emprestimo_id));
+                    for (const empId of empIds) {
+                      await syncEmprestimoStatus.mutateAsync(empId);
+                    }
+                    // Recalcula status do cliente: se nenhum empréstimo do cliente está mais inadimplente, marca em_dia.
+                    const { data: empsAtuais } = await supabase
+                      .from('emprestimos')
+                      .select('status')
+                      .eq('cliente_id', clienteId);
+                    const aindaInadimplente = (empsAtuais ?? []).some((e: any) => e.status === 'inadimplente');
+                    if (!aindaInadimplente) {
+                      await supabase.from('clientes').update({ status: 'em_dia' } as never).eq('id', clienteId);
+                    }
+                  } catch (syncErr) {
+                    console.error('[acordo entrada] Erro ao sincronizar status:', syncErr);
+                  }
+
                   toast.success('Entrada confirmada com sucesso');
                   queryClient.invalidateQueries({ queryKey: ['acordos'] });
                   queryClient.invalidateQueries({ queryKey: ['kanban-cobranca'] });
+                  queryClient.invalidateQueries({ queryKey: ['emprestimos'] });
+                  queryClient.invalidateQueries({ queryKey: ['clientes'] });
+                  queryClient.invalidateQueries({ queryKey: ['cliente', clienteId] });
                   setConfirmEntradaAcordoId(null);
                   setConfirmEntradaFile(null);
                   setConfirmEntradaObs('');
@@ -2340,5 +2455,58 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint?:
       <div className="text-lg font-semibold">{value}</div>
       {hint && <div className="text-[11px] text-muted-foreground">{hint}</div>}
     </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Cadastro Link Section — gera link p/ cliente atualizar próprio cadastro
+   ═══════════════════════════════════════════════════════════ */
+function CadastroLinkSection({
+  clienteId, clienteNome, clienteTelefone, cadastroAtualizadoEm, email,
+}: { clienteId: string; clienteNome: string; clienteTelefone: string; cadastroAtualizadoEm: string | null; email: string }) {
+  const [open, setOpen] = useState(false);
+
+  const isMigrated = (email ?? '').toLowerCase().includes('@migracao');
+  const ageDays = cadastroAtualizadoEm
+    ? Math.floor((Date.now() - new Date(cadastroAtualizadoEm).getTime()) / 86400000)
+    : null;
+  const desatualizado = isMigrated || ageDays === null || ageDays > 180;
+
+  return (
+    <section>
+      <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+        <LinkIcon className="w-4 h-4" /> Atualização cadastral pelo cliente
+      </h3>
+      <div className={`p-3 rounded border ${desatualizado ? 'border-amber-500/40 bg-amber-500/5' : 'border-border'}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="text-xs space-y-1">
+            {desatualizado ? (
+              <p className="text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Cadastro {isMigrated ? 'migrado do sistema antigo' : ageDays === null ? 'nunca atualizado pelo cliente' : `atualizado há ${ageDays} dias`} — recomenda-se solicitar atualização.
+              </p>
+            ) : (
+              <p className="text-muted-foreground flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
+                Atualizado pelo cliente há {ageDays} dia(s).
+              </p>
+            )}
+            <p className="text-muted-foreground">
+              Gere um link único e envie pro cliente preencher os próprios dados (válido por 7 dias).
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+            <LinkIcon className="w-3.5 h-3.5 mr-1.5" /> Gerar link
+          </Button>
+        </div>
+      </div>
+      <CadastroLinkDialog
+        open={open}
+        onOpenChange={setOpen}
+        clienteId={clienteId}
+        clienteNome={clienteNome}
+        clienteTelefone={clienteTelefone}
+      />
+    </section>
   );
 }

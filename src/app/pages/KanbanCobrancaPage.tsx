@@ -58,7 +58,7 @@ import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
 import { useTemplatesByCategoria } from '../hooks/useTemplates';
 import { useCriarCobrancaWoovi, useCriarCobvEfi } from '../hooks/useWoovi';
 import { useRegistrarPagamento, useParcelas } from '../hooks/useParcelas';
-import { useCriarAcordo } from '../hooks/useAcordos';
+import { useCriarAcordo, useAcordos } from '../hooks/useAcordos';
 import { useClientes } from '../hooks/useClientes';
 import { useAdminUsers } from '../hooks/useAdminUsers';
 import ComprovanteUploader from '../components/ComprovanteUploader';
@@ -162,6 +162,7 @@ export default function KanbanCobrancaPage() {
   const criarCobvEfi = useCriarCobvEfi();
   const registrarPagamento = useRegistrarPagamento();
   const criarAcordo = useCriarAcordo();
+  const { data: acordosAll = [] } = useAcordos();
   const { data: configSistema } = useConfigSistema();
 
   const instanciasConectadas = useMemo(
@@ -342,14 +343,20 @@ export default function KanbanCobrancaPage() {
       .reduce((sum, c) => sum + c.valorDivida, 0);
     const acordos = cardsAtivos.filter((c) => c.etapa === 'acordo').length;
     const pagos = allCards.filter((c) => c.etapa === 'pago');
-    const totalPago = pagos.reduce((sum, c) => sum + c.valorDivida, 0);
+    const totalPagoCards = pagos.reduce((sum, c) => sum + c.valorDivida, 0);
+    // Soma entrada paga de acordos ativos/quitados (não cancelados/quebrados).
+    // valor_parcela das parcelas pagas do acordo também conta como recuperado.
+    const totalEntradasAcordo = acordosAll
+      .filter((a) => a.entrada_paga && (a.status === 'ativo' || a.status === 'quitado'))
+      .reduce((sum, a) => sum + Number(a.valor_entrada ?? 0), 0);
+    const totalPago = totalPagoCards + totalEntradasAcordo;
     const totalClientes = cardsAtivos.length;
     const totalNegociacao = cardsAtivos.filter((c) => c.etapa === 'negociacao').length;
     const taxaConversao = totalNegociacao > 0
       ? Math.round((acordos / totalNegociacao) * 100)
       : 0;
     return { total, negociacao, acordos, totalClientes, taxaConversao, totalPago };
-  }, [allCards]);
+  }, [allCards, acordosAll]);
 
   const handleDragStart = (e: React.DragEvent, cardId: string) => {
     // 'text/plain' garante compatibilidade ampla; 'cardId' mantido para compat.

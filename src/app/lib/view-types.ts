@@ -105,6 +105,7 @@ export interface Cliente {
   comprovanteEnderecoUrl?: string;
   contatosReferencia?: Array<{nome: string; telefone: string; parentesco: string}>;
   rendaMensal?: number;
+  cadastroAtualizadoEm?: string | null;
 }
 
 /**
