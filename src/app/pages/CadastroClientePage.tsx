@@ -252,6 +252,16 @@ export default function CadastroClientePage() {
 
       let clienteId = linkRow.cliente_id;
       if (clienteId) {
+        // Verifica se o CPF informado já pertence a outro cliente (violaria unique constraint).
+        // Se sim, remove o CPF do payload para não sobrescrever.
+        const cpfLimpo = (payload.cpf as string) || '';
+        if (cpfLimpo) {
+          const { data: byCpf } = await supabase
+            .from('clientes').select('id').eq('cpf', cpfLimpo).neq('id', clienteId).maybeSingle();
+          if (byCpf) {
+            delete payload.cpf; // CPF pertence a outro cadastro — não altera
+          }
+        }
         const { error } = await supabase.from('clientes').update(payload).eq('id', clienteId);
         if (error) throw error;
       } else {

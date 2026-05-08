@@ -475,10 +475,56 @@ Deno.serve(async (req: Request) => {
     }
 
     if (analise.status !== "em_analise" && analise.status !== "pendente") {
+      // Idempotência: se já está aprovado e existe empréstimo vinculado,
+      // retorna sucesso com o emprestimo_id existente (não cria duplicado).
+      if (analise.status === "aprovado") {
+        const { data: existing } = await adminClient
+          .from("emprestimos")
+          .select("id, parcelas")
+          .eq("analise_id", analise_id)
+          .maybeSingle();
+        if (existing) {
+          console.log(`[approve-credit] Idempotente: análise ${analise_id} já aprovada — retornando empréstimo ${existing.id}`);
+          return new Response(
+            JSON.stringify({
+              success: true,
+              idempotent: true,
+              emprestimo_id: existing.id,
+              parcelas_geradas: existing.parcelas ?? 0,
+              payment_status: "already_processed",
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
       return new Response(
         JSON.stringify({ error: `Análise em status inválido: ${analise.status}` }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    // Defesa anti-corrida: se já existir empréstimo com esse analise_id (criado
+    // por uma chamada concorrente que ainda não atualizou o status), retorna
+    // idempotente. A UNIQUE INDEX da migration 069 é a salvaguarda final no DB.
+    {
+      const { data: pre } = await adminClient
+        .from("emprestimos")
+        .select("id, parcelas")
+        .eq("analise_id", analise_id)
+        .maybeSingle();
+      if (pre) {
+        console.log(`[approve-credit] Idempotente (pré-insert): empréstimo ${pre.id} já existe para análise ${analise_id}`);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            idempotent: true,
+            emprestimo_id: pre.id,
+            parcelas_geradas: pre.parcelas ?? 0,
+            payment_status: "already_processed",
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
     }
 
     // ── Verificar identidade aprovada ───────────────────
@@ -615,7 +661,33 @@ Deno.serve(async (req: Request) => {
       .select("id")
       .single();
 
-    if (empErr) throw empErr;
+    if (empErr) {
+      // Trata violação de UNIQUE em emprestimos.analise_id (migration 069).
+      // Pode acontecer em corrida real onde duas invocações passaram dos
+      // checks prévios. Retorna idempotente referenciando o vencedor.
+      const code = (empErr as { code?: string }).code;
+      if (code === "23505") {
+        const { data: winner } = await adminClient
+          .from("emprestimos")
+          .select("id, parcelas")
+          .eq("analise_id", analise.id)
+          .maybeSingle();
+        if (winner) {
+          console.log(`[approve-credit] UNIQUE violation — corrida resolvida; retornando empréstimo ${winner.id}`);
+          return new Response(
+            JSON.stringify({
+              success: true,
+              idempotent: true,
+              emprestimo_id: winner.id,
+              parcelas_geradas: winner.parcelas ?? 0,
+              payment_status: "already_processed",
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+      throw empErr;
+    }
 
     // ── Gerar parcelas ──────────────────────────────────
     const parcelasInsert = datasVencimento.map((dataVenc, idx) => ({

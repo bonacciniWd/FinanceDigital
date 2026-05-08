@@ -11,7 +11,7 @@
  * @route /clientes/analise-credito
  * @access Protegido — perfis admin, gerente, analista
  */
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -397,7 +397,12 @@ export default function AnaliseCreditoPage() {
 
   // ── Ações ────────────────────────────────────────────────
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  // Guard síncrono: setState é assíncrono; cliques rápidos consecutivos passam
+  // pelo `disabled` antes do React re-renderizar. Ref bloqueia na hora.
+  const aprovandoRef = useRef(false);
   const handleAprovar = async (analise: AnaliseCredito) => {
+    if (aprovandoRef.current) return;
+    aprovandoRef.current = true;
     setApprovingId(analise.id);
     try {
       // pix_key é lido automaticamente da tabela clientes pelo backend
@@ -419,6 +424,7 @@ export default function AnaliseCreditoPage() {
       toast.error(`Erro ao aprovar: ${err.message}`);
     } finally {
       setApprovingId(null);
+      aprovandoRef.current = false;
     }
   };
 
@@ -456,7 +462,13 @@ export default function AnaliseCreditoPage() {
 
   // ── (Desembolso migrou para PagamentosWooviPage) ─────────────────────────
 
+  // Guard síncrono contra duplo-clique em "Criar Análise".
+  // O `disabled={createMutation.isPending}` no botão não evita a corrida porque
+  // setState do React Query só vira pending após o próximo render — dois cliques
+  // rápidos disparam mutate() duas vezes → duas análises → dois empréstimos.
+  const criandoAnaliseRef = useRef(false);
   const handleNovaAnalise = () => {
+    if (criandoAnaliseRef.current || createMutation.isPending) return;
     if (!formNova.clienteNome || !formNova.cpf || !formNova.valorSolicitado) {
       toast.error('Preencha todos os campos obrigatórios.');
       return;
@@ -464,6 +476,7 @@ export default function AnaliseCreditoPage() {
     if (pendenciaCliente?.temPendencia) {
       toast.warning(`Atenção: cliente possui ${pendenciaCliente.total} empréstimo(s) ativo(s). A análise será criada mesmo assim.`);
     }
+    criandoAnaliseRef.current = true;
     createMutation.mutate(
       {
         cliente_id: formNova.clienteId || null,
@@ -537,6 +550,9 @@ export default function AnaliseCreditoPage() {
           }
         },
         onError: (err) => toast.error(`Erro ao criar análise: ${err.message}`),
+        onSettled: () => {
+          criandoAnaliseRef.current = false;
+        },
       }
     );
   };

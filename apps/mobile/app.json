@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Fintechflow Admin",
+    "slug": "fintechflow-admin",
+    "scheme": "fintechflow",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fintechflow.admin"
+    },
+    "android": {
+      "package": "com.fintechflow.admin"
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

@@ -190,8 +190,12 @@ export function subscribeToChatInterno(
   meuId: string,
   onNewMessage: (msg: ChatInterno) => void
 ): () => void {
+  // Nome único por subscrição (React 18 strict mode roda useEffect 2x;
+  // se reusarmos o mesmo nome, supabase devolve o canal já subscrito
+  // e .on() lança "cannot add postgres_changes callbacks after subscribe()").
+  const channelName = `chat_interno:${meuId}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
   const channel = supabase
-    .channel(`chat_interno:${meuId}`)
+    .channel(channelName)
     .on(
       'postgres_changes',
       {

@@ -360,8 +360,13 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
   };
 
   // Approve verification → call approve-credit edge function to create emprestimo + parcelas
+  // Guard síncrono contra duplo-clique: setState não bloqueia o segundo clique
+  // antes do re-render. Sem isso, dois cliques rápidos criavam empréstimos duplicados.
+  const aprovandoRef = useRef(false);
   const handleApprove = async () => {
+    if (aprovandoRef.current) return;
     if (!latestVerification || !analise || !user) return;
+    aprovandoRef.current = true;
     setApprovingCredit(true);
 
     try {
@@ -413,6 +418,7 @@ export default function AnaliseDetalhadaModal({ analise, open, onClose, onSendMa
       toast.error(`Erro: ${err.message}`);
     } finally {
       setApprovingCredit(false);
+      aprovandoRef.current = false;
     }
   };
 
