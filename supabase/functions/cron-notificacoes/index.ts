@@ -459,8 +459,32 @@ Deno.serve(async (req: Request) => {
   const ontemStr = fmtDate(ontem);
 
   // ── Rate Limiting: limite diário de mensagens ──────────
-  const MAX_MENSAGENS_DIA = 40; // WhatsApp bloqueia a partir de ~200 msgs/dia em número novo
-  const DELAY_ENTRE_MSGS = 3000; // 3 segundos entre mensagens (evita detecção de spam)
+  // Valores podem ser sobrescritos em runtime via tabela `configuracoes_sistema`:
+  //   - cron_max_msgs_dia (default 25): limite total por execução / dia
+  //   - cron_delay_ms (default 8000): delay entre mensagens em ms
+  //   - cron_skip_cold_outreach (default true): se true, pula números sem histórico de conversa
+  //   - cron_max_msgs_por_numero_dia (default 2): máx. mensagens para o MESMO número no dia
+  let MAX_MENSAGENS_DIA = 25;
+  let DELAY_ENTRE_MSGS = 8000;
+  let SKIP_COLD_OUTREACH = true;
+  let MAX_POR_NUMERO_DIA = 2;
+  try {
+    const { data: cfgRows } = await adminClient
+      .from("configuracoes_sistema")
+      .select("chave, valor")
+      .in("chave", ["cron_max_msgs_dia", "cron_delay_ms", "cron_skip_cold_outreach", "cron_max_msgs_por_numero_dia"]);
+    for (const r of cfgRows ?? []) {
+      const v = (r as any).valor;
+      const num = typeof v === "number" ? v : Number(v);
+      if (r.chave === "cron_max_msgs_dia" && Number.isFinite(num) && num > 0) MAX_MENSAGENS_DIA = Math.floor(num);
+      if (r.chave === "cron_delay_ms" && Number.isFinite(num) && num >= 0) DELAY_ENTRE_MSGS = Math.floor(num);
+      if (r.chave === "cron_skip_cold_outreach") SKIP_COLD_OUTREACH = v === true || v === "true";
+      if (r.chave === "cron_max_msgs_por_numero_dia" && Number.isFinite(num) && num > 0) MAX_POR_NUMERO_DIA = Math.floor(num);
+    }
+  } catch (e) {
+    console.warn("[cron] Falha ao ler configuracoes_sistema, usando defaults:", (e as any)?.message);
+  }
+  console.log(`[cron] Config: MAX_DIA=${MAX_MENSAGENS_DIA}, DELAY=${DELAY_ENTRE_MSGS}ms, SKIP_COLD=${SKIP_COLD_OUTREACH}, MAX_POR_NUMERO=${MAX_POR_NUMERO_DIA}`);
 
   // Contar mensagens já enviadas hoje
   const { count: msgsHoje } = await adminClient
@@ -517,13 +541,68 @@ Deno.serve(async (req: Request) => {
   // ── Verificar notificações já enviadas hoje ───────────
   const { data: jaEnviadas } = await adminClient
     .from("notificacoes_log")
-    .select("parcela_id, tipo")
+    .select("parcela_id, tipo, telefone")
     .gte("created_at", hojeStr + "T00:00:00Z")
     .eq("status", "enviado");
 
   const enviados = new Set(
     (jaEnviadas ?? []).map((n: any) => `${n.parcela_id}:${n.tipo}`)
   );
+
+  // Contagem por telefone (anti-spam por número)
+  const enviadosPorTelefone = new Map<string, number>();
+  for (const n of jaEnviadas ?? []) {
+    const tel = String((n as any).telefone || "").replace(/\D/g, "");
+    if (!tel) continue;
+    enviadosPorTelefone.set(tel, (enviadosPorTelefone.get(tel) ?? 0) + 1);
+  }
+
+  // ── Cold outreach guard: cache de telefones com histórico de conversa ──
+  // Um número só é "warm" se já enviou mensagem ENTRANTE para nós alguma vez.
+  // Reduz drasticamente risco de ban por enviar a número que nunca interagiu.
+  const telefonesComHistorico = new Set<string>();
+  if (SKIP_COLD_OUTREACH) {
+    try {
+      const { data: convs } = await adminClient
+        .from("whatsapp_mensagens_log")
+        .select("telefone")
+        .eq("direcao", "entrada")
+        .limit(5000);
+      for (const c of convs ?? []) {
+        const tel = String((c as any).telefone || "").replace(/\D/g, "");
+        if (tel) telefonesComHistorico.add(tel);
+      }
+      console.log(`[cron] Cold outreach guard ATIVO — ${telefonesComHistorico.size} telefones com histórico.`);
+    } catch (e) {
+      console.warn("[cron] Não foi possível carregar histórico; cold guard desativado nesta execução:", (e as any)?.message);
+    }
+  }
+
+  /** Retorna true se podemos enviar para este telefone (não cold + abaixo do cap diário). */
+  function podeEnviarParaTelefone(telRaw: string): { ok: boolean; motivo?: string } {
+    const tel = String(telRaw || "").replace(/\D/g, "");
+    if (!tel) return { ok: false, motivo: "telefone vazio" };
+    if (SKIP_COLD_OUTREACH && telefonesComHistorico.size > 0 && !telefonesComHistorico.has(tel)) {
+      // Tenta também variação 55+DDDD
+      const semDDI = tel.startsWith("55") ? tel.slice(2) : tel;
+      const comDDI = tel.startsWith("55") ? tel : "55" + tel;
+      if (!telefonesComHistorico.has(semDDI) && !telefonesComHistorico.has(comDDI)) {
+        return { ok: false, motivo: "cold_outreach (sem histórico de conversa)" };
+      }
+    }
+    const enviadasHoje = enviadosPorTelefone.get(tel) ?? 0;
+    if (enviadasHoje >= MAX_POR_NUMERO_DIA) {
+      return { ok: false, motivo: `cap por número atingido (${enviadasHoje}/${MAX_POR_NUMERO_DIA})` };
+    }
+    return { ok: true };
+  }
+
+  /** Atualiza o contador local após envio bem-sucedido. */
+  function marcarTelefoneEnviado(telRaw: string) {
+    const tel = String(telRaw || "").replace(/\D/g, "");
+    if (!tel) return;
+    enviadosPorTelefone.set(tel, (enviadosPorTelefone.get(tel) ?? 0) + 1);
+  }
 
   // ── Buscar templates ativos do banco ─────────────────
   const tiposUsados = [
@@ -596,6 +675,13 @@ Deno.serve(async (req: Request) => {
     // Evitar envio duplicado
     const chave = `${parcela.id}:${tipo}`;
     if (enviados.has(chave)) continue;
+
+    // Guard anti-ban: cold outreach + cap por número
+    const guard = podeEnviarParaTelefone(telefone);
+    if (!guard.ok) {
+      console.log(`[cron][skip] ${telefone} (${tipo}): ${guard.motivo}`);
+      continue;
+    }
 
     // ── Criar/buscar cobrança PIX EFI ──────────────────
     let chargeData: { txid: string; brCode: string | null; qrCodeImage: string | null } | null = null;
@@ -731,16 +817,19 @@ Deno.serve(async (req: Request) => {
     );
 
     // Enviar QR code como imagem separada (se disponível)
+    // Delay ANTES do QR para não disparar 2 msgs em <1s ao mesmo número
     if (ok && chargeData?.qrCodeImage) {
+      await new Promise((r) => setTimeout(r, Math.max(DELAY_ENTRE_MSGS, 4000)));
       await enviarQrCode(telefone, chargeData.qrCodeImage, `QR Code PIX - Parcela ${parcela.numero} - ${valorFmt}`);
     }
 
     if (ok) {
       totalEnviados++;
       mensagensRestantes--;
+      marcarTelefoneEnviado(telefone);
     } else totalErros++;
 
-    // Delay entre mensagens (3s — previne bloqueio por spam)
+    // Delay entre mensagens (anti-spam) — configurável
     await new Promise((r) => setTimeout(r, DELAY_ENTRE_MSGS));
   }
 
@@ -811,6 +900,13 @@ Deno.serve(async (req: Request) => {
 
       const chave = `${parcela.id}:${tier.tipo}`;
       if (enviados.has(chave)) continue;
+
+      // Guard anti-ban: cold outreach + cap por número
+      const guard = podeEnviarParaTelefone(telefone);
+      if (!guard.ok) {
+        console.log(`[cron][skip] ${telefone} (${tier.tipo}): ${guard.motivo}`);
+        continue;
+      }
 
       // ── Reduzir score do cliente por atraso ────────────
       try {
@@ -889,14 +985,16 @@ Deno.serve(async (req: Request) => {
         parcela.emprestimo_id,
       );
 
-      // Enviar QR code como imagem
+      // Enviar QR code como imagem (com delay para não parecer flood)
       if (ok && chargeData?.qrCodeImage) {
+        await new Promise((r) => setTimeout(r, Math.max(DELAY_ENTRE_MSGS, 4000)));
         await enviarQrCode(telefone, chargeData.qrCodeImage, `QR Code PIX - Parcela ${parcela.numero} - ${valorFmt}`);
       }
 
       if (ok) {
         totalEnviados++;
         mensagensRestantes--;
+        marcarTelefoneEnviado(telefone);
       } else totalErros++;
 
       await new Promise((r) => setTimeout(r, DELAY_ENTRE_MSGS));

@@ -516,14 +516,17 @@ export default function WhatsAppPage() {
   }, [instancias, activeInstanciaId]);
 
   // Deep-link: ?telefone=5511999999999 (vindo de ClientesPage ou outro)
+  // Também aceita ?mensagem=... para pré-preencher o composer (ex.: Kanban → Chat)
   useEffect(() => {
     const telParam = searchParams.get('telefone');
+    const msgParam = searchParams.get('mensagem');
     if (telParam && activeInstanciaId) {
       // Normalizar: remover formatação, manter apenas dígitos
-      const normalized = telParam.replace(/\\D/g, '');
+      const normalized = telParam.replace(/\D/g, '');
       if (normalized) {
         setSelectedTelefone(normalized);
-        // Limpar param da URL para não re-trigger
+        if (msgParam) setMessage(msgParam);
+        // Limpar params da URL para não re-trigger
         setSearchParams({}, { replace: true });
       }
     }

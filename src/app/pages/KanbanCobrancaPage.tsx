@@ -566,6 +566,134 @@ export default function KanbanCobrancaPage() {
     window.open(`https://web.whatsapp.com/send?${params.toString()}`, '_blank');
   };
 
+  /**
+   * Monta mensagem de abertura de cobrança com detalhes da dívida do cliente.
+   *
+   * Prioriza o uso de **templates da página de Templates** (categoria `cobranca`)
+   * para manter consistência com o cron automático e permitir customização sem
+   * mexer no código. Se nenhum template casar com `diasAtraso`, faz fallback
+   * para a mensagem detalhada hardcoded.
+   *
+   * Variáveis interpoladas: {nome}, {valor}, {data}, {numeroParcela},
+   * {diasAtraso}, {totalParcelas}, {parcelasPagas}.
+   */
+  const montarMensagemCobranca = (card: KanbanCobrancaView): string => {
+    const primeiroNome = (card.clienteNome || 'cliente').split(' ')[0];
+    const empsCliente = (emprestimosByCliente.get(card.clienteId) ?? []).filter(
+      (e) => e.status === 'ativo' || e.status === 'inadimplente',
+    );
+    const congelar = card.etapa === 'arquivado' || card.etapa === 'perdido';
+
+    // Parcelas em aberto (pendente + vencida, não congeladas) do cliente
+    const parcelasCliente = [...parcelasPendentes, ...parcelasVencidasList].filter(
+      (p) => p.clienteId === card.clienteId && !p.congelada,
+    );
+    const vencidas = parcelasCliente
+      .filter((p) => p.status === 'vencida' || p.dataVencimento < todayStr)
+      .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
+    const futuras = parcelasCliente
+      .filter((p) => p.status !== 'vencida' && p.dataVencimento >= todayStr)
+      .sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
+
+    // Totais corrigidos
+    let totalVencido = 0;
+    let totalJuros = 0;
+    for (const p of vencidas) {
+      const c = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, { congelarJuros: congelar });
+      totalVencido += c.total;
+      totalJuros += c.juros;
+    }
+    const totalFuturo = futuras.reduce((s, p) => s + p.valor, 0);
+    const totalGeral = totalVencido + totalFuturo;
+
+    // Data do contrato mais antigo
+    const dataContrato = empsCliente
+      .map((e) => e.dataContrato)
+      .filter(Boolean)
+      .sort()[0];
+
+    // ── Tenta usar template da página Templates (categoria cobranca) ──
+    // Seleciona o template cujo tipoNotificacao corresponde melhor aos diasAtraso atuais
+    const dias = Math.max(0, card.diasAtraso || 0);
+    const tipoAlvo: string | null = (() => {
+      if (dias === 0 && futuras.length > 0) return 'lembrete_vespera';
+      if (dias >= 30) return 'vencida_30dias';
+      if (dias >= 15) return 'vencida_15dias';
+      if (dias >= 7) return 'vencida_7dias';
+      if (dias >= 3) return 'vencida_3dias';
+      if (dias >= 1) return 'vencida_ontem';
+      return null;
+    })();
+
+    const cliente = clientes.find((c) => c.id === card.clienteId);
+    const sexo = (cliente?.sexo || 'masculino') as 'masculino' | 'feminino';
+    const proxima = futuras[0] ?? vencidas[0];
+    const valorReferencia = vencidas.length > 0 ? totalVencido : totalGeral;
+    const empRef = empsCliente[0];
+
+    const tpl = tipoAlvo
+      ? templatesCobranca.find((t) => t.tipoNotificacao === tipoAlvo && t.ativo)
+      : null;
+
+    if (tpl) {
+      const vars: Record<string, string> = {
+        nome: primeiroNome,
+        valor: valorReferencia.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        data: proxima ? formatDateBR(proxima.dataVencimento) : '',
+        numeroParcela: String(proxima?.numero ?? ''),
+        diasAtraso: String(dias),
+        totalParcelas: String(empRef?.parcelas ?? ''),
+        parcelasPagas: String(empRef?.parcelasPagas ?? ''),
+      };
+      const base = sexo === 'feminino' ? tpl.mensagemFeminino : tpl.mensagemMasculino;
+      const msg = (base || '').replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
+      if (msg.trim().length > 0) return msg;
+    }
+
+    // ── Fallback: mensagem detalhada hardcoded ──
+    const linhas: string[] = [];
+    linhas.push(`Olá, ${primeiroNome}! Aqui é da *Casa da Moeda* — Cobrança.`);
+    linhas.push('');
+    linhas.push('Estamos entrando em contato referente à sua dívida em aberto:');
+    linhas.push('');
+
+    if (dataContrato) {
+      linhas.push(`📅 Empréstimo de ${formatDateBR(dataContrato)}`);
+    }
+    if (empsCliente.length > 0) {
+      const totalContratado = empsCliente.reduce((s, e) => s + e.valor, 0);
+      linhas.push(`💰 Valor contratado: ${formatCurrency(totalContratado)}`);
+    }
+
+    if (vencidas.length > 0) {
+      linhas.push('');
+      linhas.push(`⚠️ *Parcelas em atraso (${vencidas.length}):*`);
+      for (const p of vencidas.slice(0, 6)) {
+        const c = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto, { congelarJuros: congelar });
+        const diasP = c.dias > 0 ? ` · ${c.dias}d atraso` : '';
+        linhas.push(`• Parc. ${p.numero} venc. ${formatDateBR(p.dataVencimento)} — ${formatCurrency(c.total)}${diasP}`);
+      }
+      if (vencidas.length > 6) linhas.push(`• …e mais ${vencidas.length - 6} parcela(s)`);
+      if (totalJuros > 0) {
+        linhas.push('');
+        linhas.push(`Juros e correção aplicados: ${formatCurrency(totalJuros)}`);
+      }
+    }
+
+    if (futuras.length > 0) {
+      const prox = futuras[0];
+      linhas.push('');
+      linhas.push(`📆 Próximo vencimento: ${formatDateBR(prox.dataVencimento)} — ${formatCurrency(prox.valor)}`);
+    }
+
+    linhas.push('');
+    linhas.push(`*Total a regularizar hoje: ${formatCurrency(totalGeral)}*`);
+    linhas.push('');
+    linhas.push('Podemos negociar agora? Estamos à disposição para fechar um acordo.');
+
+    return linhas.join('\n');
+  };
+
   // Confirmar contato (contatado → acordo)
   const handleConfirmarContato = (card: KanbanCobrancaView) => {
     moverCard.mutate(
@@ -808,11 +936,20 @@ export default function KanbanCobrancaPage() {
                                 </Button>
                                 {chatMenuCard === card.id && (
                                   <div className="absolute bottom-full text-black left-0 mb-1 bg-white/80 border border-border rounded-lg shadow-lg z-50 w-96 p-1" onClick={(e) => e.stopPropagation()}>
-                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); navigate(`/whatsapp?telefone=${encodeURIComponent(normalizePhoneBR(card.clienteTelefone))}`); }}>
+                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => {
+                                      setChatMenuCard(null);
+                                      const msg = montarMensagemCobranca(card);
+                                      const tel = encodeURIComponent(normalizePhoneBR(card.clienteTelefone));
+                                      const txt = encodeURIComponent(msg);
+                                      navigate(`/whatsapp?telefone=${tel}&mensagem=${txt}`);
+                                    }}>
                                       <MessageSquare className="w-6 h-6 text-green-600" />
                                       <span>WhatsApp Business (sistema)</span>
                                     </button>
-                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => { setChatMenuCard(null); handleWhatsappDireto(card.clienteTelefone); }}>
+                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => {
+                                      setChatMenuCard(null);
+                                      handleWhatsappDireto(card.clienteTelefone, montarMensagemCobranca(card));
+                                    }}>
                                       <ExternalLink className="w-6 h-6 text-blue-600" />
                                       <span>WhatsApp App / Web</span>
                                     </button>

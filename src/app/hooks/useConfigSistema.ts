@@ -27,6 +27,15 @@ export interface ConfigSistema {
   juros_perc_dia: number;
   juros_limiar: number;
   juros_dias_max: number;
+  // ── Anti-ban WhatsApp (cron-notificacoes) ────────────────
+  /** Limite TOTAL de mensagens por execução de cron / dia. */
+  cron_max_msgs_dia: number;
+  /** Delay entre mensagens em ms (mínimo recomendado: 5000). */
+  cron_delay_ms: number;
+  /** Se true, NÃO envia para números que nunca enviaram mensagem entrante. */
+  cron_skip_cold_outreach: boolean;
+  /** Máximo de mensagens para o MESMO número no mesmo dia. */
+  cron_max_msgs_por_numero_dia: number;
   [key: string]: unknown;
 }
 
@@ -54,6 +63,10 @@ async function getConfig(): Promise<ConfigSistema> {
     juros_perc_dia: typeof config.juros_perc_dia === 'number' ? config.juros_perc_dia : JUROS_PERC_DIA_DEFAULT,
     juros_limiar: typeof config.juros_limiar === 'number' ? config.juros_limiar : JUROS_LIMIAR_DEFAULT,
     juros_dias_max: typeof config.juros_dias_max === 'number' ? config.juros_dias_max : JUROS_DIAS_MAX_DEFAULT,
+    cron_max_msgs_dia: typeof config.cron_max_msgs_dia === 'number' ? config.cron_max_msgs_dia : 25,
+    cron_delay_ms: typeof config.cron_delay_ms === 'number' ? config.cron_delay_ms : 8000,
+    cron_skip_cold_outreach: config.cron_skip_cold_outreach !== false,
+    cron_max_msgs_por_numero_dia: typeof config.cron_max_msgs_por_numero_dia === 'number' ? config.cron_max_msgs_por_numero_dia : 2,
     ...config,
   };
 }

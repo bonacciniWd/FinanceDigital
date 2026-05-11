@@ -934,6 +934,9 @@ Deno.serve(async (req: Request) => {
 
         console.log(`[approve-credit][WA] Mensagem final (primeiros 300 chars): ${msg.substring(0, 300)}`);
         await enviarWhatsAppSistema(adminClient, telefone, msg, analise.cliente_id, "aprovacao");
+        // Anti-ban: delay para o caso de m\u00faltiplas aprova\u00e7\u00f5es em sequ\u00eancia
+        // (varias aprova\u00e7\u00f5es em <5s para n\u00fameros diferentes acionam filtro de spam)
+        await new Promise((r) => setTimeout(r, 5000));
       }
     } catch (whatsErr) {
       console.error("Erro ao enviar WhatsApp de aprovação:", whatsErr);

@@ -123,7 +123,15 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.9.1', date: '11 Mai 2026', isLatest: true, items: [
+  { version: '1.9.2', date: '11 Mai 2026', isLatest: true, items: [
+    'Anti-Ban WhatsApp: cold-outreach guard (não envia para quem nunca falou com a gente)',
+    'Cap por número/dia (default 2) + limite diário reduzido de 40 para 25 mensagens',
+    'Delay maior entre mensagens (8s) e entre texto e QR PIX (≥4s) — padrão menos "bot"',
+    'Delay 5s pós-envio em aprovações de crédito (evita rajada em sequência rápida)',
+    'Kanban Cobrança · Chat agora usa templates da página Templates (mesma fonte do cron) com seleção automática por dias de atraso',
+    'Nova seção em Configurações → Sistema → Anti-Ban WhatsApp com 4 knobs ajustáveis sem deploy',
+  ]},
+  { version: '1.9.1', date: '11 Mai 2026', isLatest: false, items: [
     'Kanban Cobrança · Chat → WhatsApp App / Web: agora abre uma janela interna do Electron carregando web.whatsapp.com (não usa mais o app WhatsApp instalado nem navegador externo) — fim da mensagem "Atualize o Chrome"',
     'Sessão descartada ao fechar a janela (partition em memória) — sem persistência de login',
     'Janela WhatsApp filha do app: fecha junto com o app principal',

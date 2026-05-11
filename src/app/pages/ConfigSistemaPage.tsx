@@ -101,6 +101,87 @@ export default function ConfigSistemaPage() {
         </CardContent>
       </Card>
 
+      {/* Anti-ban WhatsApp */}
+      <Card className="border-amber-200 dark:border-amber-900/50">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600" />
+            Anti-Ban WhatsApp (Rate Limiting)
+          </CardTitle>
+          <CardDescription>
+            Parâmetros que evitam que o número seja banido pelo WhatsApp por envio em massa. Cron diário fixo às <strong>09:00 BRT (12:00 UTC)</strong>.
+            Valores menores = mais seguro. <strong>Recomendado:</strong> 25 msgs/dia, delay 8s, máx 2 msgs/número/dia, pular cold outreach.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="pr-4">
+              <Label className="text-sm font-medium">Pular cold outreach</Label>
+              <p className="text-xs text-muted-foreground">
+                Não envia para números que <strong>nunca</strong> mandaram mensagem entrante para nós. É a regra anti-ban mais importante.
+              </p>
+            </div>
+            <Switch
+              checked={config.cron_skip_cold_outreach}
+              onCheckedChange={(checked) => handleToggle('cron_skip_cold_outreach', checked)}
+              disabled={updateConfig.isPending}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Máx. mensagens / dia (total)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={200}
+                defaultValue={config.cron_max_msgs_dia}
+                onBlur={(e) => handleNumber('cron_max_msgs_dia', e.target.value)}
+                disabled={updateConfig.isPending}
+              />
+              <p className="text-xs text-muted-foreground">Limite global por execução. Recomendado: 25.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Máx. por número / dia</Label>
+              <Input
+                type="number"
+                min={1}
+                max={10}
+                defaultValue={config.cron_max_msgs_por_numero_dia}
+                onBlur={(e) => handleNumber('cron_max_msgs_por_numero_dia', e.target.value)}
+                disabled={updateConfig.isPending}
+              />
+              <p className="text-xs text-muted-foreground">Evita spammar o mesmo cliente. Recomendado: 2.</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Delay entre msgs (ms)</Label>
+              <Input
+                type="number"
+                min={2000}
+                max={60000}
+                step={1000}
+                defaultValue={config.cron_delay_ms}
+                onBlur={(e) => handleNumber('cron_delay_ms', e.target.value)}
+                disabled={updateConfig.isPending}
+              />
+              <p className="text-xs text-muted-foreground">Pausa entre envios. Recomendado: 8000 (8s).</p>
+            </div>
+          </div>
+
+          <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-900 dark:text-amber-200">
+            <p className="font-medium mb-1">📅 Quando o cron envia:</p>
+            <ul className="list-disc list-inside space-y-0.5">
+              <li>Lembretes <strong>3 dias antes</strong>, na <strong>véspera</strong> e <strong>1 dia após</strong> o vencimento</li>
+              <li>Cobranças após <strong>3, 7, 15 e 30 dias</strong> de atraso</li>
+              <li>Apenas parcelas não pagas, não canceladas e não congeladas</li>
+              <li>Templates editáveis em <em>Templates de Mensagens</em></li>
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card className="border-emerald-200 dark:border-emerald-900/50">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

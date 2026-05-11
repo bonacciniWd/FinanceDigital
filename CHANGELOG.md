@@ -6,6 +6,21 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.9.2] — 2026-05-11
+
+### Adicionado — Anti-Ban WhatsApp + Templates no Kanban
+
+- **Cold-outreach guard** no `cron-notificacoes`: pula números que nunca enviaram mensagem entrante (regra anti-ban mais crítica).
+- **Cap por número/dia** (default 2): bloqueia spammar o mesmo cliente quando ele tem várias parcelas atrasadas.
+- **Limite diário total** reduzido de 40 para 25 mensagens (mais conservador).
+- **Delay configurável** entre mensagens (default 8s, antes 3s).
+- **Delay extra entre texto e QR PIX** (≥4s) — antes saiam quase juntos como bot.
+- **Delay 5s** após cada WhatsApp de aprovação de crédito (evita rajada).
+- **Kanban Cobrança · Chat** agora usa **templates da página Templates** (mesma fonte do cron) ao invés de mensagem hardcoded. Seleção por `diasAtraso` + gênero do cliente. Fallback para mensagem detalhada se nenhum template casar.
+- Nova seção **Configurações → Sistema → Anti-Ban WhatsApp** com 4 knobs ajustáveis em runtime: `cron_max_msgs_dia`, `cron_max_msgs_por_numero_dia`, `cron_delay_ms`, `cron_skip_cold_outreach`.
+- Migration `078_whatsapp_anti_ban_defaults.sql` seeda valores conservadores.
+- README §52 documenta causas de ban, regra do "chip aquecido" e como auditar logs do cron.
+
 ## [1.9.1] — 2026-05-11
 
 ### Corrigido — WhatsApp Web abre em janela interna (Electron)

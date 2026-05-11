@@ -63,6 +63,7 @@
 49. [Configurações do Sistema](#49-configurações-do-sistema-v850--31032026)
 50. [Runbook: Evolution API + WhatsApp (Operacional)](#50-runbook-evolution-api--whatsapp-operacional)
 51. [Hub Financeiro + Comissões Semanais + Envio WhatsApp (v1.9.0)](#51-hub-financeiro--comissões-semanais--envio-whatsapp-v190--11052026)
+52. [Anti-Ban WhatsApp + Templates no Kanban (v1.9.2)](#52-anti-ban-whatsapp--templates-no-kanban-v192--11052026)
 
 ---
 
@@ -5467,3 +5468,102 @@ SELECT cron.schedule(
 4. Em **Financeiro → Comissões**, cadastrar as 5 regras iniciais (SL/dazl/SP/Grego/Apoio).
 5. Em **Financeiro → Envios automáticos**, cadastrar destinatários e usar **Enviar agora** para teste end-to-end.
 6. (Opcional) Substituir `src/app/assets/logo-wide.png` por versão sem "Digital".
+
+---
+
+## 52. Anti-Ban WhatsApp + Templates no Kanban (v1.9.2 — 11/05/2026)
+
+> Conjunto de proteções para reduzir banimento do número WhatsApp pela Evolution API + unificação da mensagem de cobrança manual com os templates oficiais.
+
+### 52.1. Por que números são banidos
+
+A Evolution API roda em cima do `whatsapp-web.js`, que se conecta ao WhatsApp Web. O algoritmo de spam do WA banha rapidamente quando observa **qualquer combinação** de:
+
+- Volume alto de mensagens **saindo** sem mensagens **entrando** (cold outreach)
+- Várias mensagens para números diferentes em <5 segundos (rajada de bot)
+- Mensagens com estrutura idêntica (mesma saudação, mesmos emojis, mesmo template literal)
+- Texto + imagem enviados <2s um após o outro (padrão de auto-resposta)
+- Número novo (<2 semanas de uso) com mais de ~30 msgs/dia
+
+**Regra de ouro:** o chip precisa ser "aquecido" — usado por humano em conversas reais por 2-3 semanas antes de virar bot. Sem isso, nenhuma config de código resolve permanentemente.
+
+### 52.2. Knobs configuráveis em **Configurações → Sistema → Anti-Ban WhatsApp**
+
+| Chave (`configuracoes_sistema`)   | Default | Recomendado | Efeito                                                                 |
+|-----------------------------------|---------|-------------|------------------------------------------------------------------------|
+| `cron_max_msgs_dia`               | 25      | 15-25       | Limite total por execução do cron de notificações                      |
+| `cron_max_msgs_por_numero_dia`    | 2       | 2           | Máximo de mensagens para o **mesmo número** no mesmo dia               |
+| `cron_delay_ms`                   | 8000    | 8000-12000  | Pausa entre mensagens (ms)                                             |
+| `cron_skip_cold_outreach`         | `true`  | `true`      | Pula números **sem histórico de mensagem entrante**                    |
+
+Valores ficam em `configuracoes_sistema` e são lidos pelo edge function `cron-notificacoes` a cada execução — sem necessidade de redeploy.
+
+### 52.3. Cold-outreach guard
+
+O cron carrega de `whatsapp_mensagens_log` (direcao=`entrada`) todos os telefones que **alguma vez** enviaram mensagem para o sistema. Telefones que nunca enviaram são **silenciosamente pulados** (log: `[cron][skip] <tel>: cold_outreach`).
+
+Para "aquecer" um cliente novo, basta:
+1. Enviar manualmente pelo Chat (KanbanCobrancaPage → botão WhatsApp)
+2. Cliente responder qualquer coisa
+3. A partir daí o cron passa a enviar automaticamente
+
+### 52.4. Per-number cap
+
+O cron mantém um `Map<telefone, count>` populado a partir do `notificacoes_log` do dia + envios da execução atual. Se um número já recebeu 2 mensagens hoje (de qualquer tipo), o cron pula:
+
+```
+[cron][skip] 5511999999999 (vencida_7dias): cap por número atingido (2/2)
+```
+
+Isso protege contra o caso "cliente está em 5 parcelas atrasadas e recebe 5 cobranças no mesmo dia".
+
+### 52.5. Delay entre texto e QR Code
+
+Antes: o cron enviava `sendText` e logo em seguida `sendMedia` (QR PIX) com <100ms de gap. Padrão típico de bot.
+
+Agora: aguarda `Math.max(DELAY_ENTRE_MSGS, 4000)` ms entre texto e QR. Mesmo com `cron_delay_ms` baixo, sempre tem ≥4s.
+
+### 52.6. Delay em `approve-credit`
+
+Cada WhatsApp de aprovação ([`enviarWhatsAppSistema`](supabase/functions/approve-credit/index.ts)) tem `await setTimeout(5000)` após o envio. Cobre o caso de operador aprovar 5 análises em sequência rápida.
+
+### 52.7. Templates no Kanban Cobrança
+
+`montarMensagemCobranca` em [`KanbanCobrancaPage.tsx`](src/app/pages/KanbanCobrancaPage.tsx) agora:
+
+1. Olha `card.diasAtraso` e mapeia para `tipo_notificacao` (`vencida_ontem` / `vencida_3dias` / `7dias` / `15dias` / `30dias`)
+2. Busca template ativo em `templatesCobranca` (`useTemplatesByCategoria('cobranca')`)
+3. Usa `mensagemMasculino` ou `mensagemFeminino` conforme `clientes.sexo`
+4. Interpola `{nome}`, `{valor}`, `{data}`, `{numeroParcela}`, `{diasAtraso}`, `{totalParcelas}`, `{parcelasPagas}`
+5. **Fallback** para a mensagem detalhada hardcoded se não houver template
+
+→ Edite o texto em **Templates de Mensagens** que vale tanto para o cron automático quanto para o Chat manual do Kanban.
+
+### 52.8. Como verificar se as proteções estão ativas
+
+```bash
+# Ver últimas execuções do cron
+supabase functions logs cron-notificacoes --limit 100
+
+# Procure por:
+[cron] Config: MAX_DIA=25, DELAY=8000ms, SKIP_COLD=true, MAX_POR_NUMERO=2
+[cron] Cold outreach guard ATIVO — 142 telefones com histórico.
+[cron][skip] 5511... (vencida_3dias): cold_outreach (sem histórico de conversa)
+[cron][skip] 5511... (vencida_7dias): cap por número atingido (2/2)
+```
+
+### 52.9. O que fazer quando o número ban a mesmo assim
+
+1. **Não recriar a instância imediatamente** — pode piorar. Espere 4-6h.
+2. Reduzir `cron_max_msgs_dia` para 10 e `cron_max_msgs_por_numero_dia` para 1 por 1 semana.
+3. Considerar **trocar o chip** se o ban for recorrente — chip frio + bot = ban garantido.
+4. Para aquecer chip novo: 7-14 dias de uso humano antes de plugar no bot.
+
+### 52.10. Arquivos alterados
+
+- [supabase/functions/cron-notificacoes/index.ts](supabase/functions/cron-notificacoes/index.ts) — knobs + cold guard + per-number cap + delay text→QR
+- [supabase/functions/approve-credit/index.ts](supabase/functions/approve-credit/index.ts) — delay 5s pós-envio
+- [supabase/migrations/078_whatsapp_anti_ban_defaults.sql](supabase/migrations/078_whatsapp_anti_ban_defaults.sql) — seeds default
+- [src/app/hooks/useConfigSistema.ts](src/app/hooks/useConfigSistema.ts) — 4 novas chaves tipadas
+- [src/app/pages/ConfigSistemaPage.tsx](src/app/pages/ConfigSistemaPage.tsx) — card "Anti-Ban WhatsApp"
+- [src/app/pages/KanbanCobrancaPage.tsx](src/app/pages/KanbanCobrancaPage.tsx) — `montarMensagemCobranca` usa templates
