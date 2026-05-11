@@ -123,7 +123,19 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.8.2', date: '05 Mai 2026', isLatest: true, items: [
+  { version: '1.9.1', date: '11 Mai 2026', isLatest: true, items: [
+    'Kanban Cobrança · Chat → WhatsApp App / Web: agora abre uma janela interna do Electron carregando web.whatsapp.com (não usa mais o app WhatsApp instalado nem navegador externo) — fim da mensagem "Atualize o Chrome"',
+    'Sessão descartada ao fechar a janela (partition em memória) — sem persistência de login',
+    'Janela WhatsApp filha do app: fecha junto com o app principal',
+  ]},
+  { version: '1.9.0', date: '11 Mai 2026', isLatest: false, items: [
+    'Hub Financeiro: nova rota /financeiro unificando cobranças, transações, desembolsos, extratos, gastos, comissões e envios',
+    'Comissões semanais por funcionário: regras configuráveis (% entradas/saídas/fixo) com cálculo automático no período',
+    'Relatório semanal via WhatsApp: cron domingo 10h BRT envia KPIs + tabela de comissões para destinatários cadastrados',
+    'PDF executivo anexável no WhatsApp; rodapé atualizado para "Fintech"',
+    'Seletor de período unificado (hoje/7d/30d/mês/trimestre/custom) no Hub Financeiro e Dashboard Comercial',
+  ]},
+  { version: '1.8.2', date: '05 Mai 2026', isLatest: false, items: [
     'Saídas Órfãs · Busca de empréstimos: migrado para join direto com clientes — nome do cliente agora sempre aparece na busca manual',
     'Saídas Órfãs · Removido filtro de análise de crédito: todos os empréstimos não desembolsados aparecem como candidatos',
     'Saídas Órfãs · Vínculo com categoria de gasto: corrigido erro ON CONFLICT em index parcial (migration 068)',

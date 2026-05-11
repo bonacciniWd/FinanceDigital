@@ -552,13 +552,18 @@ export default function KanbanCobrancaPage() {
     );
   };
 
-  // Abrir WhatsApp direto (app/web) com mensagem
+  // Abrir WhatsApp em janela interna (Electron) ou wa.me (web fallback)
   const handleWhatsappDireto = (telefone: string, mensagem?: string) => {
     const num = normalizePhoneBR(telefone);
-    const url = mensagem
-      ? `https://wa.me/${num}?text=${encodeURIComponent(mensagem)}`
-      : `https://wa.me/${num}`;
-    window.open(url, '_blank');
+    const api = (window as unknown as { electronAPI?: { openWhatsApp?: (p: string, m?: string) => Promise<boolean> } }).electronAPI;
+    if (api?.openWhatsApp) {
+      api.openWhatsApp(num, mensagem);
+      return;
+    }
+    // Fallback navegador: usa web.whatsapp.com/send para forçar Web (não tenta abrir o app)
+    const params = new URLSearchParams({ phone: num });
+    if (mensagem) params.set('text', mensagem);
+    window.open(`https://web.whatsapp.com/send?${params.toString()}`, '_blank');
   };
 
   // Confirmar contato (contatado → acordo)

@@ -110,6 +110,76 @@ ipcMain.handle('app:reveal', () => {
   return true;
 });
 
+// --- WhatsApp Web em janela interna do Electron ----------------------
+// Abre o WhatsApp Web em uma BrowserWindow filha (NÃO usa o app WhatsApp
+// instalado e NÃO abre no navegador externo). Ao fechar a janela, a sessão
+// é descartada por usar uma `partition` em memória. Quando a janela principal
+// for fechada, todas as janelas filhas também são fechadas pelo Electron.
+const whatsappWindows = new Map(); // phone -> BrowserWindow
+
+// User-Agent de Chrome moderno — sem isso, o web.whatsapp.com bloqueia o
+// Electron alegando "Atualize o Chrome".
+const CHROME_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+ipcMain.handle('whatsapp:open', (_event, { phone, message } = {}) => {
+  if (!phone) return false;
+
+  // Reaproveita janela já aberta para o mesmo número
+  const existing = whatsappWindows.get(phone);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return true;
+  }
+
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 780,
+    minWidth: 800,
+    minHeight: 600,
+    title: 'WhatsApp',
+    parent: mainWindow || undefined,
+    autoHideMenuBar: true,
+    backgroundColor: '#111b21',
+    webPreferences: {
+      // Partition em memória: sessão é descartada quando a janela fecha
+      partition: `whatsapp-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  // Spoof do user-agent para passar pelo check do WhatsApp Web
+  win.webContents.setUserAgent(CHROME_USER_AGENT);
+
+  // Bloqueia popups / abertura de janelas externas pelo conteúdo da página
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  const sanitized = String(phone).replace(/\D/g, '');
+  const params = new URLSearchParams({ phone: sanitized });
+  if (message) params.set('text', message);
+  const url = `https://web.whatsapp.com/send?${params.toString()}`;
+
+  win.loadURL(url, { userAgent: CHROME_USER_AGENT });
+
+  whatsappWindows.set(phone, win);
+  win.on('closed', () => {
+    whatsappWindows.delete(phone);
+  });
+
+  return true;
+});
+
+ipcMain.handle('whatsapp:closeAll', () => {
+  for (const win of whatsappWindows.values()) {
+    if (!win.isDestroyed()) win.close();
+  }
+  whatsappWindows.clear();
+  return true;
+});
+
 // Volta para o tamanho de calculadora (logout / exit)
 ipcMain.handle('app:hide', () => {
   if (!mainWindow || mainWindow.isDestroyed()) return false;

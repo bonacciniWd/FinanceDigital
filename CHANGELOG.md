@@ -6,6 +6,19 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.9.1] — 2026-05-11
+
+### Corrigido — WhatsApp Web abre em janela interna (Electron)
+
+- **Kanban Cobrança · Chat → WhatsApp App / Web**: antes abria o navegador externo (ou o app WhatsApp instalado no macOS), que mostrava a mensagem _"O WhatsApp funciona no Google Chrome 85 ou posterior"_. Agora abre uma `BrowserWindow` interna do Electron carregando `web.whatsapp.com/send` com user-agent de Chrome 124.
+- A janela é filha de `mainWindow` (fecha junto com o app) e usa `partition` em memória — a sessão do WhatsApp Web é descartada ao fechar a janela, sem persistir login.
+- Bloqueio de popups: `setWindowOpenHandler` recusa qualquer tentativa do conteúdo abrir nova janela externa.
+- Reaproveita janela já aberta para o mesmo número (foco em vez de duplicar).
+- Fallback navegador (web): usa `https://web.whatsapp.com/send?phone=...` em vez de `wa.me/...` (este último dispara o app instalado no macOS).
+- Novos handlers IPC: `whatsapp:open` e `whatsapp:closeAll`. Renderer chama via `window.electronAPI.openWhatsApp(phone, message?)`.
+
+---
+
 ## [1.9.0] — 2026-05-11
 
 ### Adicionado — Hub Financeiro + Comissões Semanais + Envio WhatsApp

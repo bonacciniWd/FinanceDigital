@@ -39,4 +39,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Window facade (Calculadora trigger)
   appReveal: () => ipcRenderer.invoke('app:reveal'),
   appHide: () => ipcRenderer.invoke('app:hide'),
+
+  // WhatsApp Web em janela interna (não usa app/whatsapp instalado)
+  openWhatsApp: (phone, message) =>
+    ipcRenderer.invoke('whatsapp:open', { phone, message }),
+  closeAllWhatsApp: () => ipcRenderer.invoke('whatsapp:closeAll'),
 });
