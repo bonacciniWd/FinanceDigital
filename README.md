@@ -5409,45 +5409,38 @@ TOTAL                            R$ 5.148,00
 - Botão **Enviar agora** (dispara a edge function imediatamente)
 - Histórico dos últimos 5 envios (data, período, origem `manual`/`cron`, total comissões)
 
-**Cron agendado (migration `077_cron_relatorio_semanal_domingo.sql`):** envio automático todo **domingo 10:00 BRT** (13:00 UTC).
-
-A edge function aceita `{ auto: true }` no body: nesse modo ela mesma calcula o período (domingo passado a sábado passado), busca `gastos_internos` e `comissoes_semanais_config`, monta a mensagem e envia. **O cron envia apenas texto** — o PDF executivo continua sendo gerado pelo botão "Enviar agora" da UI (jsPDF só roda no navegador).
-
-SQL do agendamento (aplicado automaticamente pela migration 077):
+**Cron (opcional, manual):** Para agendar envio automático toda segunda 09:00 BRT:
 
 ```sql
 SELECT cron.schedule(
-  'relatorio-semanal-domingo-10h',
-  '0 13 * * 0',  -- domingo 13h UTC = 10h BRT
+  'relatorio-semanal-whatsapp',
+  '0 12 * * 1',  -- 12h UTC = 09h BRT
   $$
   SELECT net.http_post(
-    url     := 'https://<project>.supabase.co/functions/v1/cron-relatorio-semanal-whatsapp',
+    url := 'https://<project>.supabase.co/functions/v1/cron-relatorio-semanal-whatsapp',
     headers := jsonb_build_object(
       'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key'),
-      'Content-Type',  'application/json'
+      'Content-Type', 'application/json'
     ),
-    body    := jsonb_build_object('auto', true, 'origem', 'cron')
+    body := jsonb_build_object(
+      'periodo_inicio', (now() AT TIME ZONE 'America/Sao_Paulo' - interval '7 days')::date,
+      'periodo_fim',    (now() AT TIME ZONE 'America/Sao_Paulo' - interval '1 day')::date,
+      'mensagem',       '...',  -- montada pelo cron (TODO) ou pré-renderizada pela UI
+      'origem',         'cron'
+    )
   );
   $$
 );
 ```
 
-**Diferença manual × cron:**
-
-| Gatilho | Quando | Conteúdo |
-|---|---|---|
-| Botão "Enviar agora" (UI) | Sob demanda | Texto + **PDF anexo** (upload em `whatsapp-media/relatorios-semanais/`) |
-| Cron domingo 10h BRT | Automático | Somente texto (saídas + comissões server-side) |
-
-Regras `pct_entradas` / `fixo_pct_entradas` ficam marcadas como _"calcular no app"_ no texto do cron, pois entradas dependem da API EFI consultada em tempo real (não disponível em Deno). Para o número exato com base em entradas reais, abra o app e clique em **Enviar agora**.
+> **Nota:** o cron atual não monta a mensagem por si só — o envio agendado server-side ainda exige uma função SQL que calcule entradas/saídas do período e aplique as regras de `comissoes_semanais_config`. Enquanto isso não é portado para SQL/Deno puro, o envio é feito **manualmente** pela UI uma vez por semana, ou o cron pode ser configurado para chamar a UI via Playwright/curl (fora de escopo).
 
 ### 51.9. Arquivos criados / modificados nesta versão
 
 **Criados:**
 
 - `supabase/migrations/076_comissoes_semanais_config.sql`
-- `supabase/migrations/077_cron_relatorio_semanal_domingo.sql` — agenda pg_cron domingo 10h BRT
-- `supabase/functions/cron-relatorio-semanal-whatsapp/index.ts` — com modo `auto: true`
+- `supabase/functions/cron-relatorio-semanal-whatsapp/index.ts`
 - `src/app/components/PeriodoSelector.tsx`
 - `src/app/components/ComissoesSemanaisCard.tsx`
 - `src/app/components/RelatorioSemanalWhatsappCard.tsx`
@@ -5468,10 +5461,9 @@ Regras `pct_entradas` / `fixo_pct_entradas` ficam marcadas como _"calcular no ap
 
 ### 51.10. Checklist pós-deploy
 
-1. Aplicar migrations: `supabase db push` (aplica 076 + 077).
-2. Deploy da função: `supabase functions deploy cron-relatorio-semanal-whatsapp --no-verify-jwt` (re-deploy obrigatório após mudança do modo `auto`).
-3. Re-deploy `send-whatsapp --no-verify-jwt` (versão atual envia PDF como `mediaMessage` com `mimetype: application/pdf` e `fileName`).
-4. Confirmar que `configuracoes_sistema.extrato_semanal_instancia_whatsapp_id` aponta para a instância correta (ou marcar uma instância como `is_system=true` como fallback).
-5. Em **Financeiro → Comissões**, cadastrar as 5 regras iniciais (SL/dazl/SP/Grego/Apoio) — com `user_id` para mapear ao funcionário.
-6. Em **Financeiro → Envios automáticos**, cadastrar destinatários e clicar **Enviar agora** para teste end-to-end (texto + PDF).
-7. Verificar agendamento: `SELECT jobname, schedule FROM cron.job WHERE jobname = 'relatorio-semanal-domingo-10h';` — esperado `0 13 * * 0`.
+1. Aplicar migration: `supabase db push` (ou `supabase migration up`).
+2. Deploy da função: `supabase functions deploy cron-relatorio-semanal-whatsapp --no-verify-jwt`.
+3. Confirmar que `configuracoes_sistema.extrato_semanal_instancia_whatsapp_id` aponta para a instância WhatsApp correta (mesma usada para o extrato CNAB).
+4. Em **Financeiro → Comissões**, cadastrar as 5 regras iniciais (SL/dazl/SP/Grego/Apoio).
+5. Em **Financeiro → Envios automáticos**, cadastrar destinatários e usar **Enviar agora** para teste end-to-end.
+6. (Opcional) Substituir `src/app/assets/logo-wide.png` por versão sem "Digital".
