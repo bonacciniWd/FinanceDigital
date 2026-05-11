@@ -175,7 +175,7 @@ Deno.serve(async (req: Request) => {
       ? `📋 *Atualização de Cadastro*\n\nOlá, *${nomeExibicao}*!\n\nPrecisamos atualizar seus dados cadastrais. É rápido e simples — leva menos de 3 minutos.\n\n📝 *Você vai conferir/atualizar:*\n• Dados pessoais (nome, CPF, telefone)\n• Endereço completo\n• Profissão e renda\n• Documentos (RG/CNH e comprovante de endereço)\n• Contatos de referência\n• Chave Pix\n\n⏰ *Link válido por 7 dias.*\n\n👉 Clique para começar:\n${url}\n\n_Se você não solicitou isso, ignore esta mensagem._`
       : `📋 *Cadastro de Cliente*\n\nOlá, *${nomeExibicao}*!\n\nPara prosseguirmos com sua solicitação, preencha o cadastro online. É simples e leva menos de 3 minutos.\n\n📝 *Você vai informar:*\n• Dados pessoais e endereço\n• Profissão e renda\n• Documentos (RG/CNH frente e verso + comprovante de endereço)\n• Contatos de referência\n• Chave Pix\n\n⏰ *Link válido por 7 dias.*\n\n👉 Clique para começar:\n${url}\n\n_Em caso de dúvida, responda esta mensagem._`;
 
-    const endpoint = `${baseUrl}/message/sendText/${instancia.instance_name}`;
+    const endpoint = `${baseUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`;
     const evoBody = { number: formatted, textMessage: { text: mensagem }, text: mensagem };
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20_000);

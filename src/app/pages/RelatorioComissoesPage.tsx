@@ -57,7 +57,7 @@ function getCurrentMonth() {
   return new Date().toISOString().slice(0, 7); // YYYY-MM
 }
 
-export default function RelatorioComissoesPage() {
+export default function RelatorioComissoesPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
 
@@ -154,27 +154,31 @@ export default function RelatorioComissoesPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FileBarChart className="h-6 w-6" />
-            Relatório de Comissões
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Comissões calculadas automaticamente na liquidação de parcelas.
-          </p>
-        </div>
-        {isAdmin && pendentesCount > 0 && (
-          <Button onClick={handleAprovarTodas} disabled={aprovarLoteMutation.isPending}>
-            {aprovarLoteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            <CheckCircle2 className="h-4 w-4 mr-2" />
-            Aprovar Todas ({pendentesCount})
-          </Button>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        {!embedded && (
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <FileBarChart className="h-6 w-6" />
+              Relatório de Comissões
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Comissões calculadas automaticamente na liquidação de parcelas.
+            </p>
+          </div>
         )}
-        <Button variant="outline" onClick={handleExportCSV} disabled={comissoes.length === 0}>
-          <Download className="h-4 w-4 mr-2" />
-          Exportar CSV
-        </Button>
+        <div className="flex gap-2 ml-auto">
+          {isAdmin && pendentesCount > 0 && (
+            <Button onClick={handleAprovarTodas} disabled={aprovarLoteMutation.isPending}>
+              {aprovarLoteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              Aprovar Todas ({pendentesCount})
+            </Button>
+          )}
+          <Button variant="outline" onClick={handleExportCSV} disabled={comissoes.length === 0}>
+            <Download className="h-4 w-4 mr-2" />
+            Exportar CSV
+          </Button>
+        </div>
       </div>
 
       {/* Resumo Cards */}

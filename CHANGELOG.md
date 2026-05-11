@@ -6,6 +6,63 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.9.0] — 2026-05-11
+
+### Adicionado — Hub Financeiro + Comissões Semanais + Envio WhatsApp
+
+**Reorganização de telas**
+- Nova rota `/financeiro` (renderizada por `PagamentosWooviPage`, exibida como **Financeiro**) com abas internas: `cobrancas`, `transacoes`, `desembolsos`, `extratos`, `gastos`, `comissoes`, `envios`.
+- Redirects: `/pagamentos` → `/financeiro`, `/configuracoes/gastos-internos` → `/financeiro?tab=gastos`, `/relatorios/comissoes` → `/financeiro?tab=comissoes`.
+- Sidebar: seção `PAGAMENTOS` → `FINANCEIRO` com única entrada "Hub Financeiro". Removidas entradas duplicadas "Gastos Internos" e "Comissões".
+
+**Seletor de período unificado**
+- Novo `PeriodoSelector` (presets hoje/7d/30d/mes-atual/mes-anterior/trimestre/custom) usado no Hub Financeiro e no `DashboardComercialPage`.
+- `DashboardComercialPage`: todos os KPIs passam a filtrar pelo período; novo card "Empréstimos no período".
+
+**Comissões semanais por funcionário** (migration `076_comissoes_semanais_config.sql`)
+- Tabela `comissoes_semanais_config` com regras: `pct_entradas`, `pct_saidas`, `fixo`, `fixo_pct_entradas`, `fixo_pct_saidas`. RLS: SELECT auth / WRITE admin+gerência.
+- `src/app/lib/comissoes-semanais.ts`: `calcularComissoesSemanais`, `descreverRegra`, `totalComissoesSemanais`.
+- `ComissoesSemanaisCard` renderizado na aba **Comissões** — CRUD de regras + cálculo do período sobre o `extratoTotals` (consolidado quando disponível, senão PIX).
+- Hook `useComissoesSemanaisConfigs` + service `comissoesSemanaisService.ts`.
+
+**PDF executivo**
+- Rodapé `'Casa da Moeda — Soluções Financeiras'` substituído por **`'Fintech'`**.
+- Nova seção "Comissões / Salários da semana" no PDF (Funcionário · Regra · Base · Valor + total).
+- `gerarRelatorioExecutivoPdf` aceita `comissoesSemanais` e o `handleExportarRelatorioPdf` injeta automaticamente as comissões do período.
+
+**Envio do relatório semanal via WhatsApp** (substitui o CNAB enquanto a EFI não libera)
+- Migration `076`: `relatorio_semanal_destinatarios` + `relatorio_semanal_envios` (auditoria).
+- Edge function `cron-relatorio-semanal-whatsapp`: envia texto pelo `send-whatsapp` usando a instância configurada em `configuracoes_sistema.extrato_semanal_instancia_whatsapp_id` (com fallback para `whatsapp_instancias.is_system=true`).
+- `relatorio-semanal-mensagem.ts`: monta texto com KPIs + tabela ASCII das comissões.
+- `RelatorioSemanalWhatsappCard` na aba **Envios automáticos**: CRUD de destinatários, pré-visualização da mensagem, "Enviar agora" e histórico dos últimos envios.
+
+**PDF anexo no WhatsApp** (envio manual)
+- `gerarRelatorioExecutivoPdf` agora suporta `output: 'blob'`.
+- Botão "Enviar agora" gera o PDF no browser, faz upload para bucket público `whatsapp-media/relatorios-semanais/{ini}_{fim}_{ts}.pdf` e envia a URL pública via `send-whatsapp` como documento.
+- `send-whatsapp` passa `mimetype: 'application/pdf'` + `fileName` para o Evolution API (`mediaMessage`), garantindo renderização correta no WhatsApp.
+
+**Filtros de período propagados para Gastos Internos**
+- `GastosInternosPage` aceita props `embedded`, `dateFrom`, `dateTo` — aplicadas como `.gte/.lte('horario', ...)` na query do Supabase.
+- PDF executivo agora inclui seção "Gastos Internos" (subtotal por categoria + detalhe até 50 linhas).
+
+**Cron pg_cron domingo 10h BRT** (migration `077_cron_relatorio_semanal_domingo.sql`)
+- `cron.schedule('relatorio-semanal-domingo-10h', '0 13 * * 0', ...)` — chama a edge function com `{ auto: true, origem: 'cron' }`.
+- Modo `auto: true` (server-side): a edge function calcula período (domingo passado → sábado passado BRT), busca `gastos_internos` agregado por categoria, aplica regras `fixo`/`pct_saidas`/`fixo_pct_saidas` de `comissoes_semanais_config`, e monta o texto. Regras `pct_entradas` ficam marcadas como "calcular no app" (entradas dependem da API EFI ao vivo).
+- Cron envia **somente texto**; o PDF anexo continua disponível pelo botão "Enviar agora" da UI.
+
+**UI — separação visual dos cards de relatório**
+- `RelatorioSemanalWhatsappCard`: título "Relatório semanal · Financeiro (texto + PDF)" + badge `manual + cron dom 10h`.
+- `ExtratoBancarioSemanalCard`: título "CNAB bancário (extrato oficial EFI)" + badge `cron seg 10h`.
+
+**WhatsAppPage — confirmações nativas substituídas**
+- Botões "Sistema" e "Deletar" agora usam `AlertDialog` (shadcn/Radix) em vez de `window.confirm`, garantindo funcionamento no Electron empacotado.
+
+### Documentação
+
+- README: nova **seção 51 — Hub Financeiro + Comissões Semanais + Envio WhatsApp**.
+
+---
+
 ## [1.8.2] — 2026-05-05
 
 ### Corrigido — Saídas Órfãs: busca de empréstimos e vínculo com categoria

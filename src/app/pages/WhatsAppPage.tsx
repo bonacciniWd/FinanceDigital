@@ -28,6 +28,16 @@ import {
   DialogTrigger,
 } from '../components/ui/dialog';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
+import {
   Send, Phone, CheckCheck, Clock, Search, Paperclip, Smile,
   Plus, Wifi, WifiOff, QrCode, RefreshCw, Trash2, Settings,
   MessageSquare, ArrowDownUp, AlertCircle, Loader2,
@@ -466,6 +476,13 @@ export default function WhatsAppPage() {
   const configurarWebhook = useConfigurarWebhook();
   const syncInstancias = useSyncInstancias();
   const setAsSystem = useSetAsSystem();
+
+  // Confirmação não-nativa (window.confirm não funciona em Electron empacotado)
+  const [confirmAction, setConfirmAction] = useState<
+    | { kind: 'set-system'; id: string; name: string }
+    | { kind: 'delete'; id: string; name: string }
+    | null
+  >(null);
 
   // ── Etiquetas e clientes ──────────────────────────────
   const { data: allEtiquetas = [] } = useEtiquetas();
@@ -1244,12 +1261,7 @@ export default function WhatsAppPage() {
                       title="Definir como instância do sistema (cron, notificações)"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm(`Definir "${inst.instance_name}" como instância do sistema?\n\nEla será usada para envios automáticos (cron, notificações, verificações).`)) {
-                          setAsSystem.mutate(inst.id, {
-                            onSuccess: () => toast.success(`"${inst.instance_name}" definida como instância do sistema`),
-                            onError: (err) => toast.error(`Erro: ${(err as Error).message}`),
-                          });
-                        }
+                        setConfirmAction({ kind: 'set-system', id: inst.id, name: inst.instance_name });
                       }}
                     >
                       <Settings className="w-3 h-3" />
@@ -1262,12 +1274,7 @@ export default function WhatsAppPage() {
                       className="text-xs text-destructive"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (confirm('Deletar instância?')) {
-                          deletar.mutate(inst.id, {
-                            onSuccess: () => toast.success('Instância deletada'),
-                            onError: (err) => toast.error(`Erro ao deletar: ${(err as Error).message}`),
-                          });
-                        }
+                        setConfirmAction({ kind: 'delete', id: inst.id, name: inst.instance_name });
                       }}
                     >
                       <Trash2 className="w-3 h-3" />
@@ -1928,6 +1935,51 @@ export default function WhatsAppPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* AlertDialog universal (substitui window.confirm — não funciona em Electron empacotado) */}
+      <AlertDialog open={!!confirmAction} onOpenChange={(o) => { if (!o) setConfirmAction(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction?.kind === 'set-system' ? 'Definir como instância do sistema?' : 'Deletar instância?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction?.kind === 'set-system' ? (
+                <>
+                  A instância <strong>{confirmAction.name}</strong> será usada para envios automáticos
+                  (cron, notificações, verificações, relatório semanal).
+                </>
+              ) : confirmAction?.kind === 'delete' ? (
+                <>
+                  Tem certeza que quer deletar a instância <strong>{confirmAction.name}</strong>? Esta ação não pode ser desfeita.
+                </>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!confirmAction) return;
+                if (confirmAction.kind === 'set-system') {
+                  setAsSystem.mutate(confirmAction.id, {
+                    onSuccess: () => toast.success(`"${confirmAction.name}" definida como instância do sistema`),
+                    onError: (err) => toast.error(`Erro: ${(err as Error).message}`),
+                  });
+                } else {
+                  deletar.mutate(confirmAction.id, {
+                    onSuccess: () => toast.success('Instância deletada'),
+                    onError: (err) => toast.error(`Erro ao deletar: ${(err as Error).message}`),
+                  });
+                }
+                setConfirmAction(null);
+              }}
+            >
+              Confirmar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 # FinanceDigital — Documentação Técnica Completa
 
-> **Atualizado:** 30 de abril de 2026 — v1.4.20  
+> **Atualizado:** 11 de maio de 2026 — v1.9.0  
 > **Stack:** React 18 · TypeScript 5 · Vite 6 · Tailwind CSS v4 · Supabase · React Query (TanStack) · Tesseract.js (OCR)
 
 ---
@@ -61,6 +61,8 @@
 47. [Cobranças Automáticas EFI cobv](#47-cobranças-automáticas-efi-cobv-v850--31032026)
 48. [Comprovantes de Pagamento](#48-comprovantes-de-pagamento-v850--31032026)
 49. [Configurações do Sistema](#49-configurações-do-sistema-v850--31032026)
+50. [Runbook: Evolution API + WhatsApp (Operacional)](#50-runbook-evolution-api--whatsapp-operacional)
+51. [Hub Financeiro + Comissões Semanais + Envio WhatsApp (v1.9.0)](#51-hub-financeiro--comissões-semanais--envio-whatsapp-v190--11052026)
 
 ---
 
@@ -4661,6 +4663,84 @@ SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 5;
 supabase functions logs cron-notificacoes --tail
 ```
 
+### Evolution API — Instâncias somem após restart do fly.io
+
+**Causa:** O container fly.io não tem volume persistente. Ao reiniciar, toda a memória interna do Evolution API é apagada. As instâncias continuam no banco de dados (`whatsapp_instancias`), mas não existem mais no servidor.
+
+**Sintomas:**
+- `POST /instance/connect/<nome>` retorna 404
+- `configureWebhook` falha silenciosamente
+- WhatsApp não envia mensagens mesmo com `status = 'conectado'` no banco
+
+**Diagnóstico:**
+```bash
+# Listar instâncias ativas no servidor Evolution
+curl -s https://finance-digital-evolution.fly.dev/instance/fetchInstances \
+  -H "apikey: <EVOLUTION_API_KEY>"
+# Se retornar [] → todas as instâncias foram perdidas
+```
+
+**Solução:**
+1. No banco, exclua as instâncias "fantasma":
+```sql
+DELETE FROM whatsapp_instancias WHERE instance_name = '<nome>';
+```
+2. Recrie a instância pelo painel (Chat → WhatsApp → Nova Instância).
+3. Reconecte lendo o QR Code.
+4. Marque a instância do sistema como `is_system = true`.
+
+---
+
+### Evolution API — Configuração da apikey
+
+A `AUTHENTICATION_API_KEY` no fly.io **não é** o token de deploy do fly — é uma chave gerada especificamente para a Evolution API.
+
+**Configurar no fly.io:**
+```bash
+flyctl secrets set AUTHENTICATION_API_KEY="<sua-chave>" -a finance-digital-evolution
+```
+
+**Configurar no Supabase:**
+```bash
+supabase secrets set EVOLUTION_API_KEY="<sua-chave>"
+supabase secrets set EVOLUTION_API_URL="https://finance-digital-evolution.fly.dev"
+```
+
+> **Importante:** Ao trocar a apikey, todos os `instance_token` armazenados em `whatsapp_instancias` ficam inválidos. Delete e recrie todas as instâncias.
+
+**Verificar apikey atual no fly:**
+```bash
+flyctl secrets list -a finance-digital-evolution
+```
+
+---
+
+### Evolution API — Header de autenticação
+
+A Evolution API usa `apikey` como header (não `Authorization: Bearer`):
+
+```
+apikey: <EVOLUTION_API_KEY>
+```
+
+Qualquer requisição com `Authorization: Bearer ...` retornará **401 Unauthorized**.
+
+---
+
+### Evolution API — Nome de instância com espaços
+
+Se o `instance_name` contiver espaços ou caracteres especiais (ex: `"whats principal "`), as chamadas à API retornam 404 ou silenciosamente falham.
+
+**Solução aplicada:** Todas as edge functions usam `encodeURIComponent(instancia.instance_name)` ao montar URLs da Evolution API. Exemplo:
+
+```typescript
+const url = `${evolutionUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`;
+```
+
+Funções corrigidas: `approve-credit`, `cron-notificacoes`, `send-verification-link`, `send-whatsapp`, `notify-verification-submitted`, `send-registration-link`, `webhook-whatsapp`.
+
+---
+
 ### Parcelas pagas mas empréstimo mostra 0/N
 
 **Causa:** Parcelas foram marcadas como pagas antes da correção do `registrarPagamento`.  
@@ -5047,3 +5127,351 @@ A página exibe cards com toggles e inputs:
 - **Juros (%/mês)**: Input numérico → percentual de juros mensal
 
 > Acessível apenas para roles `admin` e `gerencia`. Alterações têm efeito imediato (próxima execução do cron).
+
+---
+
+## 50. Runbook: Evolution API + WhatsApp (Operacional)
+
+### 50.1. Arquitetura
+
+| Componente | Valor |
+|---|---|
+| Servidor | `https://finance-digital-evolution.fly.dev` |
+| Versão | Evolution API v1.8.6 |
+| Infraestrutura | fly.io (container sem volume persistente) |
+| Auth header | `apikey: <EVOLUTION_API_KEY>` |
+| Secret Supabase | `EVOLUTION_API_KEY` + `EVOLUTION_API_URL` |
+| Secret fly.io | `AUTHENTICATION_API_KEY` |
+
+### 50.2. Verificação de saúde
+
+```bash
+# 1. Servidor está respondendo?
+curl -s https://finance-digital-evolution.fly.dev/instance/fetchInstances \
+  -H "apikey: <EVOLUTION_API_KEY>"
+# Esperado: array com instâncias ativas
+# Se []: container reiniciou → instâncias perdidas (ver 50.4)
+
+# 2. Apikey correta?
+# Se 401: apikey errada no fly ou no Supabase
+flyctl secrets list -a finance-digital-evolution
+
+# 3. Logs do container
+flyctl logs -a finance-digital-evolution
+```
+
+### 50.3. Criar nova instância WhatsApp
+
+1. Acesse o painel do sistema → **Chat → WhatsApp → Nova Instância**
+2. Informe o nome (sem espaços recomendado)
+3. Aguarde o QR Code aparecer
+4. Escaneie com o celular
+5. Marque `is_system = true` para usar nas notificações automáticas:
+
+```sql
+UPDATE whatsapp_instancias SET is_system = true WHERE instance_name = '<nome>';
+-- Apenas uma instância deve ser is_system = true
+UPDATE whatsapp_instancias SET is_system = false WHERE instance_name != '<nome>';
+```
+
+### 50.4. Recuperar após restart do container (instâncias perdidas)
+
+```sql
+-- 1. Verificar instâncias no banco
+SELECT id, instance_name, status, is_system FROM whatsapp_instancias;
+
+-- 2. Remover instâncias "fantasma" (existem no banco mas não no servidor)
+DELETE FROM whatsapp_instancias WHERE instance_name IN ('<nome1>', '<nome2>');
+```
+
+Depois, recrie as instâncias conforme 50.3.
+
+> Para evitar perda recorrente, considere adicionar um volume fly.io ao container Evolution ou usar solução de persistência externa.
+
+### 50.5. Trocar a apikey Evolution
+
+```bash
+# 1. Gerar nova chave (qualquer string segura, ex: openssl rand -hex 32)
+openssl rand -hex 32
+
+# 2. Atualizar no fly.io
+flyctl secrets set AUTHENTICATION_API_KEY="<nova-chave>" -a finance-digital-evolution
+
+# 3. Atualizar no Supabase
+supabase secrets set EVOLUTION_API_KEY="<nova-chave>"
+
+# 4. Forçar redeploy do container
+flyctl deploy -a finance-digital-evolution
+```
+
+> Após trocar a apikey, **todos os `instance_token` ficam inválidos**. Delete todas as instâncias do banco e recrie do zero (ver 50.3).
+
+### 50.6. PIX EFI enviado mas com status `NAO_REALIZADO`
+
+**Contexto:** A EFI aceita o envio (HTTP 201, `idEnvio` gerado) mas rejeita de forma assíncrona. O campo `motivo` pode vir vazio.
+
+**Diagnóstico:**
+1. Verificar saldo na conta EFI (painel EFI Bank → Saldo)
+2. Verificar se a chave PIX destinatária existe no DICT:
+   ```
+   GET /v2/gn/pix/chaves/<chave>  (via EFI API autenticada)
+   ```
+3. Verificar limite diário de envio PIX da conta EFI (padrão R$0,30/dia para conta Pro)
+4. Consultar no banco a resposta completa do envio:
+   ```sql
+   SELECT metadata FROM woovi_transactions
+   WHERE gateway = 'efi' AND tipo = 'PAYMENT'
+   ORDER BY created_at DESC LIMIT 5;
+   ```
+5. Verificar logs da edge function:
+   ```bash
+   supabase functions logs approve-credit --tail
+   # Procurar: [approve-credit] Resposta completa EFI:
+   ```
+
+**Reconciliação automática:** O cron `cron-efi-poll-pix` (jobid=7, schedule `* * * * *`) re-consulta todos os PIX com `status = 'PENDING'` e atualiza para `CONFIRMED` ou `FAILED`.
+
+```sql
+-- Verificar histórico do cron
+SELECT * FROM cron.job_run_details
+WHERE jobid = 7
+ORDER BY start_time DESC LIMIT 10;
+```
+
+### 50.7. Enum `woovi_transaction_type` e `woovi_transaction_status`
+
+Todos os valores devem ser **MAIÚSCULOS** (definido na migration 008):
+
+| Campo | Valores válidos |
+|---|---|
+| `woovi_transaction_type` | `CHARGE`, `PAYMENT`, `SPLIT`, `WITHDRAWAL` |
+| `woovi_transaction_status` | `PENDING`, `CONFIRMED`, `FAILED`, `REFUNDED` |
+
+> Inserir com lowercase (ex: `"payment"`) causa erro silencioso de violação de enum — o registro não é criado e o desembolso aparece como não registrado.
+
+---
+
+## 51. Hub Financeiro + Comissões Semanais + Envio WhatsApp (v1.9.0 — 11/05/2026)
+
+Reorganização das telas financeiras em um **hub único** (`/financeiro`) com abas internas + adição do cadastro de **regras de comissão semanal por funcionário** + **envio automatizado/manual do relatório semanal pelo WhatsApp** (substitui temporariamente o envio do CNAB enquanto a EFI não libera a feature).
+
+### 51.1. Reorganização de telas
+
+| Antes (rota) | Agora |
+|---|---|
+| `/pagamentos` | Redireciona para `/financeiro` |
+| `/configuracoes/gastos-internos` | Redireciona para `/financeiro?tab=gastos` |
+| `/relatorios/comissoes` | Redireciona para `/financeiro?tab=comissoes` |
+
+Implementado em [`src/app/routes.tsx`](src/app/routes.tsx) usando `<Navigate>` do react-router.
+
+A sidebar foi limpa: a seção `PAGAMENTOS` virou **`FINANCEIRO`** com a entrada única **"Hub Financeiro"** (→ `/financeiro`). As antigas entradas "Gastos Internos" e "Comissões" foram removidas (acessíveis pelas abas).
+
+### 51.2. Abas do Hub Financeiro
+
+`PagamentosWooviPage.tsx` (renomeada na UI para **Financeiro**) lê `?tab=...` da URL e expõe as abas:
+
+| Tab (`?tab=...`) | Conteúdo |
+|---|---|
+| `cobrancas` | Cobranças PIX EFI (nova/listagem) |
+| `transacoes` | Transações EFI |
+| `desembolsos` | Aguardando envio + concluídos (condicional) |
+| `extratos` | Extrato consolidado (PIX recebidos/enviados + JSON importado) |
+| `gastos` | `<GastosInternosPage embedded />` |
+| `comissoes` | Salários semanais (novo card) + `<RelatorioComissoesPage embedded />` |
+| `envios` | Relatório semanal WhatsApp (novo) + `ExtratoBancarioSemanalCard` (CNAB) |
+
+### 51.3. Seletor de período unificado
+
+Novo componente [`src/app/components/PeriodoSelector.tsx`](src/app/components/PeriodoSelector.tsx) com presets (`hoje`, `7d`, `30d`, `mes-atual`, `mes-anterior`, `trimestre`, `custom`). Exporta:
+
+```ts
+type PeriodoPreset = 'hoje' | '7d' | '30d' | 'mes-atual' | 'mes-anterior' | 'trimestre' | 'custom';
+interface PeriodoRange { from: Date; to: Date; preset: PeriodoPreset }
+function getPresetRange(preset: PeriodoPreset, ref?: Date): PeriodoRange;
+```
+
+Em uso no Hub Financeiro e no `DashboardComercialPage` (que ganhou KPI **"Empréstimos no período"** filtrando todos os cards).
+
+### 51.4. Comissões semanais por funcionário
+
+A categoria **Pagamentos** em `gastos_internos` é o "pote único" do salário da equipe. Para detalhar **quem recebe o quê** sem mudar o lançamento bancário, foi criada a tabela `comissoes_semanais_config` com regras configuráveis (migration **`076_comissoes_semanais_config.sql`**):
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `id` | UUID | PK |
+| `nome` | TEXT | nome de exibição (ex.: "SL", "Apoio") |
+| `user_id` | UUID | FK opcional → `profiles(id)` |
+| `tipo` | TEXT | `pct_entradas` · `pct_saidas` · `fixo` · `fixo_pct_entradas` · `fixo_pct_saidas` |
+| `valor_pct` | NUMERIC(7,4) | ex.: 8.0000 = 8% |
+| `valor_fixo` | NUMERIC(14,2) | ex.: 500.00 |
+| `ativo` | BOOLEAN | DEFAULT true |
+| `ordem` | INT | exibição |
+
+**RLS:** SELECT para `authenticated`; INSERT/UPDATE/DELETE só para `admin`/`gerencia`.
+
+**Regras iniciais sugeridas (devem ser cadastradas pela UI):**
+
+| Funcionário | Tipo | Valor |
+|---|---|---|
+| SL | `pct_entradas` | 8% |
+| dazl | `pct_entradas` | 6% |
+| SP | `pct_entradas` | 3% |
+| Grego | `fixo` | R$ 500 |
+| Apoio | `fixo_pct_saidas` | R$ 300 + 1% das saídas |
+
+### 51.5. Camada de cálculo
+
+[`src/app/lib/comissoes-semanais.ts`](src/app/lib/comissoes-semanais.ts) expõe:
+
+```ts
+calcularComissoesSemanais({ configs, totalEntradas, totalSaidas }): ComissaoSemanalCalculada[]
+descreverRegra(c): string                    // "8% das entradas", "R$ 500 fixo/semana", etc.
+totalComissoesSemanais(calculadas): number
+```
+
+A base (`totalEntradas` / `totalSaidas`) vem do **extrato consolidado** quando disponível (JSON importado), senão dos PIX do período. Lógica reusada do `extratoTotals` já existente em `PagamentosWooviPage`.
+
+### 51.6. UI das comissões
+
+[`src/app/components/ComissoesSemanaisCard.tsx`](src/app/components/ComissoesSemanaisCard.tsx) renderizado na aba **Comissões**:
+
+- Tabela: Funcionário · Regra · Base · Valor da semana · Ações
+- Total ao final
+- Dialog para criar/editar regras (nome, tipo, valor fixo, percentual, ativo, ordem, observação)
+- Inativos aparecem com opacidade reduzida
+
+Hook: [`useComissoesSemanaisConfigs`](src/app/hooks/useComissoesSemanais.ts) (TanStack Query, `staleTime 60s`).
+Service: [`comissoesSemanaisService.ts`](src/app/services/comissoesSemanaisService.ts).
+
+### 51.7. PDF executivo — mudanças
+
+[`src/app/lib/pdf-report.ts`](src/app/lib/pdf-report.ts) — `gerarRelatorioExecutivoPdf`:
+
+1. **Branding:** rodapé `'Casa da Moeda — Soluções Financeiras'` → **`'Fintech'`** (padrão quando `empresaNome` não for informado).
+2. **Nova seção:** "Comissões / Salários da semana" — tabela com colunas Funcionário · Regra · Base · Valor + total. Cor de cabeçalho âmbar (`#78350f`).
+3. Novo campo na entrada: `comissoesSemanais?: ComissaoSemanalCalculada[]`. O `handleExportarRelatorioPdf` em `PagamentosWooviPage` já calcula e injeta as comissões com base no período selecionado.
+
+> A logo `logo-wide.png` continua sendo usada como está — substituí-la fora do código é suficiente para remover "Digital" do cabeçalho visual.
+
+### 51.8. Envio do relatório semanal via WhatsApp
+
+Substituição temporária do envio CNAB enquanto a EFI não libera a feature de extrato.
+
+**Tabelas (migration 076):**
+
+- `relatorio_semanal_destinatarios(id, nome, telefone, ativo, created_at, updated_at)` — RLS: SELECT auth / WRITE admin+gerência.
+- `relatorio_semanal_envios(id, periodo_inicio, periodo_fim, destinatarios JSONB, mensagem, origem 'manual'|'cron', total_entradas, total_saidas, total_comissoes, enviado_por, created_at)` — auditoria.
+
+**Edge Function:** [`supabase/functions/cron-relatorio-semanal-whatsapp/index.ts`](supabase/functions/cron-relatorio-semanal-whatsapp/index.ts)
+
+- Aceita `POST` com `{ periodo_inicio, periodo_fim, mensagem, destinatario_ids?, origem?, total_* }`.
+- Resolve a instância WhatsApp em `configuracoes_sistema.extrato_semanal_instancia_whatsapp_id` (mesma chave usada pelo cron de extrato).
+- Itera destinatários ativos e chama `send-whatsapp` com `tipo` default (texto). Registra cada envio em `relatorio_semanal_envios`.
+
+Deploy:
+
+```bash
+supabase functions deploy cron-relatorio-semanal-whatsapp --no-verify-jwt
+```
+
+**Texto enviado:** [`src/app/lib/relatorio-semanal-mensagem.ts`](src/app/lib/relatorio-semanal-mensagem.ts) → `montarMensagemRelatorioSemanal(d)` produz algo como:
+
+```
+*📊 Relatório Semanal — Fintech*
+Período: _12/01/2026 a 18/01/2026_
+
+*Resumo financeiro*
+• Entradas: *R$ 24.500,00*
+• Saídas: *R$ 18.300,00*
+• Saldo do período: *R$ 6.200,00*
+• Saldo EFI atual: *R$ 12.450,00*
+• Empréstimos no período: *7* (R$ 18.000,00)
+
+*Comissões / Salários da semana*
+```
+Funcionário Regra                  Valor
+------------------------------------------------
+SL          8% das entradas      R$ 1.960,00
+dazl        6% das entradas      R$ 1.470,00
+SP          3% das entradas      R$   735,00
+Grego       R$ 500,00 fixo/sema  R$   500,00
+Apoio       R$ 300 + 1% saídas   R$   483,00
+------------------------------------------------
+TOTAL                            R$ 5.148,00
+```
+```
+
+**UI:** [`src/app/components/RelatorioSemanalWhatsappCard.tsx`](src/app/components/RelatorioSemanalWhatsappCard.tsx) na aba **Envios automáticos**:
+
+- CRUD de destinatários (`5511999998888` — somente dígitos com DDI)
+- Botão **Pré-visualizar** (mostra a mensagem que será enviada)
+- Botão **Enviar agora** (dispara a edge function imediatamente)
+- Histórico dos últimos 5 envios (data, período, origem `manual`/`cron`, total comissões)
+
+**Cron agendado (migration `077_cron_relatorio_semanal_domingo.sql`):** envio automático todo **domingo 10:00 BRT** (13:00 UTC).
+
+A edge function aceita `{ auto: true }` no body: nesse modo ela mesma calcula o período (domingo passado a sábado passado), busca `gastos_internos` e `comissoes_semanais_config`, monta a mensagem e envia. **O cron envia apenas texto** — o PDF executivo continua sendo gerado pelo botão "Enviar agora" da UI (jsPDF só roda no navegador).
+
+SQL do agendamento (aplicado automaticamente pela migration 077):
+
+```sql
+SELECT cron.schedule(
+  'relatorio-semanal-domingo-10h',
+  '0 13 * * 0',  -- domingo 13h UTC = 10h BRT
+  $$
+  SELECT net.http_post(
+    url     := 'https://<project>.supabase.co/functions/v1/cron-relatorio-semanal-whatsapp',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key'),
+      'Content-Type',  'application/json'
+    ),
+    body    := jsonb_build_object('auto', true, 'origem', 'cron')
+  );
+  $$
+);
+```
+
+**Diferença manual × cron:**
+
+| Gatilho | Quando | Conteúdo |
+|---|---|---|
+| Botão "Enviar agora" (UI) | Sob demanda | Texto + **PDF anexo** (upload em `whatsapp-media/relatorios-semanais/`) |
+| Cron domingo 10h BRT | Automático | Somente texto (saídas + comissões server-side) |
+
+Regras `pct_entradas` / `fixo_pct_entradas` ficam marcadas como _"calcular no app"_ no texto do cron, pois entradas dependem da API EFI consultada em tempo real (não disponível em Deno). Para o número exato com base em entradas reais, abra o app e clique em **Enviar agora**.
+
+### 51.9. Arquivos criados / modificados nesta versão
+
+**Criados:**
+
+- `supabase/migrations/076_comissoes_semanais_config.sql`
+- `supabase/migrations/077_cron_relatorio_semanal_domingo.sql` — agenda pg_cron domingo 10h BRT
+- `supabase/functions/cron-relatorio-semanal-whatsapp/index.ts` — com modo `auto: true`
+- `src/app/components/PeriodoSelector.tsx`
+- `src/app/components/ComissoesSemanaisCard.tsx`
+- `src/app/components/RelatorioSemanalWhatsappCard.tsx`
+- `src/app/lib/comissoes-semanais.ts`
+- `src/app/lib/relatorio-semanal-mensagem.ts`
+- `src/app/services/comissoesSemanaisService.ts`
+- `src/app/hooks/useComissoesSemanais.ts`
+
+**Modificados:**
+
+- `src/app/lib/pdf-report.ts` — rodapé Fintech + seção comissões
+- `src/app/pages/PagamentosWooviPage.tsx` — UI Hub + integrações + período unificado
+- `src/app/pages/DashboardComercialPage.tsx` — `PeriodoSelector` + 5º KPI
+- `src/app/pages/GastosInternosPage.tsx` — suporte `embedded`
+- `src/app/pages/RelatorioComissoesPage.tsx` — suporte `embedded`
+- `src/app/routes.tsx` — `/financeiro` + redirects
+- `src/app/components/MainLayout.tsx` — sidebar `PAGAMENTOS` → `FINANCEIRO`
+
+### 51.10. Checklist pós-deploy
+
+1. Aplicar migrations: `supabase db push` (aplica 076 + 077).
+2. Deploy da função: `supabase functions deploy cron-relatorio-semanal-whatsapp --no-verify-jwt` (re-deploy obrigatório após mudança do modo `auto`).
+3. Re-deploy `send-whatsapp --no-verify-jwt` (versão atual envia PDF como `mediaMessage` com `mimetype: application/pdf` e `fileName`).
+4. Confirmar que `configuracoes_sistema.extrato_semanal_instancia_whatsapp_id` aponta para a instância correta (ou marcar uma instância como `is_system=true` como fallback).
+5. Em **Financeiro → Comissões**, cadastrar as 5 regras iniciais (SL/dazl/SP/Grego/Apoio) — com `user_id` para mapear ao funcionário.
+6. Em **Financeiro → Envios automáticos**, cadastrar destinatários e clicar **Enviar agora** para teste end-to-end (texto + PDF).
+7. Verificar agendamento: `SELECT jobname, schedule FROM cron.job WHERE jobname = 'relatorio-semanal-domingo-10h';` — esperado `0 13 * * 0`.

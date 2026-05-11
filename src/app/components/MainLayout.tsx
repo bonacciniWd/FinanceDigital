@@ -64,6 +64,8 @@ import {
   AlertTriangle,
   Percent,
   Settings2,
+  Images,
+  CalendarClock,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
@@ -190,6 +192,15 @@ export function MainLayout() {
       ],
     },
     {
+      title: 'KANBAN',
+      items: [
+        { name: 'Cobrança', href: '/kanban/cobranca', icon: Columns3, roles: ['admin', 'gerencia', 'cobranca'] },
+        { name: 'Análise de Crédito', href: '/kanban/analise', icon: Scale, roles: ['admin', 'gerencia'] },
+        { name: 'Atendimento', href: '/kanban/atendimento', icon: Headset, roles: ['admin', 'gerencia', 'comercial'] },
+        { name: 'Visão Gerencial', href: '/kanban/gerencial', icon: Eye, roles: ['admin', 'gerencia'] },
+      ],
+    },
+    {
       title: 'CLIENTES',
       items: [
         { name: 'Lista de Clientes', href: '/clientes', icon: UserSearch, roles: ['admin', 'gerencia', 'comercial'] },
@@ -200,11 +211,26 @@ export function MainLayout() {
       ],
     },
     {
-      title: 'PAGAMENTOS',
+      title: 'FINANCEIRO',
       items: [
-        { name: 'Pagamentos Pix', href: '/pagamentos', icon: QrCode, roles: ['admin', 'gerencia'] },
+        { name: 'Hub Financeiro', href: '/financeiro', icon: QrCode, roles: ['admin', 'gerencia'] },
         { name: 'Pagamentos Órfãos', href: '/pagamentos/orfaos', icon: AlertTriangle, roles: ['admin', 'gerencia', 'cobranca'] },
         { name: 'Saídas Órfãs', href: '/pagamentos/saidas-orfas', icon: AlertTriangle, roles: ['admin', 'gerencia'] },
+      ],
+    },
+    {
+      title: 'COMUNICAÇÃO',
+      items: [
+        { name: 'WhatsApp', href: '/whatsapp', icon: MessageSquare, roles: ['admin', 'gerencia', 'cobranca'] },
+        { name: 'Fluxos de Chat', href: '/chat/fluxos', icon: Workflow, roles: ['admin', 'gerencia'] },
+        { name: 'Templates', href: '/chat/templates', icon: FileCode, roles: ['admin', 'gerencia'] },
+      ],
+    },
+    {
+      title: 'MARKETING',
+      items: [
+        { name: 'Biblioteca de Mídia', href: '/marketing/biblioteca', icon: Images, roles: ['admin', 'gerencia'] },
+        { name: 'Agendador de Status', href: '/marketing/agendador', icon: CalendarClock, roles: ['admin', 'gerencia'] },
       ],
     },
     {
@@ -217,28 +243,10 @@ export function MainLayout() {
       ],
     },
     {
-      title: 'COMUNICAÇÃO',
-      items: [
-        { name: 'WhatsApp', href: '/whatsapp', icon: MessageSquare, roles: ['admin', 'gerencia', 'cobranca'] },
-        { name: 'Fluxos de Chat', href: '/chat/fluxos', icon: Workflow, roles: ['admin', 'gerencia'] },
-        { name: 'Templates', href: '/chat/templates', icon: FileCode, roles: ['admin', 'gerencia'] },
-      ],
-    },
-    {
-      title: 'KANBAN',
-      items: [
-        { name: 'Cobrança', href: '/kanban/cobranca', icon: Columns3, roles: ['admin', 'gerencia', 'cobranca'] },
-        { name: 'Análise de Crédito', href: '/kanban/analise', icon: Scale, roles: ['admin', 'gerencia'] },
-        { name: 'Atendimento', href: '/kanban/atendimento', icon: Headset, roles: ['admin', 'gerencia', 'comercial'] },
-        { name: 'Visão Gerencial', href: '/kanban/gerencial', icon: Eye, roles: ['admin', 'gerencia'] },
-      ],
-    },
-    {
       title: 'RELATÓRIOS',
       items: [
         { name: 'Gerenciais', href: '/relatorios/gerenciais', icon: FileBarChart, roles: ['admin', 'gerencia'] },
         { name: 'Operacionais', href: '/relatorios/operacionais', icon: FileSpreadsheet, roles: ['admin', 'gerencia'] },
-        { name: 'Comissões', href: '/relatorios/comissoes', icon: Percent, roles: ['admin', 'gerencia'] },
         { name: 'Exportar Dados', href: '/relatorios/exportar', icon: Download, roles: ['admin', 'gerencia'] },
       ],
     },
@@ -248,7 +256,6 @@ export function MainLayout() {
         { name: 'Perfis de Acesso', href: '/configuracoes/perfis', icon: KeyRound, roles: ['admin'] },
         { name: 'Gerenciar Usuários', href: '/configuracoes/usuarios', icon: UserCog, roles: ['admin'] },
         { name: 'Integrações', href: '/configuracoes/integracoes', icon: Plug, roles: ['admin'] },
-        { name: 'Gastos Internos', href: '/configuracoes/gastos-internos', icon: Receipt, roles: ['admin', 'gerencia'] },
         { name: 'IP Whitelist', href: '/configuracoes/ip-whitelist', icon: Shield, roles: ['admin'] },
         { name: 'Sistema', href: '/configuracoes/sistema', icon: Settings2, roles: ['admin', 'gerencia'] },
         { name: 'Minha Conta', href: '/configuracoes/conta', icon: UserCircle, roles: ['admin', 'gerencia', 'cobranca', 'comercial'] },

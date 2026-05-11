@@ -26,6 +26,11 @@ import {
   Receipt,
   Link2,
   CheckCircle2,
+  Info,
+  Upload,
+  Receipt as ReceiptIcon,
+  Percent,
+  Bell,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -58,9 +63,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '../components/ui/popover';
-import { format, subDays, startOfDay, endOfDay } from 'date-fns';
+import { format, startOfDay, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { PixQRCode } from '../components/PixQRCode';
+import { PeriodoSelector, getPresetRange, type PeriodoRange } from '../components/PeriodoSelector';
+import GastosInternosPage from './GastosInternosPage';
+import RelatorioComissoesPage from './RelatorioComissoesPage';
+import { ExtratoBancarioSemanalCard } from '../components/ExtratoBancarioSemanalCard';
+import { ComissoesSemanaisCard } from '../components/ComissoesSemanaisCard';
+import { RelatorioSemanalWhatsappCard } from '../components/RelatorioSemanalWhatsappCard';
+import { useComissoesSemanaisConfigs } from '../hooks/useComissoesSemanais';
+import { calcularComissoesSemanais } from '../lib/comissoes-semanais';
 import {
   useCobrancasWoovi,
   useTransacoesWoovi,
@@ -69,6 +82,7 @@ import {
   useListarPixRecebidosEfi,
   useListarPixEnviadosEfi,
 } from '../hooks/useWoovi';
+import { useExtratoMovimentacoes, useImportExtratoJson } from '../hooks/useExtratoMovimentacoes';
 import { useParcelas } from '../hooks/useParcelas';
 import { useClientes } from '../hooks/useClientes';
 import { useInstancias, useEnviarWhatsapp } from '../hooks/useWhatsapp';
@@ -149,6 +163,13 @@ const parcelaTotal = (p: Parcela) =>
   valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
 
 export default function PagamentosWooviPage() {
+  // Suporta deep-link via ?tab=cobrancas|transacoes|desembolsos|extratos|gastos|comissoes|envios
+  const initialTab = (() => {
+    if (typeof window === 'undefined') return 'cobrancas';
+    const t = new URLSearchParams(window.location.search).get('tab') || '';
+    const validos = ['cobrancas', 'transacoes', 'desembolsos', 'extratos', 'gastos', 'comissoes', 'envios'];
+    return validos.includes(t) ? t : 'cobrancas';
+  })();
   const [busca, setBusca] = useState('');
   const [chargeStatusFilter, setChargeStatusFilter] = useState<string>('');
   const [showNovaCobranca, setShowNovaCobranca] = useState(false);
@@ -224,8 +245,9 @@ export default function PagamentosWooviPage() {
   const totalJaEnviado = jaEnviados.reduce((sum, e) => sum + e.valor, 0);
 
   // ── Filtro de período global ────────────────────────────
-  const [dateFrom, setDateFrom] = useState<Date>(subDays(new Date(), 30));
-  const [dateTo, setDateTo] = useState<Date>(new Date());
+  const [periodo, setPeriodo] = useState<PeriodoRange>(() => getPresetRange('30d'));
+  const dateFrom = periodo.from;
+  const dateTo = periodo.to;
   const [extratoTipoFilter, setExtratoTipoFilter] = useState<string>('TODAS');
 
   // Computed period boundaries (reused across all filters)
@@ -235,6 +257,17 @@ export default function PagamentosWooviPage() {
   // ISO strings for EFI API hooks
   const extratoInicio = format(periodoInicio, "yyyy-MM-dd'T'HH:mm:ss'Z'");
   const extratoFim = format(periodoFim, "yyyy-MM-dd'T'HH:mm:ss'Z'");
+
+  // Range em formato YYYY-MM-DD para o extrato consolidado importado
+  const extratoConsolidadoInicio = format(periodoInicio, 'yyyy-MM-dd');
+  const extratoConsolidadoFim = format(periodoFim, 'yyyy-MM-dd');
+  const { data: movimentacoesConsolidadas = [] } = useExtratoMovimentacoes(
+    extratoConsolidadoInicio,
+    extratoConsolidadoFim
+  );
+  const { data: comissoesConfigs = [] } = useComissoesSemanaisConfigs();
+  const importExtrato = useImportExtratoJson();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: pixRecebidos, isLoading: loadingRecebidos, refetch: refetchRecebidos } =
     useListarPixRecebidosEfi(extratoInicio, extratoFim);
@@ -283,9 +316,15 @@ export default function PagamentosWooviPage() {
     }
 
     // Sent Pix (from GET /v2/gn/pix/enviados response)
+    // IMPORTANTE: filtrar apenas envios efetivados (REALIZADO) — a EFI também
+    // retorna envios em estados intermediários ou falhos que NÃO movimentam o
+    // saldo e portanto não podem ser contabilizados como saída no extrato.
     const enviadosList = pixEnviados?.pix || [];
     if (Array.isArray(enviadosList)) {
       for (const p of enviadosList) {
+        const status = (p.status || 'REALIZADO').toUpperCase();
+        // Considera só estados finais bem-sucedidos. Falhas/devoluções não saem da conta.
+        if (status !== 'REALIZADO' && status !== 'CONFIRMED' && status !== 'COMPLETED') continue;
         items.push({
           id: p.endToEndId || p.idEnvio || crypto.randomUUID(),
           direction: 'saida',
@@ -294,7 +333,7 @@ export default function PagamentosWooviPage() {
           e2eId: p.endToEndId || '',
           nome: p.favorecido?.identificacao?.nome || p.favorecido?.nome || '',
           descricao: p.favorecido?.chave || '',
-          status: p.status || 'REALIZADO',
+          status,
         });
       }
     }
@@ -306,6 +345,25 @@ export default function PagamentosWooviPage() {
 
   // Merge COMPLETED EFI charges from DB (bot + manual) into extrato, deduplicating
   const extratoItemsMerged = useMemo<ExtratoItem[]>(() => {
+    // Se há movimentações consolidadas importadas no período, elas são a
+    // fonte de verdade absoluta (cobrem TUDO: PIX, TED, tarifas, recargas, etc.).
+    // Substituem completamente o cálculo PIX-only da API EFI.
+    if (movimentacoesConsolidadas.length > 0) {
+      return movimentacoesConsolidadas
+        .filter((m) => !m.ehSaldoDiario && (m.direction === 'entrada' || m.direction === 'saida'))
+        .map<ExtratoItem>((m) => ({
+          id: m.id,
+          direction: m.direction as 'entrada' | 'saida',
+          valor: m.valor,
+          horario: `${m.data}T00:00:00`,
+          e2eId: m.protocolo ? String(m.protocolo) : '',
+          nome: m.contraparteNome || '',
+          descricao: m.descricaoCompleta,
+          status: 'CONFIRMED',
+        }))
+        .sort((a, b) => new Date(b.horario).getTime() - new Date(a.horario).getTime());
+    }
+
     const items = [...extratoItems];
 
     // Build a set of known txids/e2eIds to avoid duplicates
@@ -348,7 +406,7 @@ export default function PagamentosWooviPage() {
 
     items.sort((a, b) => new Date(b.horario).getTime() - new Date(a.horario).getTime());
     return items;
-  }, [extratoItems, cobrancas, dateFrom, dateTo, periodoInicio, periodoFim]);
+  }, [extratoItems, cobrancas, dateFrom, dateTo, periodoInicio, periodoFim, movimentacoesConsolidadas]);
 
   // Filtered extrato
   const extratoFiltered = useMemo(() => {
@@ -363,6 +421,35 @@ export default function PagamentosWooviPage() {
     const saidas = extratoItemsMerged.filter(i => i.direction === 'saida').reduce((s, i) => s + i.valor, 0);
     return { entradas, saidas, saldo: entradas - saidas };
   }, [extratoItemsMerged]);
+
+  // Indica se o período exibido vem do extrato consolidado (cobre TUDO) ou só PIX
+  const extratoCobreTudo = movimentacoesConsolidadas.length > 0;
+
+  // Handler de upload do JSON exportado do painel EFI
+  const handleImportExtratoJson = async (file: File) => {
+    try {
+      const text = await file.text();
+      let parsed: any;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        toast.error('Arquivo inválido — esperado JSON exportado do painel EFI.');
+        return;
+      }
+      if (!Array.isArray(parsed)) {
+        toast.error('JSON inválido — o conteúdo deve ser um array de lançamentos.');
+        return;
+      }
+      const result = await importExtrato.mutateAsync(parsed);
+      toast.success(
+        `Extrato importado: ${result.total} lançamentos (${result.stats.entradas} entradas, ${result.stats.saidas} saídas).`
+      );
+    } catch (err: any) {
+      toast.error(err?.message || 'Falha ao importar extrato.');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   // ── Auto-match desembolso: cruza saídas do extrato com aguardandoEnvio ──
   // Normaliza chave PIX (remove formatação CPF/telefone, lowercase) p/ comparação robusta
@@ -575,48 +662,83 @@ export default function PagamentosWooviPage() {
   // ── Exportar Relatório Executivo PDF ─────────────────────────
   // Pull mês corrente como default — o filtro já cobre seleção custom
   const [exportandoPdf, setExportandoPdf] = useState(false);
+
+  /** Monta o input do PDF executivo (compartilhado: download + anexo WhatsApp) */
+  const buildRelatorioPdfInput = async () => {
+    const inicioIso = format(periodoInicio, 'yyyy-MM-dd');
+    const fimIso = format(periodoFim, 'yyyy-MM-dd');
+    const fromTs = periodoInicio.getTime();
+    const toTs = periodoFim.getTime();
+    const cliMap = new Map(clientes.map((c) => [c.id, c.nome]));
+    const empPeriodo = emprestimos
+      .filter((e) => {
+        const t = new Date(e.dataContrato).getTime();
+        return t >= fromTs && t <= toTs;
+      })
+      .map((e) => ({
+        dataContrato: e.dataContrato,
+        clienteNome: cliMap.get(e.clienteId) || '—',
+        valor: e.valor,
+        status: e.status,
+        desembolsado: !!e.desembolsado,
+      }));
+
+    const saldoEfiNum = efiBalanceData?.balance?.saldo != null
+      ? parseFloat(efiBalanceData.balance.saldo)
+      : undefined;
+
+    const comissoesCalc = calcularComissoesSemanais({
+      configs: comissoesConfigs,
+      totalEntradas: extratoTotals.entradas,
+      totalSaidas: extratoTotals.saidas,
+    });
+
+    const { data: gastosData } = await supabase
+      .from('gastos_internos')
+      .select('valor, horario, nome_favorecido, descricao, categoria:categorias_gastos(nome)')
+      .gte('horario', periodoInicio.toISOString())
+      .lte('horario', periodoFim.toISOString())
+      .order('horario', { ascending: false })
+      .limit(500);
+    const gastosPdf = ((gastosData as unknown as Array<{
+      valor: number;
+      horario: string;
+      nome_favorecido: string | null;
+      descricao: string | null;
+      categoria: { nome: string } | null;
+    }>) ?? []).map((g) => ({
+      horario: g.horario,
+      categoria: g.categoria?.nome ?? '—',
+      favorecido: g.nome_favorecido ?? '—',
+      descricao: g.descricao ?? '',
+      valor: Number(g.valor || 0),
+    }));
+
+    return {
+      periodoInicio: inicioIso,
+      periodoFim: fimIso,
+      emprestimos: empPeriodo,
+      extrato: extratoItemsMerged.map((i) => ({
+        horario: i.horario,
+        direction: i.direction,
+        nome: i.nome,
+        descricao: i.descricao,
+        valor: i.valor,
+        e2eId: i.e2eId,
+        status: i.status,
+      })),
+      saldoEfi: saldoEfiNum,
+      subtitulo: user?.name ? `Gerado por ${user.name}` : undefined,
+      comissoesSemanais: comissoesCalc,
+      gastosInternos: gastosPdf,
+    };
+  };
+
   const handleExportarRelatorioPdf = async () => {
     setExportandoPdf(true);
     try {
-      const inicioIso = format(periodoInicio, 'yyyy-MM-dd');
-      const fimIso = format(periodoFim, 'yyyy-MM-dd');
-      // Empréstimos cadastrados no período (data de contrato)
-      const fromTs = periodoInicio.getTime();
-      const toTs = periodoFim.getTime();
-      const cliMap = new Map(clientes.map((c) => [c.id, c.nome]));
-      const empPeriodo = emprestimos
-        .filter((e) => {
-          const t = new Date(e.dataContrato).getTime();
-          return t >= fromTs && t <= toTs;
-        })
-        .map((e) => ({
-          dataContrato: e.dataContrato,
-          clienteNome: cliMap.get(e.clienteId) || '—',
-          valor: e.valor,
-          status: e.status,
-          desembolsado: !!e.desembolsado,
-        }));
-
-      const saldoEfiNum = efiBalanceData?.balance?.saldo != null
-        ? parseFloat(efiBalanceData.balance.saldo)
-        : undefined;
-
-      await gerarRelatorioExecutivoPdf({
-        periodoInicio: inicioIso,
-        periodoFim: fimIso,
-        emprestimos: empPeriodo,
-        extrato: extratoItemsMerged.map((i) => ({
-          horario: i.horario,
-          direction: i.direction,
-          nome: i.nome,
-          descricao: i.descricao,
-          valor: i.valor,
-          e2eId: i.e2eId,
-          status: i.status,
-        })),
-        saldoEfi: saldoEfiNum,
-        subtitulo: user?.name ? `Gerado por ${user.name}` : undefined,
-      });
+      const input = await buildRelatorioPdfInput();
+      await gerarRelatorioExecutivoPdf(input);
       toast.success('Relatório executivo gerado');
     } catch (err) {
       toast.error(`Erro ao gerar PDF: ${(err as Error).message}`);
@@ -625,14 +747,31 @@ export default function PagamentosWooviPage() {
     }
   };
 
+  /** Gera o PDF, faz upload no bucket `whatsapp-media/relatorios-semanais/` e retorna URL pública. */
+  const gerarPdfBase64ParaWhatsapp = async () => {
+    const input = await buildRelatorioPdfInput();
+    const blob = await gerarRelatorioExecutivoPdf(input, { output: 'blob' });
+    if (!(blob instanceof Blob)) return null;
+    const filename = `relatorio-executivo_${input.periodoInicio}_${input.periodoFim}.pdf`;
+    // Path único — evita colisão entre envios consecutivos
+    const path = `relatorios-semanais/${input.periodoInicio}_${input.periodoFim}_${Date.now()}.pdf`;
+    const { error: upErr } = await supabase.storage
+      .from('whatsapp-media')
+      .upload(path, blob, { contentType: 'application/pdf', upsert: false });
+    if (upErr) throw new Error(`Falha ao subir PDF: ${upErr.message}`);
+    const { data: pub } = supabase.storage.from('whatsapp-media').getPublicUrl(path);
+    if (!pub?.publicUrl) throw new Error('PDF subido mas sem URL pública');
+    return { url: pub.publicUrl, filename };
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Pagamentos Pix</h1>
+          <h1 className="text-2xl font-bold">Financeiro</h1>
           <p className="text-sm text-muted-foreground">
-            Cobranças e pagamentos Pix — EFI Bank
+            Hub financeiro: extrato, cobranças Pix, gastos, comissões e envios automáticos
           </p>
         </div>
         <div className="flex gap-2">
@@ -658,50 +797,13 @@ export default function PagamentosWooviPage() {
 
       {/* Filtro de período global */}
       <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs">Início</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="w-[178px] justify-start text-left font-normal">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {format(dateFrom, 'dd/MM/yyyy', { locale: ptBR })}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={dateFrom}
-                onSelect={(d) => d && setDateFrom(d)}
-                locale={ptBR}
-                initialFocus
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Fim</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="w-[178px] justify-start text-left font-normal">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {format(dateTo, 'dd/MM/yyyy', { locale: ptBR })}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={dateTo}
-                onSelect={(d) => d && setDateTo(d)}
-                locale={ptBR}
-                initialFocus
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
+        <PeriodoSelector value={periodo} onChange={setPeriodo} compact />
         <Button
           variant="outline"
+          size="sm"
           onClick={() => { refetchRecebidos(); refetchEnviados(); }}
           disabled={loadingExtrato}
+          className="h-8 text-xs"
         >
           {loadingExtrato ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -812,8 +914,8 @@ export default function PagamentosWooviPage() {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="cobrancas">
-        <TabsList>
+      <Tabs defaultValue={initialTab}>
+        <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="cobrancas" className="flex items-center gap-2">
             <QrCode className="h-4 w-4" />
             Cobranças
@@ -837,6 +939,18 @@ export default function PagamentosWooviPage() {
             <FileText className="h-4 w-4" />
             Extratos
           </TabsTrigger>
+          <TabsTrigger value="gastos" className="flex items-center gap-2">
+            <ReceiptIcon className="h-4 w-4" />
+            Gastos
+          </TabsTrigger>
+          <TabsTrigger value="comissoes" className="flex items-center gap-2">
+            <Percent className="h-4 w-4" />
+            Comissões
+          </TabsTrigger>
+          <TabsTrigger value="envios" className="flex items-center gap-2">
+            <Bell className="h-4 w-4" />
+            Envios automáticos
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Tab: Cobranças ────────────────────────────── */}
@@ -854,7 +968,7 @@ export default function PagamentosWooviPage() {
               </SelectContent>
             </Select>
           </div>
-§
+
           {loadingCharges ? (
             <p className="text-muted-foreground text-sm">Carregando...</p>
           ) : filteredCharges.length === 0 ? (
@@ -1153,7 +1267,7 @@ export default function PagamentosWooviPage() {
 
         {/* ── Tab: Extratos ─────────────────────────────── */}
         <TabsContent value="extratos" className="space-y-4">
-          {/* Filtro tipo */}
+          {/* Filtro tipo + Importar JSON */}
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Tipo</Label>
@@ -1168,7 +1282,85 @@ export default function PagamentosWooviPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="ml-auto flex items-end gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleImportExtratoJson(f);
+                }}
+              />
+              <Button
+                variant="outline"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importExtrato.isPending}
+              >
+                {importExtrato.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4 mr-2" />
+                )}
+                Importar JSON da EFI
+              </Button>
+            </div>
           </div>
+
+          {/* Indicador de cobertura do extrato */}
+          {extratoCobreTudo ? (
+            <Card className="border-emerald-500/30 bg-emerald-500/5">
+              <CardContent className="pt-4 pb-4">
+                <div className="flex gap-3">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1 text-sm">
+                    <p className="font-semibold text-emerald-900 dark:text-emerald-200">
+                      Extrato consolidado ativo — todas as movimentações cobertas
+                    </p>
+                    <p className="text-emerald-800/90 dark:text-emerald-200/80 text-xs leading-relaxed">
+                      {movimentacoesConsolidadas.filter((m) => !m.ehSaldoDiario).length}{' '}
+                      lançamento(s) importado(s) do painel EFI cobrindo PIX, TED, tarifas, recargas,
+                      devoluções e demais movimentações da conta. Entradas, Saídas e Saldo abaixo
+                      refletem a movimentação financeira real do período.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-amber-500/30 bg-amber-500/5">
+              <CardContent className="pt-4 pb-4">
+                <div className="flex gap-3">
+                  <Info className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1.5 text-sm">
+                    <p className="font-semibold text-amber-900 dark:text-amber-200">
+                      Este período cobre apenas movimentações PIX
+                    </p>
+                    <p className="text-amber-800/90 dark:text-amber-200/80 text-xs leading-relaxed">
+                      A API REST da EFI Bank disponibiliza somente o histórico de PIX (recebidos e
+                      enviados). <strong>TED, boletos, tarifas, taxas, recargas e estornos</strong>{' '}
+                      não aparecem aqui via API — eles afetam o saldo mas não entram nas Saídas/Entradas
+                      abaixo.
+                    </p>
+                    <p className="text-amber-800/90 dark:text-amber-200/80 text-xs leading-relaxed">
+                      Para conciliação completa, exporte o extrato JSON do painel EFI (
+                      <a
+                        href="https://app.sejaefi.com.br/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-medium"
+                      >
+                        app.sejaefi.com.br
+                      </a>
+                      {' '}→ Conta Digital → Extrato → Exportar JSON) e clique em{' '}
+                      <strong>Importar JSON da EFI</strong> acima.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Resumo do período */}
           <div className="grid gap-4 md:grid-cols-3">
@@ -1288,6 +1480,65 @@ export default function PagamentosWooviPage() {
               })}
             </div>
           )}
+        </TabsContent>
+
+        {/* ── Tab: Gastos ───────────────────────────────── */}
+        <TabsContent value="gastos" className="space-y-4">
+          <GastosInternosPage embedded dateFrom={periodoInicio} dateTo={periodoFim} />
+        </TabsContent>
+
+        {/* ── Tab: Comissões ────────────────────────────── */}
+        <TabsContent value="comissoes" className="space-y-4">
+          <ComissoesSemanaisCard
+            totalEntradas={extratoTotals.entradas}
+            totalSaidas={extratoTotals.saidas}
+            periodoLabel={`${format(periodoInicio, 'dd/MM', { locale: ptBR })} a ${format(periodoFim, 'dd/MM', { locale: ptBR })}`}
+          />
+          <RelatorioComissoesPage embedded />
+        </TabsContent>
+
+        {/* ── Tab: Envios Automáticos ───────────────────── */}
+        <TabsContent value="envios" className="space-y-4">
+          <RelatorioSemanalWhatsappCard
+            gerarPdfBase64={gerarPdfBase64ParaWhatsapp}
+            dados={{
+              periodoInicio: format(periodoInicio, 'yyyy-MM-dd'),
+              periodoFim: format(periodoFim, 'yyyy-MM-dd'),
+              totalEntradas: extratoTotals.entradas,
+              totalSaidas: extratoTotals.saidas,
+              saldoEfi: efiBalanceData?.balance?.saldo != null ? parseFloat(efiBalanceData.balance.saldo) : undefined,
+              qtdeEmprestimos: emprestimos.filter(e => {
+                const t = new Date(e.dataContrato).getTime();
+                return t >= periodoInicio.getTime() && t <= periodoFim.getTime();
+              }).length,
+              valorEmprestimos: emprestimos
+                .filter(e => {
+                  const t = new Date(e.dataContrato).getTime();
+                  return t >= periodoInicio.getTime() && t <= periodoFim.getTime();
+                })
+                .reduce((s, e) => s + e.valor, 0),
+              comissoes: calcularComissoesSemanais({
+                configs: comissoesConfigs,
+                totalEntradas: extratoTotals.entradas,
+                totalSaidas: extratoTotals.saidas,
+              }),
+            }}
+          />
+          <ExtratoBancarioSemanalCard />
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Bell className="h-4 w-4 text-muted-foreground" />
+                Outros envios automáticos
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground space-y-2">
+              <p className="text-xs">
+                Extrato bancário CNAB 240 ficará disponível assim que a EFI liberar a geração na API.
+                Enquanto isso, o relatório semanal acima é enviado em texto pelo WhatsApp.
+              </p>
+            </CardContent>
+          </Card>
         </TabsContent>
 
       </Tabs>

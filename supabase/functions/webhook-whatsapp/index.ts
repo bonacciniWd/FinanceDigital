@@ -557,7 +557,7 @@ Deno.serve(async (req: Request) => {
             // Enviar resposta
             try {
               await fetch(
-                `${evoUrl}/message/sendText/${instancia.instance_name}`,
+                `${evoUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`,
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
@@ -590,7 +590,7 @@ Deno.serve(async (req: Request) => {
             const resposta = `❌ Não encontramos um cadastro vinculado a este número.\n\nPor favor, entre em contato com nosso atendimento para verificar seu cadastro.`;
             try {
               await fetch(
-                `${evoUrl}/message/sendText/${instancia.instance_name}`,
+                `${evoUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`,
                 {
                   method: "POST",
                   headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
@@ -646,7 +646,7 @@ Deno.serve(async (req: Request) => {
       const enviarTexto = async (texto: string): Promise<boolean> => {
         if (!instancia || !evoUrl || !instancia.instance_token) return false;
         try {
-          const sendResp = await fetch(`${evoUrl}/message/sendText/${instancia.instance_name}`, {
+          const sendResp = await fetch(`${evoUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`, {
             method: "POST",
             headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
             body: JSON.stringify({
@@ -687,7 +687,7 @@ Deno.serve(async (req: Request) => {
           } else {
             payload.mediaMessage = { mediatype: "image", media: mediaBase64OrUrl, caption, fileName: "qrcode-pix.png" };
           }
-          const sendResp = await fetch(`${evoUrl}/message/sendMedia/${instancia.instance_name}`, {
+          const sendResp = await fetch(`${evoUrl}/message/sendMedia/${encodeURIComponent(instancia.instance_name)}`, {
             method: "POST",
             headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
             body: JSON.stringify(payload),
@@ -743,7 +743,7 @@ Deno.serve(async (req: Request) => {
               id: b.value || `btn_${idx}`,
             }));
 
-            sendResp = await fetch(`${evoUrl}/message/sendButtons/${instancia.instance_name}`, {
+            sendResp = await fetch(`${evoUrl}/message/sendButtons/${encodeURIComponent(instancia.instance_name)}`, {
               method: "POST",
               headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
               body: JSON.stringify({
@@ -770,7 +770,7 @@ Deno.serve(async (req: Request) => {
               textoComOpcoes = `${textoFinal}\n\n${opcoes}\n\n_Responda com o número da opção desejada._`;
             }
 
-            sendResp = await fetch(`${evoUrl}/message/sendText/${instancia.instance_name}`, {
+            sendResp = await fetch(`${evoUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`, {
               method: "POST",
               headers: { "Content-Type": "application/json", apikey: instancia.instance_token },
               body: JSON.stringify({

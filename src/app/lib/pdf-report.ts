@@ -14,6 +14,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import logoWide from '../assets/logo-wide.png';
+import type { ComissaoSemanalCalculada } from './comissoes-semanais';
 
 const fmtBRL = (v: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
@@ -70,6 +71,14 @@ export interface RelatorioEmprestimoItem {
   desembolsado: boolean;
 }
 
+export interface RelatorioGastoInternoItem {
+  horario: string;
+  categoria: string;
+  favorecido: string;
+  descricao: string;
+  valor: number;
+}
+
 export interface RelatorioExecutivoData {
   /** Período do relatório (ISO yyyy-mm-dd) */
   periodoInicio: string;
@@ -84,6 +93,10 @@ export interface RelatorioExecutivoData {
   empresaNome?: string;
   /** Subtítulo opcional (ex.: nome do operador que gerou) */
   subtitulo?: string;
+  /** Comissões semanais calculadas por funcionário (regras de `comissoes_semanais_config`) */
+  comissoesSemanais?: ComissaoSemanalCalculada[];
+  /** Gastos internos classificados no período (categoria · favorecido · valor) */
+  gastosInternos?: RelatorioGastoInternoItem[];
 }
 
 /**
@@ -97,7 +110,15 @@ export interface RelatorioExecutivoData {
  * NOTA: relatório de cobranças intencionalmente omitido — a maioria dos pagamentos
  * acontece fora da plataforma de cobranças (pagamento interno/informal).
  */
-export async function gerarRelatorioExecutivoPdf(data: RelatorioExecutivoData): Promise<void> {
+export interface GerarRelatorioPdfOptions {
+  /** 'save' (default) baixa o arquivo. 'base64' retorna data URI. 'blob' retorna Blob para upload. */
+  output?: 'save' | 'base64' | 'blob';
+}
+
+export async function gerarRelatorioExecutivoPdf(
+  data: RelatorioExecutivoData,
+  options: GerarRelatorioPdfOptions = {},
+): Promise<string | Blob | void> {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
@@ -188,6 +209,95 @@ export async function gerarRelatorioExecutivoPdf(data: RelatorioExecutivoData): 
   );
   cursorY += 16;
 
+  // ── Tabela: Comissões semanais por funcionário ──────────
+  if (data.comissoesSemanais && data.comissoesSemanais.length > 0) {
+    const totalComissoes = data.comissoesSemanais.reduce((s, c) => s + c.valorCalculado, 0);
+    autoTable(doc, {
+      startY: cursorY,
+      head: [['Funcionário', 'Regra', 'Base', 'Valor da semana']],
+      body: data.comissoesSemanais.map((c) => [
+        c.nome,
+        c.descricaoRegra,
+        c.tipo === 'fixo' ? '—' : fmtBRL(c.base),
+        fmtBRL(c.valorCalculado),
+      ]),
+      foot: [['', '', 'TOTAL', fmtBRL(totalComissoes)]],
+      styles: { fontSize: 8, cellPadding: 4 },
+      headStyles: { fillColor: [120, 53, 15], textColor: 255, fontStyle: 'bold' },
+      footStyles: { fillColor: [254, 243, 199], textColor: 20, fontStyle: 'bold' },
+      columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' } },
+      margin: { left: margin, right: margin },
+      didDrawPage: () => drawPageHeader(doc, pageW, margin, periodoStr, logoUrl),
+    });
+    cursorY = (doc as any).lastAutoTable?.finalY ?? cursorY;
+    cursorY += 16;
+  }
+
+  // ── Tabela: Gastos internos classificados no período ──────────
+  if (data.gastosInternos && data.gastosInternos.length > 0) {
+    // Subtotal por categoria
+    const porCategoria = new Map<string, { count: number; total: number }>();
+    for (const g of data.gastosInternos) {
+      const k = g.categoria || '—';
+      const cur = porCategoria.get(k) ?? { count: 0, total: 0 };
+      cur.count += 1;
+      cur.total += g.valor;
+      porCategoria.set(k, cur);
+    }
+    const totalGastos = data.gastosInternos.reduce((s, g) => s + g.valor, 0);
+
+    autoTable(doc, {
+      startY: cursorY,
+      head: [['Categoria', 'Lançamentos', 'Total']],
+      body: Array.from(porCategoria.entries())
+        .sort((a, b) => b[1].total - a[1].total)
+        .map(([cat, v]) => [cat, String(v.count), fmtBRL(v.total)]),
+      foot: [['TOTAL', String(data.gastosInternos.length), fmtBRL(totalGastos)]],
+      styles: { fontSize: 8, cellPadding: 4 },
+      headStyles: { fillColor: [127, 29, 29], textColor: 255, fontStyle: 'bold' },
+      footStyles: { fillColor: [254, 226, 226], textColor: 20, fontStyle: 'bold' },
+      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+      margin: { left: margin, right: margin },
+      didDrawPage: () => drawPageHeader(doc, pageW, margin, periodoStr, logoUrl),
+    });
+    cursorY = (doc as any).lastAutoTable?.finalY ?? cursorY;
+    cursorY += 10;
+
+    // Detalhe (limitado a 50 linhas para não explodir o PDF)
+    const detalhes = data.gastosInternos.slice(0, 50);
+    autoTable(doc, {
+      startY: cursorY,
+      head: [['Data', 'Categoria', 'Favorecido', 'Descrição', 'Valor']],
+      body: detalhes.map((g) => [
+        fmtDateBR(g.horario),
+        g.categoria,
+        g.favorecido || '—',
+        g.descricao || '—',
+        fmtBRL(g.valor),
+      ]),
+      styles: { fontSize: 7, cellPadding: 3 },
+      headStyles: { fillColor: [180, 83, 9], textColor: 255, fontStyle: 'bold' },
+      columnStyles: { 4: { halign: 'right' } },
+      margin: { left: margin, right: margin },
+      didDrawPage: () => drawPageHeader(doc, pageW, margin, periodoStr, logoUrl),
+    });
+    if (data.gastosInternos.length > detalhes.length) {
+      const finalY = (doc as any).lastAutoTable?.finalY ?? cursorY;
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7);
+      doc.setTextColor(140, 140, 140);
+      doc.text(
+        `(+ ${data.gastosInternos.length - detalhes.length} lançamentos adicionais omitidos)`,
+        margin,
+        finalY + 10,
+      );
+      cursorY = finalY + 18;
+    } else {
+      cursorY = (doc as any).lastAutoTable?.finalY ?? cursorY;
+    }
+    cursorY += 16;
+  }
+
   // ── Tabela: Empréstimos cadastrados ──────────────────────
   if (data.emprestimos.length > 0) {
     autoTable(doc, {
@@ -256,7 +366,7 @@ export async function gerarRelatorioExecutivoPdf(data: RelatorioExecutivoData): 
 
   // ── Rodapé com numeração ─────────────────────────────────
   const totalPages = doc.getNumberOfPages();
-  const empresa = data.empresaNome || 'Casa da Moeda — Soluções Financeiras';
+  const empresa = data.empresaNome || 'Fintech';
   const geradoEm = new Date().toLocaleString('pt-BR');
   for (let p = 1; p <= totalPages; p++) {
     doc.setPage(p);
@@ -268,6 +378,12 @@ export async function gerarRelatorioExecutivoPdf(data: RelatorioExecutivoData): 
   }
 
   const fname = `relatorio-executivo_${data.periodoInicio}_${data.periodoFim}.pdf`;
+  if (options.output === 'base64') {
+    return doc.output('datauristring', { filename: fname });
+  }
+  if (options.output === 'blob') {
+    return doc.output('blob');
+  }
   doc.save(fname);
 }
 

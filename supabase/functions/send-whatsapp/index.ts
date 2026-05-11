@@ -47,6 +47,8 @@ Deno.serve(async (req: Request) => {
       media_url,
       media_base64,
       audio_seconds,
+      file_name,
+      mime_type,
       cliente_id,
       fluxo_id,
     } = await req.json();
@@ -134,7 +136,7 @@ Deno.serve(async (req: Request) => {
     const whatsappJid = isLid ? telefone : formattedNumber;
 
     if (tipo === "text") {
-      evolutionEndpoint = `${baseUrl}/message/sendText/${instancia.instance_name}`;
+      evolutionEndpoint = `${baseUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`;
       // Compatível com v1 e v2 da Evolution API:
       // v2 usa textMessage.text, v1 usa apenas text no root
       evolutionBody = {
@@ -155,12 +157,19 @@ Deno.serve(async (req: Request) => {
       };
     } else if (tipo === "document") {
       evolutionEndpoint = `${baseUrl}/message/sendMedia/${instancia.instance_name}`;
+      // Inferir mimetype/filename quando não fornecidos (PDF é o caso de uso principal)
+      const url = typeof normalizedMediaUrl === "string" ? normalizedMediaUrl : "";
+      const looksLikePdf = url.toLowerCase().includes(".pdf") || (mime_type ?? "").includes("pdf");
+      const finalMime = mime_type || (looksLikePdf ? "application/pdf" : "application/octet-stream");
+      const finalFileName = file_name || (looksLikePdf ? (conteudo?.endsWith(".pdf") ? conteudo : "documento.pdf") : (conteudo || "arquivo"));
       evolutionBody = {
         number: whatsappJid,
         mediaMessage: {
           mediatype: "document",
           media: normalizedMediaUrl,
-          caption: conteudo,
+          mimetype: finalMime,
+          fileName: finalFileName,
+          caption: "",
           ...(isBase64Media && { encoding: true }),
         },
       };

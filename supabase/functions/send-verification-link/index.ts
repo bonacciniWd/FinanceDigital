@@ -311,7 +311,7 @@ Deno.serve(async (req: Request) => {
       formattedNumber = "55" + formattedNumber;
     }
 
-    const evolutionEndpoint = `${baseUrl}/message/sendText/${instancia.instance_name}`;
+    const evolutionEndpoint = `${baseUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`;
 
     // Compatível com v1 e v2 da Evolution API (mesmo formato do send-whatsapp)
     const evolutionBody = {

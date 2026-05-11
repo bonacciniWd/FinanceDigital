@@ -33,6 +33,7 @@ import {
   TableRow,
 } from '../components/ui/table';
 import { Switch } from '../components/ui/switch';
+import { ExtratoBancarioSemanalCard } from '../components/ExtratoBancarioSemanalCard';
 import {
   Tags,
   Plus,
@@ -81,7 +82,11 @@ interface GastoInterno {
   categoria?: { nome: string; cor: string | null } | null;
 }
 
-export default function GastosInternosPage() {
+export default function GastosInternosPage({
+  embedded = false,
+  dateFrom,
+  dateTo,
+}: { embedded?: boolean; dateFrom?: Date; dateTo?: Date } = {}) {
   const qc = useQueryClient();
   const { data: gateways = [], isLoading: loadingGateways } = useGateways();
 
@@ -118,11 +123,14 @@ export default function GastosInternosPage() {
 
   async function carregarGastos() {
     setLoadingGastos(true);
-    const { data, error } = await supabase
+    let query = supabase
       .from('gastos_internos')
       .select('*, categoria:categorias_gastos(nome, cor)')
-      .order('horario', { ascending: false })
-      .limit(100);
+      .order('horario', { ascending: false });
+    if (dateFrom) query = query.gte('horario', dateFrom.toISOString());
+    if (dateTo)   query = query.lte('horario', dateTo.toISOString());
+    query = query.limit(500);
+    const { data, error } = await query;
     if (error) toast.error('Erro ao carregar gastos: ' + error.message);
     else setGastos((data as unknown as GastoInterno[]) || []);
     setLoadingGastos(false);
@@ -130,8 +138,13 @@ export default function GastosInternosPage() {
 
   useEffect(() => {
     carregarCategorias();
-    carregarGastos();
   }, []);
+
+  // Recarrega gastos sempre que o período mudar
+  useEffect(() => {
+    carregarGastos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFrom?.getTime(), dateTo?.getTime()]);
 
   function openCreateCat() {
     setEditCat(null);
@@ -360,17 +373,35 @@ export default function GastosInternosPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Receipt className="h-6 w-6" />
-            Gastos Internos
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Cadastre categorias com palavras-chave; o sistema cruza com o extrato PIX e classifica saídas automaticamente.
-          </p>
+      {!embedded && (
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <Receipt className="h-6 w-6" />
+              Gastos Internos
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              Cadastre categorias com palavras-chave; o sistema cruza com o extrato PIX e classifica saídas automaticamente.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={rodarCronManual} disabled={runningCron}>
+              {runningCron ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4 mr-2" />
+              )}
+              Rodar conciliação agora
+            </Button>
+            <Button onClick={openCreateCat}>
+              <Plus className="h-4 w-4 mr-2" />
+              Nova Categoria
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
+      )}
+      {embedded && (
+        <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={rodarCronManual} disabled={runningCron}>
             {runningCron ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -384,7 +415,7 @@ export default function GastosInternosPage() {
             Nova Categoria
           </Button>
         </div>
-      </div>
+      )}
 
       {/* Resumo */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -634,6 +665,9 @@ export default function GastosInternosPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Extrato Bancário Semanal (CNAB 240) — exibido só no modo standalone; no hub Financeiro está na aba "Envios automáticos" */}
+      {!embedded && <ExtratoBancarioSemanalCard />}
 
       {/* Dialog Categoria */}
       <Dialog open={showCatDialog} onOpenChange={setShowCatDialog}>

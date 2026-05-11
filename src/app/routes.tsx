@@ -12,7 +12,7 @@
  * @exports router - Instância de `createBrowserRouter`
  */
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter } from 'react-router';
+import { createBrowserRouter, Navigate } from 'react-router';
 import { MainLayout } from './components/MainLayout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
@@ -64,6 +64,8 @@ const EmergencyTokenPage = lazy(() => import('./pages/EmergencyTokenPage'));
 const GastosInternosPage = lazy(() => import('./pages/GastosInternosPage'));
 const ConfigSistemaPage = lazy(() => import('./pages/ConfigSistemaPage'));
 const RelatorioComissoesPage = lazy(() => import('./pages/RelatorioComissoesPage'));
+const BibliotecaMidiaPage = lazy(() => import('./pages/BibliotecaMidiaPage'));
+const AgendadorStatusPage = lazy(() => import('./pages/AgendadorStatusPage'));
 
 const PageFallback = () => (
   <div className="flex items-center justify-center h-full min-h-[40vh]">
@@ -145,7 +147,9 @@ export const router = createBrowserRouter([
       { path: 'clientes/parcelas', element: lz(<GestaoParcelasPage />) },
 
       // Pagamentos / Woovi
-      { path: 'pagamentos', element: lz(<PagamentosWooviPage />) },
+      { path: 'financeiro', element: lz(<PagamentosWooviPage />) },
+      // Redirects: rotas antigas → novo hub Financeiro com aba apropriada
+      { path: 'pagamentos', element: <Navigate to="/financeiro" replace /> },
       { path: 'pagamentos/orfaos', element: lz(<PagamentosOrfaosPage />) },
       { path: 'pagamentos/saidas-orfas', element: lz(<SaidasOrfasPage />) },
 
@@ -160,6 +164,10 @@ export const router = createBrowserRouter([
       { path: 'chat/fluxos', element: lz(<FluxosChatPage />) },
       { path: 'chat/templates', element: lz(<TemplatesMensagensPage />) },
 
+      // Marketing
+      { path: 'marketing/biblioteca', element: lz(<BibliotecaMidiaPage />) },
+      { path: 'marketing/agendador', element: lz(<AgendadorStatusPage />) },
+
       // Kanban
       { path: 'kanban/cobranca', element: lz(<KanbanCobrancaPage />) },
       { path: 'kanban/analise', element: lz(<KanbanAnalisePage />) },
@@ -169,13 +177,13 @@ export const router = createBrowserRouter([
       // Relatórios
       { path: 'relatorios/gerenciais', element: lz(<RelatoriosPage />) },
       { path: 'relatorios/operacionais', element: lz(<RelatoriosOperacionaisPage />) },
-      { path: 'relatorios/comissoes', element: lz(<RelatorioComissoesPage />) },
+      { path: 'relatorios/comissoes', element: <Navigate to="/financeiro?tab=comissoes" replace /> },
       { path: 'relatorios/exportar', element: lz(<ExportarDadosPage />) },
 
       // Configurações
       { path: 'configuracoes/perfis', element: lz(<PerfisAcessoPage />) },
       { path: 'configuracoes/usuarios', element: lz(<GerenciarUsuariosPage />) },
-      { path: 'configuracoes/gastos-internos', element: lz(<GastosInternosPage />) },
+      { path: 'configuracoes/gastos-internos', element: <Navigate to="/financeiro?tab=gastos" replace /> },
       { path: 'configuracoes/integracoes', element: lz(<IntegracoesPage />) },
       { path: 'configuracoes/ip-whitelist', element: lz(<IpWhitelistPage />) },
       { path: 'configuracoes/sistema', element: lz(<ConfigSistemaPage />) },

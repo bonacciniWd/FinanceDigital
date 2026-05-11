@@ -108,21 +108,33 @@ export default function DashboardFinanceiroPage() {
   // Parcelas pagas = receita efetiva
   const parcelasPagas = useMemo(() => parcelas.filter((p) => p.status === 'paga'), [parcelas]);
 
-  const emprestimosNoPeriodo = useMemo(() => {
-    return emprestimos.filter((emprestimo) => {
-      if (emprestimo.status !== 'ativo' && emprestimo.status !== 'inadimplente') return false;
-      if (!emprestimo.proximoVencimento) return false;
-
-      const due = new Date(`${emprestimo.proximoVencimento}T00:00:00`);
-      return due >= periodoReceber.inicio && due <= periodoReceber.fim;
+  // Parcelas a vencer dentro do período selecionado.
+  // Fonte de verdade real — `emprestimo.proximoVencimento` cobre só a próxima
+  // parcela e pode estar desatualizado, então usamos as parcelas diretamente.
+  const parcelasNoPeriodo = useMemo(() => {
+    const inicioMs = periodoReceber.inicio.getTime();
+    const fimMs = periodoReceber.fim.getTime();
+    return parcelas.filter((p) => {
+      if (p.status !== 'pendente' && p.status !== 'vencida') return false;
+      if (!p.dataVencimento) return false;
+      const dueMs = new Date(`${p.dataVencimento}T00:00:00`).getTime();
+      return dueMs >= inicioMs && dueMs <= fimMs;
     });
-  }, [emprestimos, periodoReceber]);
+  }, [parcelas, periodoReceber]);
+
+  // Empréstimos únicos com pelo menos uma parcela prevista no período
+  const emprestimosNoPeriodo = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of parcelasNoPeriodo) if (p.emprestimoId) ids.add(p.emprestimoId);
+    return emprestimos.filter((e) => ids.has(e.id));
+  }, [parcelasNoPeriodo, emprestimos]);
 
   const emprestimosAReceber = emprestimosNoPeriodo.length;
 
+  // Valor previsto = soma de TODAS as parcelas previstas no período
   const totalAReceber = useMemo(
-    () => emprestimosNoPeriodo.reduce((sum, emprestimo) => sum + (emprestimo.valorParcela ?? 0), 0),
-    [emprestimosNoPeriodo]
+    () => parcelasNoPeriodo.reduce((sum, p) => sum + (p.valor ?? 0), 0),
+    [parcelasNoPeriodo]
   );
 
   const analisesById = useMemo(
@@ -413,7 +425,7 @@ export default function DashboardFinanceiroPage() {
             <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Valor previsto</p>
               <p className="text-3xl font-bold mt-1 text-emerald-700 dark:text-emerald-300">{formatCurrency(totalAReceber)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{emprestimosNoPeriodo.length} próxima(s) parcela(s) prevista(s) no período</p>
+              <p className="text-xs text-muted-foreground mt-1">{parcelasNoPeriodo.length} parcela(s) prevista(s) no período</p>
             </div>
           </div>
         </CardContent>

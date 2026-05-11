@@ -53,6 +53,7 @@ type FormState = {
   rua: string; numero: string; bairro: string; estado: string; cidade: string; cep: string;
   pix_key: string; pix_key_type: string;
   contatos_referencia: Array<{ nome: string; telefone: string; parentesco: string }>;
+  aceite_video_cobranca: boolean;
 };
 
 const EMPTY: FormState = {
@@ -65,6 +66,7 @@ const EMPTY: FormState = {
     { nome: '', telefone: '', parentesco: '' },
     { nome: '', telefone: '', parentesco: '' },
   ],
+  aceite_video_cobranca: false,
 };
 
 type PageStage = 'loading' | 'form' | 'submitting' | 'done' | 'error' | 'expired' | 'used';
@@ -248,6 +250,8 @@ export default function CadastroClientePage() {
         estado: form.estado || null, cidade: form.cidade || null, cep: form.cep.replace(/\D/g, '') || null,
         pix_key: form.pix_key || null, pix_key_type: form.pix_key_type || null,
         contatos_referencia: contatos, cadastro_atualizado_em: new Date().toISOString(),
+        aceite_video_cobranca: form.aceite_video_cobranca,
+        aceite_video_cobranca_em: form.aceite_video_cobranca ? new Date().toISOString() : null,
       };
 
       let clienteId = linkRow.cliente_id;
@@ -647,6 +651,29 @@ export default function CadastroClientePage() {
                   <p className="text-sm text-muted-foreground italic py-2">Nenhuma referência informada</p>
                 )}
               </div>
+            </div>
+
+            {/* LGPD opt-in — uso de imagem em comunicações de cobrança */}
+            <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-4">
+              <label className="flex items-start gap-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={form.aceite_video_cobranca}
+                  onChange={(e) => setForm((f) => ({ ...f, aceite_video_cobranca: e.target.checked }))}
+                  className="mt-1 h-4 w-4 shrink-0 accent-amber-600"
+                />
+                <span className="text-xs leading-relaxed">
+                  <strong>Autorização de uso de imagem (LGPD — opcional):</strong> autorizo,
+                  conforme a Lei nº 13.709/2018 (LGPD), o uso da minha imagem e voz para a
+                  produção de comunicações personalizadas de cobrança (mensagens, vídeos e
+                  áudios) caso eu venha a apresentar atraso no pagamento. Posso revogar este
+                  consentimento a qualquer momento entrando em contato com a empresa.
+                  <br />
+                  <span className="text-muted-foreground">
+                    Deixar desmarcado não impede a aprovação do cadastro nem do crédito.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
         )}

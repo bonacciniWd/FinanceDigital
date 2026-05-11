@@ -124,7 +124,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ── Enviar via Evolution ──
-    const evolutionEndpoint = `${baseUrl}/message/sendText/${instancia.instance_name}`;
+    const evolutionEndpoint = `${baseUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`;
     const evolutionBody = {
       number: formattedNumber,
       textMessage: { text: CONFIRMATION_MESSAGE },

@@ -336,7 +336,7 @@ Deno.serve(async (req: Request) => {
     let erroDetalhe: string | null = null;
 
     try {
-      const res = await fetch(`${baseUrl}/message/sendText/${instancia.instance_name}`, {
+      const res = await fetch(`${baseUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

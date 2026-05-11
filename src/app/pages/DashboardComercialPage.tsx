@@ -8,7 +8,7 @@
  * @route /dashboard/comercial
  * @access Protegido — perfis admin, gerente, comercial
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Users, Target, TrendingUp, UserPlus, ArrowUpRight } from 'lucide-react';
@@ -18,6 +18,7 @@ import { useMembrosRede } from '../hooks/useRedeIndicacoes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useClientes } from '../hooks/useClientes';
 import { DashboardSkeleton } from '../components/DashboardSkeleton';
+import { PeriodoSelector, getPresetRange, type PeriodoRange } from '../components/PeriodoSelector';
 
 export default function DashboardComercialPage() {
   const { data: analises = [], isLoading: loadingAnalises } = useAnalises();
@@ -25,35 +26,54 @@ export default function DashboardComercialPage() {
   const { data: emprestimos = [] } = useEmprestimos();
   const { data: clientes = [] } = useClientes();
 
+  const [periodo, setPeriodo] = useState<PeriodoRange>(() => getPresetRange('30d'));
+
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 
-  // KPIs reais
-  // Leads = total de análises de crédito (cada análise é um lead)
-  const totalLeads = analises.length;
-  // Conversões = análises aprovadas
-  const conversoes = analises.filter((a) => a.status === 'aprovado').length;
+  // Helper: filtra registros por período usando data de solicitação/criação
+  const inPeriodo = (dt?: string | null) => {
+    if (!dt) return false;
+    const t = new Date(dt).getTime();
+    return t >= periodo.from.getTime() && t <= periodo.to.getTime();
+  };
+
+  // Análises do período (base de leads/conversões/crédito aprovado)
+  const analisesPeriodo = useMemo(
+    () => analises.filter((a) => inPeriodo(a.dataSolicitacao ?? (a as any).data_solicitacao ?? (a as any).created_at)),
+    [analises, periodo],
+  );
+
+  // KPIs do período
+  const totalLeads = analisesPeriodo.length;
+  const conversoes = analisesPeriodo.filter((a) => a.status === 'aprovado').length;
   const taxaConversao = totalLeads > 0 ? ((conversoes / totalLeads) * 100).toFixed(1) : '0';
-  // Indicações ativas = membros da rede com status ativo
+  // Indicações ativas — métrica de stock, não muda por período (mostra estado atual)
   const indicacoesAtivas = membros.filter((m) => m.status === 'ativo').length;
-  // Crédito aprovado = soma do valor_solicitado das análises aprovadas
-  const creditoAprovado = analises
+  // Crédito aprovado no período
+  const creditoAprovado = analisesPeriodo
     .filter((a) => a.status === 'aprovado')
-    .reduce((sum, a) => sum + (a.valorSolicitado ?? a.valor_solicitado ?? 0), 0);
+    .reduce((sum, a) => sum + (a.valorSolicitado ?? (a as any).valor_solicitado ?? 0), 0);
+  // Empréstimos efetivamente contratados no período
+  const emprestimosPeriodo = useMemo(
+    () => emprestimos.filter((e) => inPeriodo(e.dataContrato)),
+    [emprestimos, periodo],
+  );
+  const valorEmprestimosPeriodo = emprestimosPeriodo.reduce((s, e) => s + e.valor, 0);
 
-  // Pipeline de leads (agrupado por status da análise)
+  // Pipeline de leads do período
   const pipelineLeads = useMemo(() => [
-    { etapa: 'Pendente', quantidade: analises.filter((a) => a.status === 'pendente').length },
-    { etapa: 'Em Análise', quantidade: analises.filter((a) => a.status === 'em_analise').length },
-    { etapa: 'Aprovado', quantidade: analises.filter((a) => a.status === 'aprovado').length },
-    { etapa: 'Recusado', quantidade: analises.filter((a) => a.status === 'recusado').length },
-  ], [analises]);
+    { etapa: 'Pendente', quantidade: analisesPeriodo.filter((a) => a.status === 'pendente').length },
+    { etapa: 'Em Análise', quantidade: analisesPeriodo.filter((a) => a.status === 'em_analise').length },
+    { etapa: 'Aprovado', quantidade: analisesPeriodo.filter((a) => a.status === 'aprovado').length },
+    { etapa: 'Recusado', quantidade: analisesPeriodo.filter((a) => a.status === 'recusado').length },
+  ], [analisesPeriodo]);
 
-  // Conversões por mês (agrupa análises por mês de criação)
+  // Conversões por mês — usa TODAS as análises (visão histórica, não filtra)
   const conversoesMensais = useMemo(() => {
     const meses: Record<string, { leads: number; convertidos: number }> = {};
     analises.forEach((a) => {
-      const date = new Date(a.dataSolicitacao ?? a.data_solicitacao ?? a.created_at);
+      const date = new Date(a.dataSolicitacao ?? (a as any).data_solicitacao ?? (a as any).created_at);
       const key = date.toLocaleString('pt-BR', { month: 'short' }).replace('.', '');
       if (!meses[key]) meses[key] = { leads: 0, convertidos: 0 };
       meses[key].leads++;
@@ -70,12 +90,12 @@ export default function DashboardComercialPage() {
   const topIndicadores = useMemo(() => {
     const indicadorMap: Record<string, { nome: string; indicacoes: number; bonus: number }> = {};
     membros.forEach((m) => {
-      const indicadorId = m.indicadoPor ?? m.indicado_por;
+      const indicadorId = m.indicadoPor ?? (m as any).indicado_por;
       if (!indicadorId) return;
       const cli = clientes.find((c) => c.id === indicadorId);
       if (!cli) return;
       if (!indicadorMap[indicadorId]) {
-        indicadorMap[indicadorId] = { nome: cli.nome, indicacoes: 0, bonus: cli.bonusAcumulado ?? cli.bonus_acumulado ?? 0 };
+        indicadorMap[indicadorId] = { nome: cli.nome, indicacoes: 0, bonus: cli.bonusAcumulado ?? (cli as any).bonus_acumulado ?? 0 };
       }
       indicadorMap[indicadorId].indicacoes++;
     });
@@ -90,13 +110,16 @@ export default function DashboardComercialPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-foreground">Dashboard Comercial</h1>
-        <p className="text-muted-foreground mt-1">Métricas de captação, conversão e rede de indicações</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-foreground">Dashboard Comercial</h1>
+          <p className="text-muted-foreground mt-1">Métricas de captação, conversão e rede de indicações</p>
+        </div>
+        <PeriodoSelector value={periodo} onChange={setPeriodo} compact />
       </div>
 
       {/* Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Leads (Análises)</CardTitle>
@@ -104,7 +127,7 @@ export default function DashboardComercialPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{totalLeads}</div>
-            <div className="text-xs text-muted-foreground mt-1">total de análises de crédito</div>
+            <div className="text-xs text-muted-foreground mt-1">análises no período</div>
           </CardContent>
         </Card>
         <Card>
@@ -136,7 +159,17 @@ export default function DashboardComercialPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{formatCurrency(creditoAprovado)}</div>
-            <div className="text-xs text-muted-foreground mt-1">valor total aprovado</div>
+            <div className="text-xs text-muted-foreground mt-1">aprovado no período</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Empréstimos no período</CardTitle>
+            <TrendingUp className="w-4 h-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatCurrency(valorEmprestimosPeriodo)}</div>
+            <div className="text-xs text-muted-foreground mt-1">{emprestimosPeriodo.length} contrato(s)</div>
           </CardContent>
         </Card>
       </div>

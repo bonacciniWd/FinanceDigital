@@ -188,52 +188,88 @@ async function efiPayment(
   const e2eId = pixData?.e2eId || pixData?.endToEndId || null;
   console.log(`[approve-credit] Pix enviado com sucesso! idEnvio=${idEnvio}, e2e=${e2eId || "N/A"}, status=${pixData?.status}`);
 
-  // Aguardar 5 segundos e consultar status real do envio
-  // A EFI processa assincronamente — EM_PROCESSAMENTO pode virar REALIZADO ou NAO_REALIZADO
-  await new Promise(r => setTimeout(r, 5000));
-  try {
-    const checkUrl = `${baseUrl}/v2/gn/pix/enviados/id-envio/${idEnvio}`;
-    console.log(`[approve-credit] Consultando status real do Pix: ${checkUrl}`);
-    const checkResp = await fetch(checkUrl, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      // @ts-ignore — Deno mTLS
-      client: httpClient,
-    });
-    const checkText = await checkResp.text();
-    console.log(`[approve-credit] Status Pix enviado: status_http=${checkResp.status}, body=${checkText}`);
-    if (checkResp.ok && checkText) {
-      const checkData = JSON.parse(checkText);
-      const statusFinal = checkData?.status || "DESCONHECIDO";
-      console.log(`[approve-credit] Status final do Pix: ${statusFinal}`);
-      if (statusFinal === "NAO_REALIZADO" || statusFinal === "DEVOLVIDO") {
-        const motivo = checkData?.devolucoes?.[0]?.motivo || checkData?.motivo || "motivo não informado";
-        console.error(`[approve-credit] ⚠️ PIX REJEITADO! Status: ${statusFinal}, Motivo: ${motivo}`);
-        console.error(`[approve-credit] Detalhes completos:`, JSON.stringify(checkData));
+  // Polling inline: até 3 tentativas (5s, 5s, 5s = 15s no total)
+  // EFI processa assincronamente — EM_PROCESSAMENTO pode virar REALIZADO ou NAO_REALIZADO.
+  // Casos resolvidos aqui salvam ida ao cron de polling.
+  let statusFinal = pixData?.status || "EM_PROCESSAMENTO";
+  let motivoRejeicao: string | null = null;
+  const checkUrl = `${baseUrl}/v2/gn/pix/enviados/id-envio/${idEnvio}`;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      console.log(`[approve-credit] Consultando status real do Pix (tentativa ${attempt}/3): ${checkUrl}`);
+      const checkResp = await fetch(checkUrl, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        // @ts-ignore — Deno mTLS
+        client: httpClient,
+      });
+      const checkText = await checkResp.text();
+      console.log(`[approve-credit] Status Pix enviado (try ${attempt}): http=${checkResp.status}, body=${checkText}`);
+      if (checkResp.ok && checkText) {
+        const checkData = JSON.parse(checkText);
+        statusFinal = checkData?.status || statusFinal;
+        if (statusFinal === "REALIZADO") {
+          console.log(`[approve-credit] ✅ PIX REALIZADO em ${attempt} tentativa(s)`);
+          break;
+        }
+        if (statusFinal === "NAO_REALIZADO" || statusFinal === "DEVOLVIDO") {
+          // EFI pode informar motivo em vários lugares dependendo da versão/erro:
+          // - root: motivo, descricao, mensagem, codigo
+          // - devolucoes[0]: motivo, descricao, codigo, valor
+          // - infoAdicional / detalhe / status_motivo
+          const dev0 = Array.isArray(checkData?.devolucoes) ? checkData.devolucoes[0] : null;
+          const candidatos = [
+            dev0?.motivo, dev0?.descricao, dev0?.codigo,
+            checkData?.motivo, checkData?.descricao, checkData?.mensagem,
+            checkData?.detalhe, checkData?.status_motivo, checkData?.codigo,
+            checkData?.infoAdicional,
+          ].filter((v: unknown) => typeof v === "string" && (v as string).trim().length > 0);
+          motivoRejeicao = (candidatos[0] as string) || `EFI ${statusFinal} (sem motivo na resposta — verifique chave do destinatário ou saldo da conta pagadora)`;
+          console.error(`[approve-credit] ⚠️ PIX REJEITADO! Status: ${statusFinal}, Motivo: ${motivoRejeicao}`);
+          console.error(`[approve-credit] Resposta completa EFI:`, JSON.stringify(checkData));
+          break;
+        }
+        // ainda EM_PROCESSAMENTO → tentar de novo
       }
+    } catch (checkErr) {
+      console.error(`[approve-credit] Erro consulta Pix (try ${attempt}):`, checkErr instanceof Error ? checkErr.message : checkErr);
     }
-  } catch (checkErr) {
-    console.error("[approve-credit] Erro ao consultar status do Pix:", checkErr instanceof Error ? checkErr.message : checkErr);
   }
+  console.log(`[approve-credit] Status final do Pix após polling: ${statusFinal}`);
+
+  // Mapear status EFI → status interno (enum woovi_transaction_status: PENDING/CONFIRMED/FAILED)
+  // PENDING   = ainda EM_PROCESSAMENTO (cron-efi-poll-pix vai concluir depois)
+  // CONFIRMED = REALIZADO
+  // FAILED    = NAO_REALIZADO / DEVOLVIDO
+  let internalStatus: "PENDING" | "CONFIRMED" | "FAILED" = "PENDING";
+  if (statusFinal === "REALIZADO") internalStatus = "CONFIRMED";
+  else if (statusFinal === "NAO_REALIZADO" || statusFinal === "DEVOLVIDO") internalStatus = "FAILED";
 
   // Registrar transação
-  await adminClient.from("woovi_transactions").insert({
+  const { error: txInsertErr } = await adminClient.from("woovi_transactions").insert({
     emprestimo_id: params.emprestimoId,
     cliente_id: params.clienteId,
     woovi_transaction_id: idEnvio,
-    tipo: "payment",
+    tipo: "PAYMENT",
     valor: params.valor,
-    status: "pending",
+    status: internalStatus,
     pix_key: params.pixKey,
     destinatario_nome: params.clienteNome,
-    descricao: `Liberação de crédito aprovado via EFI`,
+    descricao: motivoRejeicao
+      ? `Liberação de crédito EFI — REJEITADO: ${motivoRejeicao}`
+      : `Liberação de crédito aprovado via EFI`,
     end_to_end_id: e2eId,
     autorizado_por: params.callerId,
     autorizado_em: new Date().toISOString(),
+    confirmed_at: internalStatus === "CONFIRMED" ? new Date().toISOString() : null,
     gateway: "efi",
   });
+  if (txInsertErr) {
+    console.error("[approve-credit] Falha ao gravar woovi_transactions:", txInsertErr.message);
+  }
 
-  return { idEnvio, endToEndId: e2eId, e2eId, gateway: "efi" };
+  return { idEnvio, endToEndId: e2eId, e2eId, gateway: "efi", statusFinal, motivoRejeicao };
 }
 
 // ── Gerar datas de vencimento das parcelas ────────────────
@@ -322,7 +358,7 @@ async function enviarWhatsAppSistema(
     let phone = telefone.replace(/@s\.whatsapp\.net/g, "").replace(/\D/g, "");
     if (phone.length <= 11) phone = "55" + phone;
 
-    const evoUrl = `${baseUrl}/message/sendText/${instancia.instance_name}`;
+    const evoUrl = `${baseUrl}/message/sendText/${encodeURIComponent(instancia.instance_name)}`;
     console.log(`[approve-credit][WA] Enviando para ${phone} via ${evoUrl}`);
 
     const res = await fetch(evoUrl, {
@@ -738,13 +774,13 @@ Deno.serve(async (req: Request) => {
             comment: `Liberação de crédito - ${analise.cliente_nome}`,
           });
 
-          await adminClient.from("woovi_transactions").insert({
+          const { error: wooviTxErr } = await adminClient.from("woovi_transactions").insert({
             emprestimo_id: emprestimo!.id,
             cliente_id: analise.cliente_id,
             woovi_transaction_id: paymentResult?.payment?.transactionID ?? correlationID,
-            tipo: "payment",
+            tipo: "PAYMENT",
             valor: valorTotal,
-            status: "pending",
+            status: "PENDING",
             pix_key,
             pix_key_type,
             destinatario_nome: analise.cliente_nome,
@@ -753,15 +789,28 @@ Deno.serve(async (req: Request) => {
             autorizado_em: new Date().toISOString(),
             gateway: "woovi",
           });
+          if (wooviTxErr) console.error("[approve-credit] Falha woovi_transactions(woovi):", wooviTxErr.message);
         }
 
-        // Atualizar gateway utilizado no empréstimo + marcar desembolso
-        await adminClient.from("emprestimos").update({
-          gateway: usedGateway,
-          desembolsado: true,
-          desembolsado_em: new Date().toISOString(),
-          desembolsado_por: caller.id,
-        }).eq("id", emprestimo!.id);
+        // Atualizar gateway utilizado no empréstimo.
+        // desembolsado só é marcado como true quando o status final NÃO é falha (NAO_REALIZADO/DEVOLVIDO).
+        // Se ainda EM_PROCESSAMENTO ou REALIZADO, considera desembolso iniciado/concluído.
+        const efiFailed = (paymentResult as any)?.statusFinal === "NAO_REALIZADO"
+          || (paymentResult as any)?.statusFinal === "DEVOLVIDO";
+        if (efiFailed) {
+          const motivo = (paymentResult as any)?.motivoRejeicao || "rejeitado pela EFI";
+          console.error(`[approve-credit] PIX rejeitado pela EFI (${motivo}) — empréstimo ${emprestimo!.id} marcado como desembolso pendente.`);
+          await adminClient.from("emprestimos").update({
+            gateway: usedGateway,
+          }).eq("id", emprestimo!.id);
+        } else {
+          await adminClient.from("emprestimos").update({
+            gateway: usedGateway,
+            desembolsado: true,
+            desembolsado_em: new Date().toISOString(),
+            desembolsado_por: caller.id,
+          }).eq("id", emprestimo!.id);
+        }
         console.log(`[approve-credit] Pagamento ${usedGateway} concluído:`, JSON.stringify(paymentResult));
       } catch (pixErr) {
         console.error(`[approve-credit] ${usedGateway} payment error:`, pixErr instanceof Error ? pixErr.message : pixErr);
