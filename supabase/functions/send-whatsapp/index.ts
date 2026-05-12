@@ -145,7 +145,7 @@ Deno.serve(async (req: Request) => {
         text: conteudo,
       };
     } else if (tipo === "image") {
-      evolutionEndpoint = `${baseUrl}/message/sendMedia/${instancia.instance_name}`;
+      evolutionEndpoint = `${baseUrl}/message/sendMedia/${encodeURIComponent(instancia.instance_name)}`;
       evolutionBody = {
         number: whatsappJid,
         mediaMessage: {
@@ -156,7 +156,7 @@ Deno.serve(async (req: Request) => {
         },
       };
     } else if (tipo === "document") {
-      evolutionEndpoint = `${baseUrl}/message/sendMedia/${instancia.instance_name}`;
+      evolutionEndpoint = `${baseUrl}/message/sendMedia/${encodeURIComponent(instancia.instance_name)}`;
       // Inferir mimetype/filename quando não fornecidos (PDF é o caso de uso principal)
       const url = typeof normalizedMediaUrl === "string" ? normalizedMediaUrl : "";
       const looksLikePdf = url.toLowerCase().includes(".pdf") || (mime_type ?? "").includes("pdf");
@@ -183,7 +183,7 @@ Deno.serve(async (req: Request) => {
       // Por que signed URL e não base64?
       // Base64 grande (>100KB) causa "Aguardando mensagem" no Baileys (limite interno).
       // URL pública → Evolution API baixa normalmente, sem limite de payload.
-      evolutionEndpoint = `${baseUrl}/message/sendMedia/${instancia.instance_name}`;
+      evolutionEndpoint = `${baseUrl}/message/sendMedia/${encodeURIComponent(instancia.instance_name)}`;
 
       let audioUrl = normalizedMediaUrl as string;
 

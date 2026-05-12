@@ -123,7 +123,16 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.9.2', date: '11 Mai 2026', isLatest: true, items: [
+  { version: '1.9.3', date: '12 Mai 2026', isLatest: true, items: [
+    'Kanban Cobrança · Chat → "Enviar template (sistema)": dialog com seletor de template (cobrança/negociação/lembrete), textarea editável e envio pela instância sistema sem sair da página',
+    'Auto-tag por coluna: ao enviar pelo sistema, aplica etiqueta da coluna (N1/N2/N3/Negociação/Acordo/Pago) + etiqueta do cobrador na conversa',
+    'Auto-move para "Contatado": card é movido imediatamente após envio confirmado',
+    'Renovação de empréstimo: ao quitar empréstimo (em Empréstimos ou Cobrança) ou quitar a última parcela, abre dialog perguntando se quer criar novo empréstimo — navega para Análise de Crédito com cliente já pré-preenchido',
+    'Fix: card em "Contatado" não volta mais para N3 após refresh — sync agora trava o card por 24h após o último contato',
+    'Análise de Crédito: "Pular verificação" agora vem marcado por padrão (fluxo majoritário sem reanálise)',
+    'Modal de Acordo: campo "entrada" agora é R$ (valor fixo) por padrão, em vez de %',
+  ]},
+  { version: '1.9.2', date: '11 Mai 2026', isLatest: false, items: [
     'Anti-Ban WhatsApp: cold-outreach guard (não envia para quem nunca falou com a gente)',
     'Cap por número/dia (default 2) + limite diário reduzido de 40 para 25 mensagens',
     'Delay maior entre mensagens (8s) e entre texto e QR PIX (≥4s) — padrão menos "bot"',

@@ -68,7 +68,7 @@ export default function AnaliseCreditoPage() {
     dataPrimeiraParcela: '',
     /** Datas individuais por parcela (opcional, paralelo a valoresParcelas). */
     datasParcelas: [] as string[],
-    skipVerification: false,
+    skipVerification: true,
     skipVerificationReason: '',
   });
   const [buscaCliente, setBuscaCliente] = useState('');
@@ -519,7 +519,7 @@ export default function AnaliseCreditoPage() {
           const skipAutoApprove = formNova.skipVerification;
           toast.success(skipAutoApprove ? 'Análise criada — auto-aprovando (verificação pulada)...' : 'Análise criada com sucesso!');
           setShowNovaAnalise(false);
-          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', valorTotalReceber: '', valorParcela: '', valoresParcelas: [], rendaMensal: '', scoreSerasa: '0', numeroParcelas: '', periodicidade: 'mensal', diaPagamento: '', intervaloDias: '', diaUtil: false, datasPersonalizadas: [], dataPrimeiraParcela: '', datasParcelas: [], skipVerification: false, skipVerificationReason: '' });
+          setFormNova({ clienteId: '', clienteNome: '', cpf: '', valorSolicitado: '', valorTotalReceber: '', valorParcela: '', valoresParcelas: [], rendaMensal: '', scoreSerasa: '0', numeroParcelas: '', periodicidade: 'mensal', diaPagamento: '', intervaloDias: '', diaUtil: false, datasPersonalizadas: [], dataPrimeiraParcela: '', datasParcelas: [], skipVerification: true, skipVerificationReason: '' });
           setPendenciaCliente(null);
           setBuscaCliente('');
 
@@ -801,7 +801,7 @@ export default function AnaliseCreditoPage() {
 
       {/* Modal Nova Análise */}
       <Dialog open={showNovaAnalise} onOpenChange={setShowNovaAnalise}>
-        <DialogContent className="min-w-[700px] max-h-[90vh] overflow-y-scroll">
+        <DialogContent className="min-w-[800px] max-h-full] overflow-y-scroll">
           <DialogHeader>
             <DialogTitle>Nova Análise de Crédito</DialogTitle>
           </DialogHeader>

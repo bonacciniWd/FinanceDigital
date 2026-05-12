@@ -6,6 +6,21 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.9.3] — 2026-05-12
+
+### Adicionado — Kanban Cobrança · Envio com template + auto-tag + renovação
+
+- **Kanban Cobrança · Chat → "Enviar template (sistema)"**: novo dialog inline com seletor de template (categorias `cobranca`, `negociacao`, `lembrete`), textarea editável e botão "Enviar via sistema". Pré-seleciona automaticamente o template adequado pelos dias de atraso + gênero do cliente. Envia pela instância marcada como `is_system` sem sair da página.
+- **Auto-tag por coluna**: ao enviar via sistema, aplica automaticamente etiqueta da coluna (`N1 / N2 / N3 / Negociação / Acordo / Pago`) e etiqueta do cobrador na conversa do cliente. `find-or-create` em `etiquetas` + `conversa_etiquetas` (toggle idempotente).
+- **Auto-move para "Contatado"**: card vai para `contatado` imediatamente após envio bem-sucedido (`registrarContato.mutateAsync` agora é awaited, erros surfacam em vez de fire-and-forget).
+- **Renovação de empréstimo**: ao marcar empréstimo como quitado (em qualquer das duas tabs do `ClienteDetalhesModal` — Empréstimos ou Cobrança) ou ao quitar a última parcela pendente, abre dialog "Empréstimo quitado! Deseja criar um novo empréstimo?" com navegação para `/analise-credito` já com `clienteId` pré-preenchido.
+
+### Corrigido
+
+- **Card volta de "Contatado" para N3 após refresh**: `syncCobrancas` agora trava cards em `contatado` por 24h após `ultimo_contato`. Antes, sync agressivo resetava o card para `vencido/N3` no próximo refresh se o `registrarContato` tivesse falhado silenciosamente. Constante `HORAS_LOCK_CONTATADO = 24` em `kanbanCobrancaService.ts`.
+- **AnaliseCreditoPage**: campo `skipVerification` agora vem marcado por padrão (formulário novo e reset pós-criação) — fluxo majoritário é sem reanálise.
+- **AcordoFormModal**: modo de entrada padrão agora é **R$ (valor fixo)** em vez de % — alinhado ao uso real do operador.
+
 ## [1.9.2] — 2026-05-11
 
 ### Adicionado — Anti-Ban WhatsApp + Templates no Kanban

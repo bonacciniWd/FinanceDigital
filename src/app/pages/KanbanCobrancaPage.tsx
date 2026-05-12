@@ -61,6 +61,7 @@ import { useRegistrarPagamento, useParcelas } from '../hooks/useParcelas';
 import { useCriarAcordo, useAcordos } from '../hooks/useAcordos';
 import { useClientes } from '../hooks/useClientes';
 import { useAdminUsers } from '../hooks/useAdminUsers';
+import { useEtiquetas, useCreateEtiqueta, useToggleConversaEtiqueta } from '../hooks/useEtiquetas';
 import ComprovanteUploader from '../components/ComprovanteUploader';
 import { useConfigSistema } from '../hooks/useConfigSistema';
 import { supabase } from '../lib/supabase';
@@ -115,6 +116,13 @@ export default function KanbanCobrancaPage() {
   // Chat dropdown state
   const [chatMenuCard, setChatMenuCard] = useState<string | null>(null);
 
+  // ── Envio rápido de template (modal) ────────────────────────────────────────
+  const [sendCard, setSendCard] = useState<KanbanCobrancaView | null>(null);
+  const [sendCardColId, setSendCardColId] = useState<string | null>(null);
+  const [sendTemplateId, setSendTemplateId] = useState<string>('');
+  const [sendMessage, setSendMessage] = useState('');
+  const [sendLoading, setSendLoading] = useState(false);
+
   // Fechar menus ao clicar fora
   useEffect(() => {
     if (!chatMenuCard && !moveMenuCard) return;
@@ -164,6 +172,9 @@ export default function KanbanCobrancaPage() {
   const criarAcordo = useCriarAcordo();
   const { data: acordosAll = [] } = useAcordos();
   const { data: configSistema } = useConfigSistema();
+  const { data: etiquetasAll = [] } = useEtiquetas();
+  const createEtiqueta = useCreateEtiqueta();
+  const toggleConversaEtiqueta = useToggleConversaEtiqueta();
 
   const instanciasConectadas = useMemo(
     () => instancias.filter((i) => i.status === 'conectado'),
@@ -352,8 +363,10 @@ export default function KanbanCobrancaPage() {
     const totalPago = totalPagoCards + totalEntradasAcordo;
     const totalClientes = cardsAtivos.length;
     const totalNegociacao = cardsAtivos.filter((c) => c.etapa === 'negociacao').length;
-    const taxaConversao = totalNegociacao > 0
-      ? Math.round((acordos / totalNegociacao) * 100)
+     // Denominador = quem chegou à etapa de negociação (em curso + já convertidos em acordo)
+    const totalNegociadores = totalNegociacao + acordos;
+    const taxaConversao = totalNegociadores > 0
+      ? Math.round((acordos / totalNegociadores) * 100)
       : 0;
     return { total, negociacao, acordos, totalClientes, taxaConversao, totalPago };
   }, [allCards, acordosAll]);
@@ -577,7 +590,7 @@ export default function KanbanCobrancaPage() {
    * Variáveis interpoladas: {nome}, {valor}, {data}, {numeroParcela},
    * {diasAtraso}, {totalParcelas}, {parcelasPagas}.
    */
-  const montarMensagemCobranca = (card: KanbanCobrancaView): string => {
+  const montarMensagemCobranca = (card: KanbanCobrancaView, templateOverride?: string): string => {
     const primeiroNome = (card.clienteNome || 'cliente').split(' ')[0];
     const empsCliente = (emprestimosByCliente.get(card.clienteId) ?? []).filter(
       (e) => e.status === 'ativo' || e.status === 'inadimplente',
@@ -635,16 +648,28 @@ export default function KanbanCobrancaPage() {
       ? templatesCobranca.find((t) => t.tipoNotificacao === tipoAlvo && t.ativo)
       : null;
 
+    const vars: Record<string, string> = {
+      nome: primeiroNome,
+      valor: valorReferencia.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      data: proxima ? formatDateBR(proxima.dataVencimento) : '',
+      numeroParcela: String(proxima?.numero ?? ''),
+      diasAtraso: String(dias),
+      totalParcelas: String(empRef?.parcelas ?? ''),
+      parcelasPagas: String(empRef?.parcelasPagas ?? ''),
+    };
+
+    // Override manual: usuário escolheu template específico no modal de envio rápido
+    if (templateOverride) {
+      const all = [...templatesCobranca, ...templatesNegociacao, ...templatesLembrete];
+      const tplOv = all.find((t) => t.id === templateOverride);
+      if (tplOv) {
+        const base = sexo === 'feminino' ? tplOv.mensagemFeminino : tplOv.mensagemMasculino;
+        const msg = (base || '').replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
+        if (msg.trim().length > 0) return msg;
+      }
+    }
+
     if (tpl) {
-      const vars: Record<string, string> = {
-        nome: primeiroNome,
-        valor: valorReferencia.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
-        data: proxima ? formatDateBR(proxima.dataVencimento) : '',
-        numeroParcela: String(proxima?.numero ?? ''),
-        diasAtraso: String(dias),
-        totalParcelas: String(empRef?.parcelas ?? ''),
-        parcelasPagas: String(empRef?.parcelasPagas ?? ''),
-      };
       const base = sexo === 'feminino' ? tpl.mensagemFeminino : tpl.mensagemMasculino;
       const msg = (base || '').replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
       if (msg.trim().length > 0) return msg;
@@ -692,6 +717,94 @@ export default function KanbanCobrancaPage() {
     linhas.push('Podemos negociar agora? Estamos à disposição para fechar um acordo.');
 
     return linhas.join('\n');
+  };
+
+  // ── Auto-tag: find-or-create etiqueta por nome ───────────────────────────────
+  const COL_TAG_MAP: Record<string, { nome: string; cor: string }> = {
+    vence_hoje: { nome: 'Cobrança · Vence Hoje', cor: '#facc15' },
+    vencido_n1: { nome: 'Cobrança · N1', cor: '#f97316' },
+    vencido_n2: { nome: 'Cobrança · N2', cor: '#ef4444' },
+    vencido_n3: { nome: 'Cobrança · N3', cor: '#991b1b' },
+  };
+
+  /** Garante existência da etiqueta (find-or-create) e retorna o ID. */
+  const ensureEtiqueta = async (nome: string, cor: string): Promise<string | null> => {
+    const existing = etiquetasAll.find((e) => e.nome === nome);
+    if (existing) return existing.id;
+    try {
+      const created = await createEtiqueta.mutateAsync({ nome, cor });
+      return (created as { id: string })?.id ?? null;
+    } catch (err) {
+      console.error('Falha ao criar etiqueta', nome, err);
+      return null;
+    }
+  };
+
+  /**
+   * Envio rápido a partir do modal: envia pelo sistema (is_system), aplica
+   * etiquetas (coluna kanban + cobrador), registra contato e move o card para
+   * 'contatado'. Tudo sem sair da página.
+   */
+  const handleQuickSend = async (card: KanbanCobrancaView, colId: string, mensagem: string) => {
+    setSendLoading(true);
+    try {
+      const sistema = instancias.find((i) => (i as any).is_system && i.status === 'conectado')
+        ?? instanciasConectadas[0];
+      if (!sistema) {
+        toast.error('Nenhuma instância do sistema conectada');
+        return;
+      }
+      const telefone = normalizePhoneBR(card.clienteTelefone);
+      // 1) Enviar mensagem
+      await enviarWhatsapp.mutateAsync({
+        instancia_id: sistema.id,
+        telefone,
+        conteudo: mensagem,
+        tipo: 'text',
+        cliente_id: card.clienteId,
+      });
+
+      // 2) Auto-tag: coluna + cobrador (fire-and-forget; não bloqueia o fluxo)
+      const tagsToApply: Array<{ nome: string; cor: string }> = [];
+      const colTag = COL_TAG_MAP[colId];
+      if (colTag) tagsToApply.push(colTag);
+      if (user?.name) tagsToApply.push({ nome: `Cobrador: ${user.name}`, cor: '#3b82f6' });
+
+      for (const t of tagsToApply) {
+        const etiquetaId = await ensureEtiqueta(t.nome, t.cor);
+        if (etiquetaId) {
+          toggleConversaEtiqueta.mutate({
+            telefone,
+            instancia_id: sistema.id,
+            etiqueta_id: etiquetaId,
+            action: 'add',
+          });
+        }
+      }
+
+      // 3) Registrar contato (incrementa tentativas_contato, move p/ 'contatado')
+      //    Contagem de contatos nas últimas 24h é derivada do banco (tentativas + ultimo_contato).
+      const obsContato = `Template enviado por ${user?.name || 'sistema'} · ${COLUMNS.find((c) => c.id === colId)?.title ?? colId}`;
+      await registrarContato.mutateAsync({ id: card.id, observacao: obsContato });
+
+      toast.success(`Mensagem enviada para ${card.clienteNome}`);
+      setSendCard(null);
+      setSendCardColId(null);
+      setSendTemplateId('');
+      setSendMessage('');
+    } catch (err: any) {
+      toast.error(`Erro ao enviar: ${err?.message || err}`);
+    } finally {
+      setSendLoading(false);
+    }
+  };
+
+  /** Abre o modal de envio rápido pré-carregando o template auto-detectado. */
+  const openQuickSendDialog = (card: KanbanCobrancaView, colId: string) => {
+    setSendCard(card);
+    setSendCardColId(colId);
+    setSendTemplateId('');
+    setSendMessage(montarMensagemCobranca(card));
   };
 
   // Confirmar contato (contatado → acordo)
@@ -791,14 +904,14 @@ export default function KanbanCobrancaPage() {
           {/* Board: altura limitada ao viewport, scroll horizontal visivel na base
               da tela; cada coluna tem scroll vertical interno. */}
           <div
-            className="flex gap-4 pb-6 overflow-x-auto overflow-y-hidden"
-            style={{ height: 'calc(100vh - 260px)', minHeight: '400px' }}
+            className="flex gap-4 pb-2 overflow-x-auto overflow-y-hidden"
+            style={{ height: 'calc(100vh - 0px)', minHeight: '500px' }}
           >
           {COLUMNS.map((column) => {
             const cards = cardsByEtapa[column.id] || [];
             const isOver = dragOverColumn === column.id;
             return (
-              <div key={column.id} className="flex-shrink-0 w-[500px] h-full flex flex-col">
+              <div key={column.id} className="flex-shrink-0 w-[500px] h-100vh flex flex-col">
                 <Card
                   className={`liquid-metal-column ${isOver ? 'dragging-over' : ''} flex flex-col h-full overflow-hidden`}
                   style={{ '--kanban-col-color': `${column.dotColor}88` } as React.CSSProperties}
@@ -938,13 +1051,20 @@ export default function KanbanCobrancaPage() {
                                   <div className="absolute bottom-full text-black left-0 mb-1 bg-white/80 border border-border rounded-lg shadow-lg z-50 w-96 p-1" onClick={(e) => e.stopPropagation()}>
                                     <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => {
                                       setChatMenuCard(null);
+                                      openQuickSendDialog(card, column.id);
+                                    }}>
+                                      <MessageSquare className="w-6 h-6 text-green-600" />
+                                      <span>Enviar template (sistema)</span>
+                                    </button>
+                                    <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => {
+                                      setChatMenuCard(null);
                                       const msg = montarMensagemCobranca(card);
                                       const tel = encodeURIComponent(normalizePhoneBR(card.clienteTelefone));
                                       const txt = encodeURIComponent(msg);
                                       navigate(`/whatsapp?telefone=${tel}&mensagem=${txt}`);
                                     }}>
                                       <MessageSquare className="w-6 h-6 text-green-600" />
-                                      <span>WhatsApp Business (sistema)</span>
+                                      <span>Abrir conversa no app</span>
                                     </button>
                                     <button className="w-full text-left px-3 py-2 text-xl hover:bg-slate-800 hover:text-green-600 rounded flex items-center gap-2" onClick={() => {
                                       setChatMenuCard(null);
@@ -1294,6 +1414,102 @@ export default function KanbanCobrancaPage() {
               );
             })()}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de envio rápido de template (sem sair do Kanban) */}
+      <Dialog
+        open={!!sendCard}
+        onOpenChange={(o) => {
+          if (!o) {
+            setSendCard(null);
+            setSendCardColId(null);
+            setSendTemplateId('');
+            setSendMessage('');
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              Enviar mensagem · {sendCard?.clienteNome}
+            </DialogTitle>
+          </DialogHeader>
+          {sendCard && (
+            <div className="space-y-4">
+              <div className="text-xs text-muted-foreground">
+                Coluna: <span className="font-medium">{COLUMNS.find((c) => c.id === sendCardColId)?.title}</span>
+                {' · '}Telefone: <span className="font-medium">{sendCard.clienteTelefone}</span>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Template</label>
+                <Select
+                  value={sendTemplateId}
+                  onValueChange={(v) => {
+                    setSendTemplateId(v);
+                    setSendMessage(montarMensagemCobranca(sendCard, v));
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione um template (ou edite livre abaixo)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {templatesCobranca.filter((t) => t.ativo).map((t) => (
+                      <SelectItem key={t.id} value={t.id}>Cobrança · {t.nome}</SelectItem>
+                    ))}
+                    {templatesNegociacao.filter((t) => t.ativo).map((t) => (
+                      <SelectItem key={t.id} value={t.id}>Negociação · {t.nome}</SelectItem>
+                    ))}
+                    {templatesLembrete.filter((t) => t.ativo).map((t) => (
+                      <SelectItem key={t.id} value={t.id}>Lembrete · {t.nome}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Variar templates reduz risco de bloqueio pelo WhatsApp.
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Mensagem</label>
+                <Textarea
+                  value={sendMessage}
+                  onChange={(e) => setSendMessage(e.target.value)}
+                  rows={10}
+                  className="font-mono text-sm"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Ao enviar: aplica tags (coluna + cobrador), registra contato e move para "Contatado".
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSendCard(null);
+                    setSendCardColId(null);
+                    setSendTemplateId('');
+                    setSendMessage('');
+                  }}
+                  disabled={sendLoading}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (sendCard && sendCardColId && sendMessage.trim()) {
+                      handleQuickSend(sendCard, sendCardColId, sendMessage.trim());
+                    }
+                  }}
+                  disabled={sendLoading || !sendMessage.trim()}
+                >
+                  {sendLoading ? 'Enviando...' : 'Enviar via sistema'}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

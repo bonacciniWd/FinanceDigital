@@ -1190,7 +1190,7 @@ export default function WhatsAppPage() {
       </Dialog>
 
       {/* Instâncias */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
+      <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-4 gap-2 shrink-0">
         {loadingInstancias ? (
           <Card className="col-span-full"><CardContent className="flex items-center justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></CardContent></Card>
         ) : instancias.length === 0 ? (
@@ -1316,10 +1316,10 @@ export default function WhatsAppPage() {
 
       {/* Chat Area */}
       {activeInstancia && (
-        <div className="grid grid-cols-12 gap-2" style={{ height: 'calc(100vh - 20rem)' }}>
+        <div className="flex gap-2" style={{ height: 'calc(100vh - 14rem)' }}>
           {/* Lista de Conversas */}
-          <div className="col-span-12 lg:col-span-4 min-h-0">
-            <Card className="h-full flex flex-col overflow-hidden">
+          <div className="w-80 shrink-0 h-full min-h-0">
+            <Card className="h-full flex flex-col overflow-scroll">
               <div className="p-4 border-b space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold text-sm">Conversas</h3>
@@ -1401,7 +1401,7 @@ export default function WhatsAppPage() {
           </div>
 
           {/* Chat */}
-          <div className="col-span-12 lg:col-span-8 min-h-0">
+          <div className="flex-1 min-w-0 h-full min-h-0">
             <Card className="h-full flex flex-col overflow-hidden">
               {!selectedTelefone ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">

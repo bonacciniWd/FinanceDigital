@@ -72,6 +72,17 @@ function b64ToUint8Array(b64: string): Uint8Array {
   return arr;
 }
 
+/** Converte Uint8Array para base64 em chunks de 8 KB para evitar stack overflow.
+ *  `String.fromCharCode(...arr)` falha com RangeError em arrays grandes. */
+function uint8ArrayToB64(arr: Uint8Array): string {
+  const CHUNK = 8192;
+  let bin = '';
+  for (let i = 0; i < arr.length; i += CHUNK) {
+    bin += String.fromCharCode(...arr.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
 async function sha1Hex(message: string): Promise<string> {
   const data = new TextEncoder().encode(message);
   const hash = await crypto.subtle.digest("SHA-1", data);
@@ -104,9 +115,7 @@ async function uploadToCloudinary(
   const signature = await sha1Hex(toSign + apiSecret);
 
   const form = new FormData();
-  // Convert to base64 data URI (mais simples que streams para imagens pequenas)
-  const b64 = btoa(String.fromCharCode(...bytes));
-  form.append("file", `data:${mime};base64,${b64}`);
+  form.append("file", `data:${mime};base64,${uint8ArrayToB64(bytes)}`);
   form.append("api_key", apiKey);
   form.append("timestamp", String(timestamp));
   form.append("signature", signature);

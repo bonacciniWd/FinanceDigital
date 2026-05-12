@@ -12,16 +12,118 @@
  * @access Protegido — todos os perfis autenticados
  */
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
-import { Search, MessageSquare, Phone, Mail, Clock, Loader2, AlertCircle, User, CheckCircle } from 'lucide-react';
+import { Search, MessageSquare, Phone, Mail, Clock, Loader2, AlertCircle, User, CheckCircle, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTickets, useMoverTicket, useUpdateTicket } from '../hooks/useTickets';
 import type { TicketAtendimentoView } from '../lib/view-types';
 import type { TicketStatus } from '../lib/database.types';
+
+// ── Parser de histórico do chatbot ─────────────────────────────────────────
+interface ChatMessage {
+  type: 'bot' | 'client' | 'system';
+  timestamp: string;
+  content: string;
+}
+
+function parseDescricao(descricao: string): { header: string; messages: ChatMessage[] } {
+  const SEP = 'Últimas mensagens:';
+  const sepIdx = descricao.indexOf(SEP);
+  const header = sepIdx > -1 ? descricao.slice(0, sepIdx).trim() : '';
+  const msgText = sepIdx > -1 ? descricao.slice(sepIdx + SEP.length).trim() : descricao;
+
+  // Divide no início de cada mensagem Bot/Cliente
+  const parts = msgText
+    .split(/(?=(?:🤖|\[Bot\]|Bot) \(|(?:👤|\[Cliente\]|Cliente) \()/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const messages: ChatMessage[] = parts.map((part) => {
+    const botMatch = part.match(/^(?:🤖|Bot) \(([^)]+)\):\s*([\s\S]*)/);
+    const cliMatch = part.match(/^(?:👤|Cliente) \(([^)]+)\):\s*([\s\S]*)/);
+    if (botMatch) return { type: 'bot', timestamp: botMatch[1], content: botMatch[2].trim() };
+    if (cliMatch) return { type: 'client', timestamp: cliMatch[1], content: cliMatch[2].trim() };
+    return { type: 'system', timestamp: '', content: part };
+  });
+
+  // Se não conseguiu parsear nenhuma mensagem, trata tudo como system
+  if (messages.length === 0) return { header: '', messages: [{ type: 'system', timestamp: '', content: descricao }] };
+
+  return { header, messages };
+}
+
+/** Renderiza formatação WhatsApp: *bold*, _italic_, ~strike~ */
+function renderWAText(text: string): React.ReactNode[] {
+  const segments: React.ReactNode[] = [];
+  // Substitui marcações simples sequencialmente
+  let remaining = text;
+  let key = 0;
+  const push = (node: React.ReactNode) => segments.push(<span key={key++}>{node}</span>);
+  // Regex para capturar marcações WhatsApp
+  const re = /(\*[^*]+\*|_[^_]+_|~[^~]+~|\n)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(remaining)) !== null) {
+    if (m.index > last) push(remaining.slice(last, m.index));
+    const token = m[0];
+    if (token === '\n') { segments.push(<br key={key++} />); }
+    else if (token.startsWith('*')) push(<strong key={key++} className="font-semibold">{token.slice(1, -1)}</strong>);
+    else if (token.startsWith('_')) push(<em key={key++}>{token.slice(1, -1)}</em>);
+    else if (token.startsWith('~')) push(<s key={key++}>{token.slice(1, -1)}</s>);
+    last = m.index + token.length;
+  }
+  if (last < remaining.length) push(remaining.slice(last));
+  return segments;
+}
+
+function ChatHistorico({ descricao }: { descricao: string }) {
+  const { header, messages } = parseDescricao(descricao);
+  return (
+    <div className="space-y-2">
+      {header && (
+        <div className="text-[11px] text-muted-foreground bg-muted/60 rounded-lg px-3 py-2 leading-relaxed">
+          {header}
+        </div>
+      )}
+      <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
+        {messages.map((msg, i) => {
+          if (msg.type === 'system') {
+            return (
+              <div key={i} className="text-[11px] text-muted-foreground text-center italic px-2">
+                {msg.content}
+              </div>
+            );
+          }
+          const isBot = msg.type === 'bot';
+          return (
+            <div key={i} className={`flex ${isBot ? 'justify-start' : 'justify-end'}`}>
+              <div
+                className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs leading-relaxed shadow-sm ${
+                  isBot
+                    ? 'bg-muted text-foreground rounded-tl-sm'
+                    : 'bg-primary text-primary-foreground rounded-tr-sm'
+                }`}
+              >
+                <div className={`text-[10px] font-semibold mb-0.5 ${
+                  isBot ? 'text-muted-foreground' : 'text-primary-foreground/70'
+                }`}>
+                  {isBot ? '🤖 Bot' : '👤 Cliente'}
+                  {msg.timestamp && <span className="ml-1 font-normal opacity-70">{msg.timestamp}</span>}
+                </div>
+                <div>{renderWAText(msg.content)}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 interface ColumnDef {
   id: TicketStatus;
@@ -70,6 +172,7 @@ function tempoDesde(dateStr: string): string {
 }
 
 export default function KanbanAtendimentoPage() {
+  const navigate = useNavigate();
   const [selectedTicket, setSelectedTicket] = useState<TicketAtendimentoView | null>(null);
   const [busca, setBusca] = useState('');
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null);
@@ -301,12 +404,27 @@ export default function KanbanAtendimentoPage() {
                 </div>
               </div>
               {selectedTicket.descricao && (
-                <div className="p-3 bg-muted rounded-lg text-sm">
-                  <strong className="text-foreground">Descrição:</strong>
-                  <p className="text-muted-foreground mt-1">{selectedTicket.descricao}</p>
+                <div className="space-y-1.5">
+                  <strong className="text-sm text-foreground">Histórico da conversa</strong>
+                  <ChatHistorico descricao={selectedTicket.descricao} />
                 </div>
               )}
               <div className="flex gap-2 pt-2">
+                {selectedTicket.clienteTelefone && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    title="Abrir conversa no WhatsApp"
+                    onClick={() => {
+                      const digits = selectedTicket.clienteTelefone.replace(/\D/g, '');
+                      const num = digits.length >= 10 && !digits.startsWith('55') ? '55' + digits : digits;
+                      navigate(`/whatsapp?telefone=${encodeURIComponent(num)}`);
+                      setSelectedTicket(null);
+                    }}
+                  >
+                    <ExternalLink className="w-4 h-4 text-green-600" />
+                  </Button>
+                )}
                 {selectedTicket.status !== 'resolvido' && (
                   <Button
                     className="flex-1"

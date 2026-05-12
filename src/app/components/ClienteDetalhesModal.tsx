@@ -11,6 +11,7 @@
  *  - Histórico: pagamentos + contatos + tempo de resposta
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
   Dialog,
@@ -519,6 +520,59 @@ function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente:
 }
 
 /* ═══════════════════════════════════════════════════════════
+   DIALOG — Renovar empréstimo após quitação
+   ═══════════════════════════════════════════════════════════ */
+
+function RenovarEmprestimoDialog({
+  open,
+  clienteId,
+  clienteNome,
+  onClose,
+}: {
+  open: boolean;
+  clienteId: string;
+  clienteNome: string;
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-green-600" />
+            Empréstimo quitado!
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          O empréstimo de <strong>{clienteNome}</strong> foi quitado com sucesso.
+          Deseja criar um novo empréstimo para este cliente?
+        </p>
+        <div className="flex gap-2 pt-2">
+          <Button variant="outline" className="flex-1" onClick={onClose}>
+            Não, obrigado
+          </Button>
+          <Button
+            className="flex-1 bg-primary"
+            onClick={() => {
+              onClose();
+              navigate('/analise-credito', {
+                state: {
+                  openNovaAnalise: true,
+                  prefill: { clienteId },
+                },
+              });
+            }}
+          >
+            Sim, criar novo
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
    TAB 2 — EMPRÉSTIMOS (atribuir cobrador, marcar status)
    ═══════════════════════════════════════════════════════════ */
 
@@ -528,6 +582,7 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
   const { data: allUsers = [] } = useAdminUsers();
   const updateEmprestimo = useUpdateEmprestimo();
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [renovarClienteNome, setRenovarClienteNome] = useState<string | null>(null);
 
   const cobradores = useMemo(
     () => allUsers.filter((u: any) => ['cobranca', 'gerencia', 'admin'].includes(u.role)),
@@ -590,10 +645,13 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
     }
   };
 
-  const handleStatusChange = async (id: string, status: 'ativo' | 'quitado' | 'inadimplente') => {
+  const handleStatusChange = async (id: string, status: 'ativo' | 'quitado' | 'inadimplente', nomeCliente?: string) => {
     try {
       await updateEmprestimo.mutateAsync({ id, data: { status } });
       toast.success('Status atualizado');
+      if (status === 'quitado') {
+        setRenovarClienteNome(nomeCliente ?? 'cliente');
+      }
     } catch (err) {
       toast.error('Erro: ' + (err as Error).message);
     }
@@ -684,7 +742,7 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
                   Editar
                 </Button>
                 {e.status !== 'quitado' && (
-                  <Button size="sm" variant="secondary" onClick={() => handleStatusChange(e.id, 'quitado')}>
+                  <Button size="sm" variant="secondary" onClick={() => handleStatusChange(e.id, 'quitado', e.clienteNome)}>
                     <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Marcar quitado
                   </Button>
                 )}
@@ -699,6 +757,12 @@ function EmprestimosTab({ clienteId }: { clienteId: string }) {
         );
       })}
       <EmprestimoEditModal emprestimoId={editingId} onClose={() => setEditingId(null)} />
+      <RenovarEmprestimoDialog
+        open={!!renovarClienteNome}
+        clienteId={clienteId}
+        clienteNome={renovarClienteNome ?? ''}
+        onClose={() => setRenovarClienteNome(null)}
+      />
     </div>
   );
 }
@@ -715,6 +779,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
   const updateParcela = useUpdateParcela();
   const registrarPagamento = useRegistrarPagamento();
   const createParcela = useCreateParcela();
+  const [renovarClienteNome, setRenovarClienteNome] = useState<string | null>(null);
   const syncEmprestimoStatus = useSyncEmprestimoStatus();
   const criarCobvEfi = useCriarCobvEfi();
   const enviarWhatsapp = useEnviarWhatsapp();
@@ -1077,6 +1142,18 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
             });
             toast.success(`Parcela ${parcela.numero} quitada com sucesso!`);
             closePagamentoModal();
+            // Verifica se esta era a última parcela pendente/vencida do empréstimo
+            const outrasAtivas = parcelas.filter(
+              (p) => p.id !== parcela.id &&
+                p.emprestimoId === parcela.emprestimoId &&
+                p.status !== 'paga' &&
+                p.status !== 'cancelada' &&
+                !p.congelada,
+            );
+            if (outrasAtivas.length === 0) {
+              const emp = emprestimoById.get(parcela.emprestimoId);
+              setRenovarClienteNome(emp?.clienteNome ?? 'cliente');
+            }
           },
           onError: (err) => toast.error(`Erro: ${err.message}`),
         },
@@ -1119,8 +1196,11 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
         const linhaVencimento = vencido
           ? `Vencimento original: ${formatDate(parcela.dataVencimento)} — *pague hoje*`
           : `Vencimento: ${formatDate(parcela.dataVencimento)}`;
-        const msg = `💰 *Cobrança PIX - Parcela ${parcela.numero}*\n\nOlá ${clienteNome}!\n\nValor: *${formatCurrency(valorPixCorrigido)}*\n${linhaVencimento}\n\n📱 Copie o código PIX abaixo e cole no app do seu banco:\n\n${brCode}\n\n_CasaDaMoeda_`;
+        const msg = `💰 *Cobrança PIX - Parcela ${parcela.numero}*\n\nOlá ${clienteNome}!\n\nValor: *${formatCurrency(valorPixCorrigido)}*\n${linhaVencimento}\n\n📱 Segure a próxima mensagem e toque em *Copiar* para colar no app do banco:\n\n_CasaDaMoeda_`;
         await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: msg });
+        // Código PIX em mensagem separada (texto puro) — fácil de copiar:
+        // segurar a bolha → Copiar texto → colar no app bancário.
+        await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: brCode });
         if (qrImage) {
           const base64Data = qrImage.replace(/^data:image\/\w+;base64,/, '');
           await enviarWhatsapp.mutateAsync({ instancia_id: instSistema.id, telefone: phone, conteudo: `QR Code - Parcela ${parcela.numero}`, tipo: 'image', media_base64: base64Data });
@@ -2173,8 +2253,27 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                       variant="outline"
                       className="shrink-0"
                       onClick={() => {
-                        navigator.clipboard.writeText(pixResultDialog.brCode!);
-                        toast.success('Código PIX copiado!');
+                        const code = pixResultDialog.brCode!;
+                        if (navigator.clipboard?.writeText) {
+                          navigator.clipboard.writeText(code).then(
+                            () => toast.success('Código PIX copiado!'),
+                            () => fallbackCopy(code),
+                          );
+                        } else {
+                          fallbackCopy(code);
+                        }
+                        function fallbackCopy(text: string) {
+                          const ta = document.createElement('textarea');
+                          ta.value = text;
+                          ta.style.position = 'fixed';
+                          ta.style.opacity = '0';
+                          document.body.appendChild(ta);
+                          ta.focus();
+                          ta.select();
+                          try { document.execCommand('copy'); toast.success('Código PIX copiado!'); }
+                          catch { toast.error('Não foi possível copiar automaticamente. Selecione e copie manualmente.'); }
+                          document.body.removeChild(ta);
+                        }
                       }}
                     >
                       <Copy className="w-4 h-4 mr-1" />
@@ -2205,6 +2304,12 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
           </DialogContent>
         </Dialog>
       )}
+      <RenovarEmprestimoDialog
+        open={!!renovarClienteNome}
+        clienteId={clienteId}
+        clienteNome={renovarClienteNome ?? ''}
+        onClose={() => setRenovarClienteNome(null)}
+      />
     </div>
   );
 }

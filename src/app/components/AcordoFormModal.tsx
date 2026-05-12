@@ -196,7 +196,7 @@ export default function AcordoFormModal({
 
   // ── Form state ──────────────────────────────────────────
   const [valorAcordado, setValorAcordado] = useState('');
-  const [entradaModo, setEntradaModo] = useState<'pct' | 'valor'>('pct');
+  const [entradaModo, setEntradaModo] = useState<'pct' | 'valor'>('valor');
   const [entradaPct, setEntradaPct] = useState('30');
   const [entradaValor, setEntradaValor] = useState('0');
   const [numParcelas, setNumParcelas] = useState('3');
@@ -219,7 +219,7 @@ export default function AcordoFormModal({
     setValorAcordado(valorDividaSugerido > 0
       ? valorDividaSugerido.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       : '');
-    setEntradaModo('pct');
+    setEntradaModo('valor');
     setEntradaPct(String(configSistema?.acordo_entrada_percentual ?? 30));
     setEntradaValor('0');
     setNumParcelas('3');

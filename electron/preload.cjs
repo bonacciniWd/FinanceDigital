@@ -1,7 +1,18 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
-// Aplica zoom 0.9 via webFrame (correto no Electron, sem espaço vazio)
-webFrame.setZoomFactor(0.9);
+// Zoom inicial: respeita preferência salva (localStorage) ou 0.9 padrão.
+// webFrame é o caminho correto no Electron (sem espaço vazio como CSS zoom).
+const ZOOM_KEY = 'app:zoomFactor';
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 1.6;
+const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(z) || 0.9));
+
+try {
+  const saved = parseFloat(localStorage.getItem(ZOOM_KEY) || '');
+  webFrame.setZoomFactor(clampZoom(isNaN(saved) ? 0.9 : saved));
+} catch {
+  webFrame.setZoomFactor(0.9);
+}
 
 // Marca que estamos no Electron para desativar CSS zoom
 window.addEventListener('DOMContentLoaded', () => {
@@ -44,4 +55,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openWhatsApp: (phone, message) =>
     ipcRenderer.invoke('whatsapp:open', { phone, message }),
   closeAllWhatsApp: () => ipcRenderer.invoke('whatsapp:closeAll'),
+
+  // Zoom da janela (webFrame). Persistido em localStorage pelo renderer.
+  getZoomFactor: () => webFrame.getZoomFactor(),
+  setZoomFactor: (factor) => {
+    const z = clampZoom(factor);
+    webFrame.setZoomFactor(z);
+    try { localStorage.setItem(ZOOM_KEY, String(z)); } catch {}
+    return z;
+  },
 });

@@ -66,11 +66,14 @@ import {
   Settings2,
   Images,
   CalendarClock,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useActivityTracker } from '../hooks/useActivityTracker';
 import { useRealtimeSync } from '../hooks/useRealtimeSync';
+import { useZoom } from '../hooks/useZoom';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useState, useEffect, useRef } from 'react';
@@ -86,6 +89,7 @@ import alarmeSound from '../assets/sounds/alarme.mp3';
 export function MainLayout() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { zoomPct, canZoomIn, canZoomOut, zoomIn, zoomOut, resetZoom } = useZoom();
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -430,6 +434,38 @@ export function MainLayout() {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Zoom controls (web + Electron) */}
+            <div className="flex items-center gap-1 rounded-md border bg-muted/30 px-1 py-0.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={zoomOut}
+                disabled={!canZoomOut}
+                title="Diminuir zoom (Ctrl -)"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </Button>
+              <button
+                type="button"
+                onClick={resetZoom}
+                className="text-xs font-medium tabular-nums px-1.5 min-w-[3rem] text-center hover:text-primary transition-colors"
+                title="Clique para resetar o zoom"
+              >
+                {zoomPct}%
+              </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={zoomIn}
+                disabled={!canZoomIn}
+                title="Aumentar zoom (Ctrl +)"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </Button>
+            </div>
+
             <Button
               variant="ghost"
               size="icon"

@@ -292,13 +292,25 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
   // 4) Buscar cards existentes no kanban
   const { data: existingCards, error: cardsErr } = await supabase
     .from('kanban_cobranca')
-    .select('id, cliente_id, etapa');
+    .select('id, cliente_id, etapa, ultimo_contato');
   if (cardsErr) throw new Error(cardsErr.message);
 
-  const existingByCliente = new Map<string, { id: string; etapa: KanbanCobrancaEtapa }>();
-  for (const card of ((existingCards ?? []) as KanbanRow[])) {
-    existingByCliente.set(card.cliente_id, { id: card.id, etapa: card.etapa });
+  const existingByCliente = new Map<
+    string,
+    { id: string; etapa: KanbanCobrancaEtapa; ultimoContato: string | null }
+  >();
+  for (const card of ((existingCards ?? []) as Array<KanbanRow & { ultimo_contato: string | null }>)) {
+    existingByCliente.set(card.cliente_id, {
+      id: card.id,
+      etapa: card.etapa,
+      ultimoContato: card.ultimo_contato ?? null,
+    });
   }
+
+  // Lock de 24h: card em 'contatado' há menos de 24h fica imune ao sync.
+  const HORAS_LOCK_CONTATADO = 24;
+  const limiteLockMs = HORAS_LOCK_CONTATADO * 60 * 60 * 1000;
+  const nowMs = Date.now();
 
   let created = 0;
   let updated = 0;
@@ -309,8 +321,18 @@ export async function syncCobrancas(): Promise<{ created: number; updated: numbe
     const existing = existingByCliente.get(clienteId);
 
     if (existing) {
-      // Não sobrescrever etapas avançadas (contatado, negociacao, acordo)
-      const etapaPreservada = ['contatado', 'negociacao', 'acordo', 'pago', 'arquivado'].includes(existing.etapa);
+      // Etapas sempre preservadas pelo sync (decisão manual / fluxo financeiro)
+      const etapasSemprePreservadas = ['negociacao', 'acordo', 'pago', 'arquivado'];
+      let etapaPreservada = etapasSemprePreservadas.includes(existing.etapa);
+
+      // 'contatado' só é preservada nas primeiras 24h após o último contato.
+      // Após esse período, o card volta naturalmente para 'vencido' (N1/N2/N3).
+      if (existing.etapa === 'contatado') {
+        const ultMs = existing.ultimoContato ? new Date(existing.ultimoContato).getTime() : 0;
+        const dentroDoLock = ultMs > 0 && nowMs - ultMs < limiteLockMs;
+        etapaPreservada = dentroDoLock;
+      }
+
       // Se card está em "acordo", não atualizar valores — acordo tem valores próprios
       if (existing.etapa === 'acordo') {
         existingByCliente.delete(clienteId);
