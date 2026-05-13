@@ -105,7 +105,25 @@ function DocMetaBadge({ meta, label }: { meta: DocMeta | undefined; label: strin
 // ── Document preview (signed URL) ────────────────────────────
 function DocPreview({ path, label }: { path: string | null; label: string }) {
   const { data: url, isLoading } = useQuery({
-    queryKey: ['signed_url', path],
+    queryKey: ['signed_url_thumb', path],
+    queryFn: async () => {
+      if (!path) return null;
+      const { data } = await supabase.storage
+        .from('client-documents')
+        .createSignedUrl(path, 3600, {
+          // Thumbnail 400px — corta ~90% do egress de imagens grandes (HEIC/JPEG).
+          transform: { width: 400, resize: 'contain', quality: 70 },
+        });
+      return data?.signedUrl ?? null;
+    },
+    enabled: !!path,
+    staleTime: 50 * 60 * 1000, // 50 minutes
+  });
+
+  // Original (lazy): só carregado quando o user clica para abrir em nova aba.
+  const [wantFull, setWantFull] = useState(false);
+  const { data: urlFull } = useQuery({
+    queryKey: ['signed_url_full', path],
     queryFn: async () => {
       if (!path) return null;
       const { data } = await supabase.storage
@@ -113,8 +131,8 @@ function DocPreview({ path, label }: { path: string | null; label: string }) {
         .createSignedUrl(path, 3600);
       return data?.signedUrl ?? null;
     },
-    enabled: !!path,
-    staleTime: 50 * 60 * 1000, // 50 minutes
+    enabled: !!path && wantFull,
+    staleTime: 50 * 60 * 1000,
   });
 
   if (!path) return (
@@ -131,7 +149,14 @@ function DocPreview({ path, label }: { path: string | null; label: string }) {
           <Loader2 className="w-4 h-4 animate-spin" />
         </div>
       ) : url ? (
-        <a href={url} target="_blank" rel="noopener noreferrer">
+        <a
+          href={urlFull ?? url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onMouseEnter={() => setWantFull(true)}
+          onFocus={() => setWantFull(true)}
+          onClick={() => setWantFull(true)}
+        >
           <img src={url} alt={label} className="aspect-[4/3] w-full object-cover rounded border hover:opacity-90 transition-opacity" />
         </a>
       ) : (

@@ -123,7 +123,15 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.9.3', date: '12 Mai 2026', isLatest: true, items: [
+  { version: '1.9.4', date: '13 Mai 2026', isLatest: true, items: [
+    'Redução agressiva de egress Supabase: corrigida query de estatísticas WhatsApp que baixava tabela inteira a cada 30s (agora usa COUNT no servidor)',
+    'Conversas WhatsApp: query reduzida a colunas necessárias (removido metadata JSON gordo)',
+    'Documentos: thumbnails servidos em 400px qualidade 70 (~90% menos bytes); full-size carrega só ao abrir lightbox',
+    'Signed URLs cacheadas por 50min (alinhado ao TTL do token) — bate CDN cache em vez de gerar URL nova a cada render',
+    'cacheControl 7 dias nos uploads de documentos e comprovantes',
+    'Polling WhatsApp reduzido de 5s para 30s (realtime já cobre updates instantâneos)',
+  ]},
+  { version: '1.9.3', date: '12 Mai 2026', isLatest: false, items: [
     'Kanban Cobrança · Chat → "Enviar template (sistema)": dialog com seletor de template (cobrança/negociação/lembrete), textarea editável e envio pela instância sistema sem sair da página',
     'Auto-tag por coluna: ao enviar pelo sistema, aplica etiqueta da coluna (N1/N2/N3/Negociação/Acordo/Pago) + etiqueta do cobrador na conversa',
     'Auto-move para "Contatado": card é movido imediatamente após envio confirmado',

@@ -332,10 +332,13 @@ export async function getConversas(instanciaId?: string): Promise<
     total: number;
   }[]
 > {
-  // Buscar mensagens recentes e agrupar no client-side
+  // Buscar mensagens recentes e agrupar no client-side.
+  // IMPORTANTE: selecionar apenas as colunas necessárias (evita baixar `metadata` JSON
+  // completo, body do conteudo, etc.) — corta egress drasticamente nesta query
+  // que roda a cada 30s.
   let query = supabase
     .from('whatsapp_mensagens_log')
-    .select('*')
+    .select('telefone, conteudo, direcao, created_at, metadata, status')
     .order('created_at', { ascending: false })
     .limit(500);
 
@@ -409,18 +412,25 @@ export async function getEstatisticas(instanciaId?: string): Promise<{
   total_recebidas: number;
   total_falhas: number;
 }> {
-  let baseQuery = supabase.from('whatsapp_mensagens_log').select('direcao, status');
-  if (instanciaId) {
-    baseQuery = baseQuery.eq('instancia_id', instanciaId);
-  }
+  // ANTES: SELECT direcao, status FROM whatsapp_mensagens_log (sem limit) →
+  // baixava a tabela inteira a cada 30s. Egress gigante.
+  // AGORA: 3 counts agregados (head:true → não retorna linhas, só header com count).
+  const baseFilter = (q: any) => instanciaId ? q.eq('instancia_id', instanciaId) : q;
 
-  const { data: rawMsgs, error } = await baseQuery;
-  if (error) throw new Error(error.message);
-  const msgs = (rawMsgs ?? []) as Pick<WhatsappMensagemLog, 'direcao' | 'status'>[];
+  const [enviadas, recebidas, falhas] = await Promise.all([
+    baseFilter(supabase.from('whatsapp_mensagens_log').select('*', { count: 'exact', head: true }).eq('direcao', 'saida')),
+    baseFilter(supabase.from('whatsapp_mensagens_log').select('*', { count: 'exact', head: true }).eq('direcao', 'entrada')),
+    baseFilter(supabase.from('whatsapp_mensagens_log').select('*', { count: 'exact', head: true }).eq('status', 'erro')),
+  ]);
+
+  if (enviadas.error) throw new Error(enviadas.error.message);
+  if (recebidas.error) throw new Error(recebidas.error.message);
+  if (falhas.error) throw new Error(falhas.error.message);
+
   return {
-    total_enviadas: msgs.filter((m) => m.direcao === 'saida').length,
-    total_recebidas: msgs.filter((m) => m.direcao === 'entrada').length,
-    total_falhas: msgs.filter((m) => m.status === 'erro').length,
+    total_enviadas: enviadas.count ?? 0,
+    total_recebidas: recebidas.count ?? 0,
+    total_falhas: falhas.count ?? 0,
   };
 }
 

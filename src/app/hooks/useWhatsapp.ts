@@ -228,7 +228,7 @@ export function useMensagensWhatsapp(telefone: string | undefined) {
     queryKey: [MENSAGENS_KEY, telefone],
     queryFn: () => whatsappService.getMensagensByTelefone(telefone!),
     enabled: !!telefone,
-    refetchInterval: 5000, // Polling a cada 5s como backup
+    refetchInterval: 30000, // 30s — backup do realtime (era 5s, alto egress)
   });
 }
 
@@ -246,7 +246,7 @@ export function useConversasWhatsapp(instanciaId?: string) {
   return useQuery({
     queryKey: [CONVERSAS_KEY, instanciaId],
     queryFn: () => whatsappService.getConversas(instanciaId),
-    refetchInterval: 5000, // Polling a cada 5s como backup
+    refetchInterval: 30000, // 30s — backup do realtime (era 5s, alto egress)
   });
 }
 

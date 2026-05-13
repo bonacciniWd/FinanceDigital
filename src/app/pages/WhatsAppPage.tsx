@@ -584,7 +584,7 @@ export default function WhatsAppPage() {
 
       // Upload to client-documents bucket
       const { error: uploadErr } = await supabase.storage.from('client-documents').upload(path, blob, {
-        cacheControl: '3600',
+        cacheControl: '604800', // 7 dias
         upsert: true,
         contentType: blob.type,
       });

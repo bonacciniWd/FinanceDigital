@@ -157,7 +157,7 @@ export async function uploadVerificationFile(
   const { error } = await supabase.storage
     .from('identity-verification')
     .upload(path, file, {
-      cacheControl: '3600',
+      cacheControl: '604800',
       upsert: false,
     });
 

@@ -373,7 +373,31 @@ function DocSlot({
   const [lightbox, setLightbox] = useState(false);
 
   const { data: url, isLoading } = useQuery({
-    queryKey: ['signed_url', path],
+    queryKey: ['signed_url_thumb', path],
+    queryFn: async () => {
+      if (!path) return null;
+      const { data } = await supabase.storage
+        .from('client-documents')
+        .createSignedUrl(path, 3600, {
+          // Thumbnail: 400px max, qualidade 70 — corta ~90% do egress.
+          // Storage transformations precisam de plano Pro+; em Free, o backend
+          // ignora `transform` e devolve a original (sem quebrar).
+          transform: { width: 400, resize: 'contain', quality: 70 },
+        });
+      return data?.signedUrl ?? null;
+    },
+    enabled: !!path,
+    // Signed URL válida por 1h — reaproveita a mesma URL por 50min para
+    // bater no CDN cache do Storage (egress cached) em vez de gerar URL nova
+    // a cada mount do modal (egress uncached).
+    staleTime: 1000 * 60 * 50,
+    gcTime: 1000 * 60 * 55,
+  });
+
+  // Versão full-quality é carregada apenas quando o lightbox abre (evita egress
+  // desnecessário se o user não clicar para ampliar).
+  const { data: urlFull } = useQuery({
+    queryKey: ['signed_url_full', path],
     queryFn: async () => {
       if (!path) return null;
       const { data } = await supabase.storage
@@ -381,8 +405,9 @@ function DocSlot({
         .createSignedUrl(path, 3600);
       return data?.signedUrl ?? null;
     },
-    enabled: !!path,
-    staleTime: 0, // sempre busca URL fresca ao montar
+    enabled: !!path && lightbox,
+    staleTime: 1000 * 60 * 50,
+    gcTime: 1000 * 60 * 55,
   });
 
   return (
@@ -407,14 +432,20 @@ function DocSlot({
                 <DialogTitle className="text-sm">{label}</DialogTitle>
               </DialogHeader>
               <div className="flex-1 flex items-center justify-center bg-muted rounded overflow-hidden">
-                <img
-                  src={url}
-                  alt={label}
-                  className="max-h-[75vh] max-w-full object-contain rounded"
-                />
+                {urlFull ? (
+                  <img
+                    src={urlFull}
+                    alt={label}
+                    className="max-h-[75vh] max-w-full object-contain rounded"
+                  />
+                ) : (
+                  <div className="h-64 flex items-center justify-center">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                )}
               </div>
               <a
-                href={url}
+                href={urlFull ?? url ?? '#'}
                 target="_blank"
                 rel="noreferrer"
                 className="text-xs text-center text-muted-foreground hover:underline"
@@ -477,14 +508,15 @@ function DocumentosSection({ clienteId, cliente }: { clienteId: string; cliente:
       const ext = file.name.split('.').pop() ?? 'jpg';
       const path = `${clienteId}/${dbKey}-${Date.now()}.${ext}`;
       const { error } = await supabase.storage.from('client-documents').upload(path, file, {
-        cacheControl: '3600',
+        cacheControl: '604800', // 7 dias — documentos não mudam
         upsert: true,
         contentType: file.type,
       });
       if (error) throw error;
       await updateCliente.mutateAsync({ id: clienteId, data: { [dbKey]: path } as ClienteUpdate });
-      // Invalida signed URL do path antigo para thumbnail atualizar imediatamente
-      queryClient.invalidateQueries({ queryKey: ['signed_url'] });
+      // Invalida signed URLs (thumb + full) do path antigo para thumbnail atualizar imediatamente
+      queryClient.invalidateQueries({ queryKey: ['signed_url_thumb'] });
+      queryClient.invalidateQueries({ queryKey: ['signed_url_full'] });
       toast.success('Documento enviado');
     } catch (err) {
       toast.error('Falha no upload: ' + (err as Error).message);
@@ -1413,7 +1445,7 @@ function CobrancaTab({ clienteId }: { clienteId: string }) {
                   const { error: upErr } = await supabase.storage
                     .from('comprovantes-acordo')
                     .upload(path, confirmEntradaFile, {
-                      cacheControl: '3600',
+                      cacheControl: '604800', // 7 dias
                       upsert: false,
                       contentType: confirmEntradaFile.type,
                     });

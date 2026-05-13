@@ -6,6 +6,23 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.9.4] — 2026-05-13
+
+### Corrigido — Redução agressiva de egress Supabase
+
+App estava consumindo ~5.85 GB/mês de egress (limite Free: 5 GB). Investigação identificou e corrigiu:
+
+- **Vilão principal**: `getEstatisticas` (WhatsApp) rodava a cada 30s via `useEstatisticasWhatsapp` fazendo `SELECT direcao, status FROM whatsapp_mensagens_log` **sem `LIMIT`** — baixava a tabela inteira a cada refresh. Agora usa 3 `count: 'exact', head: true` em paralelo (Postgres conta no servidor, zero linhas trafegam).
+- **Vilão secundário**: `getConversas` baixava 500 rows com `select('*')` incluindo `metadata` JSON gordo. Restrito a colunas necessárias (`telefone, conteudo, direcao, created_at, metadata, status`).
+- **Signed URLs de documentos**: cada `createSignedUrl` gera JWT novo → URL única → CDN miss. Adicionado `staleTime: 50min` (alinhado ao TTL de 1h do token) em `signed_url_thumb` / `signed_url_full` para reaproveitar a mesma URL e bater o cache CDN.
+- **Image transformations** (Storage): thumbnails de `client-documents` agora servidos como `width: 400, quality: 70` (redução ~90% por imagem); full-res só carrega ao abrir lightbox/hover (lazy via query gated em `signed_url_full`).
+- **`cacheControl: '604800'`** (7 dias) nos uploads de `client-documents`, `comprovantes-acordo` e identity verification → CDN mantém cópia por mais tempo.
+- **Polling WhatsApp**: `useMensagensByTelefone` e `useConversasWhatsapp` reduzidos de 5s → 30s. Realtime subscription continua cobrindo updates instantâneos; polling é só backup.
+
+Esperado: redução de 80–95% no egress mensal.
+
+---
+
 ## [1.9.3] — 2026-05-12
 
 ### Adicionado — Kanban Cobrança · Envio com template + auto-tag + renovação
