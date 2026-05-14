@@ -450,13 +450,23 @@ Deno.serve(async (req: Request) => {
       // GET /v2/cob?inicio=...&fim=...&status=...
       // ════════════════════════════════════════════════════
       case "list_charges": {
-        const { inicio, fim, status: cobStatus, paginacao_pagina_atual } = body;
+        const { inicio, fim, status: cobStatus } = body;
         if (!inicio || !fim) return errorResponse("Campos obrigatórios: inicio, fim (ISO 8601)");
-        let qs = `?inicio=${encodeURIComponent(inicio)}&fim=${encodeURIComponent(fim)}`;
-        if (cobStatus) qs += `&status=${cobStatus}`;
-        if (paginacao_pagina_atual) qs += `&paginacao.paginaAtual=${paginacao_pagina_atual}`;
-        const listResp = await efiRequest(creds, "GET", `/v2/cob${qs}`);
-        return jsonResponse({ success: true, ...listResp });
+        const merged: any = { cobs: [] };
+        let pagina = 0;
+        while (true) {
+          let qs = `?inicio=${encodeURIComponent(inicio)}&fim=${encodeURIComponent(fim)}`;
+          if (cobStatus) qs += `&status=${cobStatus}`;
+          qs += `&paginacao.itensPorPagina=100&paginacao.paginaAtual=${pagina}`;
+          const listResp: any = await efiRequest(creds, "GET", `/v2/cob${qs}`);
+          if (Array.isArray(listResp?.cobs)) merged.cobs.push(...listResp.cobs);
+          const total = listResp?.parametros?.paginacao?.quantidadeTotalDePaginas ?? 1;
+          merged.parametros = listResp?.parametros;
+          pagina += 1;
+          if (pagina >= total) break;
+          if (pagina > 50) break;
+        }
+        return jsonResponse({ success: true, ...merged });
       }
 
       // ════════════════════════════════════════════════════
@@ -608,10 +618,22 @@ Deno.serve(async (req: Request) => {
       case "list_sent_pix": {
         const { inicio: sentInicio, fim: sentFim, status: sentStatus } = body;
         if (!sentInicio || !sentFim) return errorResponse("Campos obrigatórios: inicio, fim");
-        let sentQs = `?inicio=${encodeURIComponent(sentInicio)}&fim=${encodeURIComponent(sentFim)}`;
-        if (sentStatus) sentQs += `&status=${sentStatus}`;
-        const sentList = await efiRequest(creds, "GET", `/v2/gn/pix/enviados${sentQs}`);
-        return jsonResponse({ success: true, ...sentList });
+        // Auto-paginação: itera até esgotar paginas (EFI default 100/pg)
+        const merged: any = { pix: [] };
+        let pagina = 0;
+        while (true) {
+          let sentQs = `?inicio=${encodeURIComponent(sentInicio)}&fim=${encodeURIComponent(sentFim)}`;
+          if (sentStatus) sentQs += `&status=${sentStatus}`;
+          sentQs += `&paginacao.itensPorPagina=100&paginacao.paginaAtual=${pagina}`;
+          const sentList: any = await efiRequest(creds, "GET", `/v2/gn/pix/enviados${sentQs}`);
+          if (Array.isArray(sentList?.pix)) merged.pix.push(...sentList.pix);
+          const total = sentList?.parametros?.paginacao?.quantidadeTotalDePaginas ?? 1;
+          merged.parametros = sentList?.parametros;
+          pagina += 1;
+          if (pagina >= total) break;
+          if (pagina > 50) break; // safety cap (5000 itens)
+        }
+        return jsonResponse({ success: true, ...merged });
       }
 
       // ════════════════════════════════════════════════════
@@ -632,9 +654,21 @@ Deno.serve(async (req: Request) => {
       case "list_pix": {
         const { inicio: pixInicio, fim: pixFim } = body;
         if (!pixInicio || !pixFim) return errorResponse("Campos obrigatórios: inicio, fim");
-        const pixQs = `?inicio=${encodeURIComponent(pixInicio)}&fim=${encodeURIComponent(pixFim)}`;
-        const pixList = await efiRequest(creds, "GET", `/v2/pix${pixQs}`);
-        return jsonResponse({ success: true, ...pixList });
+        // Auto-paginação: a EFI retorna no máximo 100 itens por página.
+        const merged: any = { pix: [] };
+        let pagina = 0;
+        while (true) {
+          const pixQs = `?inicio=${encodeURIComponent(pixInicio)}&fim=${encodeURIComponent(pixFim)}` +
+            `&paginacao.itensPorPagina=100&paginacao.paginaAtual=${pagina}`;
+          const pixList: any = await efiRequest(creds, "GET", `/v2/pix${pixQs}`);
+          if (Array.isArray(pixList?.pix)) merged.pix.push(...pixList.pix);
+          const total = pixList?.parametros?.paginacao?.quantidadeTotalDePaginas ?? 1;
+          merged.parametros = pixList?.parametros;
+          pagina += 1;
+          if (pagina >= total) break;
+          if (pagina > 50) break; // safety cap (5000 itens)
+        }
+        return jsonResponse({ success: true, ...merged });
       }
 
       // ════════════════════════════════════════════════════

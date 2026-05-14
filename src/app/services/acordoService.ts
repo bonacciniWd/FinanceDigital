@@ -8,6 +8,7 @@ import type {
   AcordoUpdate,
   AcordoComCliente,
 } from '../lib/database.types';
+import { registrarInteracao } from './interacoesService';
 
 // ── SELECT ────────────────────────────────────────────────
 
@@ -18,8 +19,9 @@ const ACORDO_SELECT = `
 
 /**
  * Quantidade de dias após a criação em que um acordo sem qualquer pagamento
- * é automaticamente quebrado e o cliente vai parar em N3 (vencido · 46+ dias).
- * Mantenha sincronizado com a função SQL `expire_overdue_acordos`.
+ * é automaticamente quebrado e o cliente volta para uma faixa de vencido
+ * (N1-N4) conforme `diasAtraso` original. Mantenha sincronizado com a função
+ * SQL `expire_overdue_acordos`.
  */
 export const ACORDO_EXPIRACAO_DIAS = 15;
 
@@ -189,10 +191,22 @@ export async function criarAcordo(
     console.error('[acordoService] Erro ao sincronizar status do empréstimo:', e);
   }
 
+  // 6. Registra interação (engine de comissões).
+  try {
+    if (acordo.cliente_id) {
+      await registrarInteracao({
+        clienteId: acordo.cliente_id,
+        tipo: 'acordo_criado',
+        refTabela: 'acordos',
+        refId: novoAcordo.id,
+      });
+    }
+  } catch (e) {
+    console.warn('[acordoService] registrarInteracao falhou:', e);
+  }
+
   return novoAcordo;
 }
-
-// ── UPDATE ────────────────────────────────────────────────
 
 /** Atualiza um acordo (status, observação, etc.). */
 export async function updateAcordo(id: string, updates: AcordoUpdate) {
@@ -214,7 +228,7 @@ export async function cancelarAcordo(id: string) {
   // Buscar acordo para saber quais parcelas descongelar
   const { data: acordo } = await supabase
     .from('acordos')
-    .select('parcelas_originais_ids')
+    .select('parcelas_originais_ids, cliente_id')
     .eq('id', id)
     .single();
 
@@ -240,13 +254,22 @@ export async function cancelarAcordo(id: string) {
     .update({ status: 'cancelada' })
     .eq('acordo_id', id)
     .neq('status', 'paga');
+
+  if (acordo?.cliente_id) {
+    await registrarInteracao({
+      clienteId: acordo.cliente_id,
+      tipo: 'acordo_cancelado',
+      refTabela: 'acordos',
+      refId: id,
+    });
+  }
 }
 
 /** Marca acordo como quebrado (cliente parou de pagar). */
 export async function quebrarAcordo(id: string) {
   const { data: acordo } = await supabase
     .from('acordos')
-    .select('parcelas_originais_ids')
+    .select('parcelas_originais_ids, cliente_id')
     .eq('id', id)
     .single();
 
@@ -263,5 +286,14 @@ export async function quebrarAcordo(id: string) {
       .from('parcelas')
       .update({ congelada: false })
       .in('id', acordo.parcelas_originais_ids);
+  }
+
+  if (acordo?.cliente_id) {
+    await registrarInteracao({
+      clienteId: acordo.cliente_id,
+      tipo: 'acordo_quebrado',
+      refTabela: 'acordos',
+      refId: id,
+    });
   }
 }

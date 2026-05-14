@@ -3,7 +3,7 @@
  * @description Monta a mensagem em texto puro (compatível com WhatsApp) do relatório
  * semanal. Usa formatação leve do WhatsApp (* para negrito, _ para itálico).
  */
-import type { ComissaoSemanalCalculada } from './comissoes-semanais';
+import type { ComissaoResultado } from './comissoes-engine';
 
 export interface DadosRelatorioSemanal {
   periodoInicio: string; // yyyy-mm-dd
@@ -13,7 +13,7 @@ export interface DadosRelatorioSemanal {
   saldoEfi?: number;
   qtdeEmprestimos?: number;
   valorEmprestimos?: number;
-  comissoes: ComissaoSemanalCalculada[];
+  comissoes: ComissaoResultado[];
 }
 
 const fmtBRL = (v: number) =>
@@ -53,16 +53,20 @@ export function montarMensagemRelatorioSemanal(d: DadosRelatorioSemanal): string
     linhas.push('');
     linhas.push('*Comissões / Salários da semana*');
     linhas.push('```');
-    linhas.push(`${padEnd('Funcionário', 12)} ${padEnd('Regra', 22)} ${padStart('Valor', 12)}`);
-    linhas.push('-'.repeat(48));
+    linhas.push(`${padEnd('Func.', 12)} ${padEnd('Papel', 18)} ${padStart('Valor', 12)}`);
+    linhas.push('-'.repeat(46));
     for (const c of d.comissoes) {
+      const idCol = c.userSigla ?? c.userNome.slice(0, 12);
+      const papel = c.nivelKanban
+        ? `Nível ${c.nivelKanban}`
+        : (c.userRole === 'gerente' ? 'Gerente' : c.userRole === 'dono' ? 'Dono' : '—');
       linhas.push(
-        `${padEnd(c.nome, 12)} ${padEnd(c.descricaoRegra, 22)} ${padStart(fmtBRL(c.valorCalculado), 12)}`,
+        `${padEnd(idCol, 12)} ${padEnd(papel, 18)} ${padStart(fmtBRL(c.total), 12)}`,
       );
     }
-    const total = d.comissoes.reduce((s, c) => s + c.valorCalculado, 0);
-    linhas.push('-'.repeat(48));
-    linhas.push(`${padEnd('TOTAL', 35)}${padStart(fmtBRL(total), 12)}`);
+    const total = d.comissoes.reduce((s, c) => s + c.total, 0);
+    linhas.push('-'.repeat(46));
+    linhas.push(`${padEnd('TOTAL', 33)}${padStart(fmtBRL(total), 12)}`);
     linhas.push('```');
   }
 

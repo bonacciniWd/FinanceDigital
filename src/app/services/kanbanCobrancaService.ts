@@ -8,6 +8,7 @@
  * @see database.types para tipagem completa
  */
 import { supabase } from '../lib/supabase';
+import { registrarInteracao } from './interacoesService';
 import { valorCorrigido } from '../lib/juros';
 import type {
   KanbanCobrancaComCliente,
@@ -136,18 +137,30 @@ export async function registrarContato(
   // Primeiro pega o card atual para incrementar tentativas
   const { data: current, error: fetchErr } = await supabase
     .from('kanban_cobranca')
-    .select('tentativas_contato')
+    .select('tentativas_contato, cliente_id')
     .eq('id', id)
     .single();
 
   if (fetchErr) throw new Error(fetchErr.message);
 
-  return updateCardCobranca(id, {
+  const updated = await updateCardCobranca(id, {
     tentativas_contato: (current?.tentativas_contato ?? 0) + 1,
     ultimo_contato: new Date().toISOString(),
     etapa: 'contatado',
     observacao: observacao ?? null,
   });
+
+  if (current?.cliente_id) {
+    await registrarInteracao({
+      clienteId: current.cliente_id,
+      tipo: 'kanban_contato',
+      refTabela: 'kanban_cobranca',
+      refId: id,
+      detalhe: observacao ?? null,
+    });
+  }
+
+  return updated;
 }
 
 /** Deletar card de cobrança */

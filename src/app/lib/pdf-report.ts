@@ -13,8 +13,8 @@
  */
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import logoWide from '../assets/logo-wide.png';
-import type { ComissaoSemanalCalculada } from './comissoes-semanais';
+import logoWide from '../assets/logo-pdf.png';
+import type { ComissaoResultado } from './comissoes-engine';
 
 const fmtBRL = (v: number) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
@@ -94,7 +94,7 @@ export interface RelatorioExecutivoData {
   /** Subtítulo opcional (ex.: nome do operador que gerou) */
   subtitulo?: string;
   /** Comissões semanais calculadas por funcionário (regras de `comissoes_semanais_config`) */
-  comissoesSemanais?: ComissaoSemanalCalculada[];
+  comissoes?: ComissaoResultado[];
   /** Gastos internos classificados no período (categoria · favorecido · valor) */
   gastosInternos?: RelatorioGastoInternoItem[];
 }
@@ -209,18 +209,34 @@ export async function gerarRelatorioExecutivoPdf(
   );
   cursorY += 16;
 
-  // ── Tabela: Comissões semanais por funcionário ──────────
-  if (data.comissoesSemanais && data.comissoesSemanais.length > 0) {
-    const totalComissoes = data.comissoesSemanais.reduce((s, c) => s + c.valorCalculado, 0);
+  // ── Tabela: Comissões da semana — por funcionário (sigla) ──────
+  if (data.comissoes && data.comissoes.length > 0) {
+    const totalComissoes = data.comissoes.reduce((s, c) => s + c.total, 0);
+    // Linha principal por usuário + sub-linhas de breakdown
+    const body: (string | { content: string; styles?: any })[][] = [];
+    for (const c of data.comissoes) {
+      const idCol = c.userSigla
+        ? `${c.userSigla} — ${c.userNome}`
+        : c.userNome;
+      body.push([
+        { content: idCol, styles: { fontStyle: 'bold' } },
+        c.nivelKanban ? `Nível ${c.nivelKanban}` : (c.userRole ?? '—'),
+        `${c.breakdown.length} item(s)`,
+        { content: fmtBRL(c.total), styles: { halign: 'right', fontStyle: 'bold' } },
+      ]);
+      for (const b of c.breakdown) {
+        body.push([
+          { content: `   ↳ ${b.descricao}`, styles: { textColor: [100, 100, 100], fontSize: 7 } },
+          { content: `${b.pct.toFixed(2)}%`, styles: { textColor: [100, 100, 100], fontSize: 7 } },
+          { content: fmtBRL(b.base), styles: { textColor: [100, 100, 100], fontSize: 7, halign: 'right' } },
+          { content: fmtBRL(b.valor), styles: { textColor: [100, 100, 100], fontSize: 7, halign: 'right' } },
+        ]);
+      }
+    }
     autoTable(doc, {
       startY: cursorY,
-      head: [['Funcionário', 'Regra', 'Base', 'Valor da semana']],
-      body: data.comissoesSemanais.map((c) => [
-        c.nome,
-        c.descricaoRegra,
-        c.tipo === 'fixo' ? '—' : fmtBRL(c.base),
-        fmtBRL(c.valorCalculado),
-      ]),
+      head: [['Funcionário (sigla)', 'Papel', 'Base / Itens', 'Valor da semana']],
+      body,
       foot: [['', '', 'TOTAL', fmtBRL(totalComissoes)]],
       styles: { fontSize: 8, cellPadding: 4 },
       headStyles: { fillColor: [120, 53, 15], textColor: 255, fontStyle: 'bold' },

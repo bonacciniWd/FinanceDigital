@@ -5,6 +5,7 @@
  * @see database.types para tipagem completa
  */
 import { supabase } from '../lib/supabase';
+import { registrarInteracao } from './interacoesService';
 import type {
   Parcela,
   ParcelaInsert,
@@ -119,6 +120,18 @@ export async function updateParcela(id: string, updates: ParcelaUpdate): Promise
     .single();
 
   if (error) throw new Error(error.message);
+
+  // Se a parcela foi marcada como paga, registra interação (regra anti-fraude
+  // do engine de comissões).
+  if (data?.status === 'paga' && data?.cliente_id) {
+    await registrarInteracao({
+      clienteId: data.cliente_id,
+      tipo: 'parcela_paga',
+      refTabela: 'parcelas',
+      refId: data.id,
+    });
+  }
+
   return data;
 }
 

@@ -72,6 +72,46 @@ async function callEfi<T = any>(action: string, params: Record<string, any>): Pr
   return result as T;
 }
 
+/**
+ * Divide um período ISO em janelas de até `windowDays` dias e concatena
+ * os resultados de uma listagem EFI no campo `arrayKey` (ex.: 'pix', 'cobs').
+ * A EFI tem limite hard de ~60 dias por consulta — usamos 30 dias por
+ * segurança e para reduzir timeout da Edge Function quando há muitas páginas.
+ */
+async function chunkPorJanela<T extends { success?: boolean; [k: string]: any }>(
+  params: EfiDateRangeParams,
+  fetcher: (p: EfiDateRangeParams) => Promise<T>,
+  arrayKey: string,
+  windowDays = 30
+): Promise<T> {
+  const inicioMs = Date.parse(params.inicio);
+  const fimMs = Date.parse(params.fim);
+  if (!Number.isFinite(inicioMs) || !Number.isFinite(fimMs) || fimMs <= inicioMs) {
+    return fetcher(params);
+  }
+  const totalDias = (fimMs - inicioMs) / 86_400_000;
+  if (totalDias <= windowDays) return fetcher(params);
+
+  const stepMs = windowDays * 86_400_000;
+  const ranges: Array<{ inicio: string; fim: string }> = [];
+  for (let s = inicioMs; s < fimMs; s += stepMs) {
+    const e = Math.min(s + stepMs - 1000, fimMs); // -1s para evitar overlap
+    ranges.push({ inicio: new Date(s).toISOString(), fim: new Date(e).toISOString() });
+  }
+
+  const responses = await Promise.all(
+    ranges.map((r) => fetcher({ ...params, ...r }))
+  );
+
+  const merged: any = { success: true, [arrayKey]: [] };
+  for (const r of responses) {
+    const arr = (r as any)[arrayKey];
+    if (Array.isArray(arr)) merged[arrayKey].push(...arr);
+    if ((r as any).parametros) merged.parametros = (r as any).parametros;
+  }
+  return merged as T;
+}
+
 // ── Cobranças imediatas (cob) ─────────────────────────────
 
 /** Criar cobrança Pix imediata via EFI */
@@ -120,7 +160,7 @@ export async function efiConsultarPixEnviado(id_envio: string) {
 
 /** Listar Pix enviados por período */
 export async function efiListarPixEnviados(params: EfiDateRangeParams) {
-  return callEfi('list_sent_pix', params);
+  return chunkPorJanela(params, (p) => callEfi('list_sent_pix', p), 'pix');
 }
 
 // ── Gestão de Pix (recebidos + devoluções) ────────────────
@@ -132,7 +172,7 @@ export async function efiConsultarPix(e2e_id: string) {
 
 /** Listar Pix recebidos por período */
 export async function efiListarPix(params: EfiDateRangeParams) {
-  return callEfi('list_pix', params);
+  return chunkPorJanela(params, (p) => callEfi('list_pix', p), 'pix');
 }
 
 /** Solicitar devolução de Pix — admin only */

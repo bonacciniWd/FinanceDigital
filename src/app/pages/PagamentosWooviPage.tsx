@@ -70,10 +70,9 @@ import { PeriodoSelector, getPresetRange, type PeriodoRange } from '../component
 import GastosInternosPage from './GastosInternosPage';
 import RelatorioComissoesPage from './RelatorioComissoesPage';
 import { ExtratoBancarioSemanalCard } from '../components/ExtratoBancarioSemanalCard';
-import { ComissoesSemanaisCard } from '../components/ComissoesSemanaisCard';
+import { ComissoesConfigCard } from '../components/ComissoesConfigCard';
 import { RelatorioSemanalWhatsappCard } from '../components/RelatorioSemanalWhatsappCard';
-import { useComissoesSemanaisConfigs } from '../hooks/useComissoesSemanais';
-import { calcularComissoesSemanais } from '../lib/comissoes-semanais';
+import { computarComissoesPeriodo, useComissoesCalculo } from '../hooks/useComissoesCalculo';
 import {
   useCobrancasWoovi,
   useTransacoesWoovi,
@@ -265,7 +264,6 @@ export default function PagamentosWooviPage() {
     extratoConsolidadoInicio,
     extratoConsolidadoFim
   );
-  const { data: comissoesConfigs = [] } = useComissoesSemanaisConfigs();
   const importExtrato = useImportExtratoJson();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -345,26 +343,47 @@ export default function PagamentosWooviPage() {
 
   // Merge COMPLETED EFI charges from DB (bot + manual) into extrato, deduplicating
   const extratoItemsMerged = useMemo<ExtratoItem[]>(() => {
-    // Se há movimentações consolidadas importadas no período, elas são a
-    // fonte de verdade absoluta (cobrem TUDO: PIX, TED, tarifas, recargas, etc.).
-    // Substituem completamente o cálculo PIX-only da API EFI.
-    if (movimentacoesConsolidadas.length > 0) {
-      return movimentacoesConsolidadas
-        .filter((m) => !m.ehSaldoDiario && (m.direction === 'entrada' || m.direction === 'saida'))
-        .map<ExtratoItem>((m) => ({
-          id: m.id,
-          direction: m.direction as 'entrada' | 'saida',
-          valor: m.valor,
-          horario: `${m.data}T00:00:00`,
-          e2eId: m.protocolo ? String(m.protocolo) : '',
-          nome: m.contraparteNome || '',
-          descricao: m.descricaoCompleta,
-          status: 'CONFIRMED',
-        }))
-        .sort((a, b) => new Date(b.horario).getTime() - new Date(a.horario).getTime());
+    // Movimentações consolidadas (CNAB) cobrem TUDO (PIX, TED, tarifas, recargas)
+    // mas só até a data do último extrato semanal importado. Para datas posteriores,
+    // complementamos com PIX-API da EFI para que o filtro "7d/30d" não fique truncado
+    // ao último dia importado.
+    const movsValidas = movimentacoesConsolidadas.filter(
+      (m) => !m.ehSaldoDiario && (m.direction === 'entrada' || m.direction === 'saida')
+    );
+
+    const cnabItems: ExtratoItem[] = movsValidas.map((m) => ({
+      id: m.id,
+      direction: m.direction as 'entrada' | 'saida',
+      valor: m.valor,
+      horario: `${m.data}T00:00:00`,
+      e2eId: m.protocolo ? String(m.protocolo) : '',
+      nome: m.contraparteNome || '',
+      descricao: m.descricaoCompleta,
+      status: 'CONFIRMED',
+    }));
+
+    // Maior data (yyyy-MM-dd) coberta pelo CNAB no período selecionado
+    const ultimaDataCNAB = movsValidas.reduce<string>(
+      (max, m) => (m.data > max ? m.data : max),
+      ''
+    );
+    const periodoFimYmd = format(periodoFim, 'yyyy-MM-dd');
+
+    // Se o CNAB cobre TUDO até o fim do período, não precisamos da PIX-API
+    if (ultimaDataCNAB && ultimaDataCNAB >= periodoFimYmd) {
+      return cnabItems.sort((a, b) => new Date(b.horario).getTime() - new Date(a.horario).getTime());
     }
 
-    const items = [...extratoItems];
+    // Caso contrário: CNAB cobre [periodoInicio .. ultimaDataCNAB], PIX-API cobre o resto.
+    // Inclui PIX-API só para datas > ultimaDataCNAB (ou tudo se não há CNAB).
+    const pixApiItems = ultimaDataCNAB
+      ? extratoItems.filter((it) => {
+          const ymd = (it.horario || '').slice(0, 10);
+          return ymd > ultimaDataCNAB;
+        })
+      : extratoItems;
+
+    const items = [...cnabItems, ...pixApiItems];
 
     // Build a set of known txids/e2eIds to avoid duplicates
     const knownIds = new Set<string>();
@@ -422,8 +441,24 @@ export default function PagamentosWooviPage() {
     return { entradas, saidas, saldo: entradas - saidas };
   }, [extratoItemsMerged]);
 
-  // Indica se o período exibido vem do extrato consolidado (cobre TUDO) ou só PIX
-  const extratoCobreTudo = movimentacoesConsolidadas.length > 0;
+  const { data: comissoesResult = [] } = useComissoesCalculo({
+    inicio: format(periodoInicio, 'yyyy-MM-dd'),
+    fim: format(periodoFim, 'yyyy-MM-dd'),
+    totalEntradas: extratoTotals.entradas,
+  });
+
+  // Indica se o período exibido vem do extrato consolidado (cobre TUDO) ou só PIX.
+  // Só é "cobre tudo" quando o CNAB importado chega até o fim do período selecionado;
+  // caso contrário, parte do período é PIX-only (vem da API EFI).
+  const extratoCobreTudo = useMemo(() => {
+    const movsValidas = movimentacoesConsolidadas.filter((m) => !m.ehSaldoDiario);
+    if (movsValidas.length === 0) return false;
+    const ultimaDataCNAB = movsValidas.reduce<string>(
+      (max, m) => (m.data > max ? m.data : max),
+      ''
+    );
+    return ultimaDataCNAB >= format(periodoFim, 'yyyy-MM-dd');
+  }, [movimentacoesConsolidadas, periodoFim]);
 
   // Handler de upload do JSON exportado do painel EFI
   const handleImportExtratoJson = async (file: File) => {
@@ -687,10 +722,10 @@ export default function PagamentosWooviPage() {
       ? parseFloat(efiBalanceData.balance.saldo)
       : undefined;
 
-    const comissoesCalc = calcularComissoesSemanais({
-      configs: comissoesConfigs,
+    const comissoesCalc = await computarComissoesPeriodo({
+      inicio: format(periodoInicio, 'yyyy-MM-dd'),
+      fim: format(periodoFim, 'yyyy-MM-dd'),
       totalEntradas: extratoTotals.entradas,
-      totalSaidas: extratoTotals.saidas,
     });
 
     const { data: gastosData } = await supabase
@@ -729,7 +764,7 @@ export default function PagamentosWooviPage() {
       })),
       saldoEfi: saldoEfiNum,
       subtitulo: user?.name ? `Gerado por ${user.name}` : undefined,
-      comissoesSemanais: comissoesCalc,
+      comissoes: comissoesCalc,
       gastosInternos: gastosPdf,
     };
   };
@@ -1489,12 +1524,13 @@ export default function PagamentosWooviPage() {
 
         {/* ── Tab: Comissões ────────────────────────────── */}
         <TabsContent value="comissoes" className="space-y-4">
-          <ComissoesSemanaisCard
+          <ComissoesConfigCard
             totalEntradas={extratoTotals.entradas}
-            totalSaidas={extratoTotals.saidas}
+            inicio={format(periodoInicio, 'yyyy-MM-dd')}
+            fim={format(periodoFim, 'yyyy-MM-dd')}
             periodoLabel={`${format(periodoInicio, 'dd/MM', { locale: ptBR })} a ${format(periodoFim, 'dd/MM', { locale: ptBR })}`}
           />
-          <RelatorioComissoesPage embedded />
+          
         </TabsContent>
 
         {/* ── Tab: Envios Automáticos ───────────────────── */}
@@ -1517,11 +1553,7 @@ export default function PagamentosWooviPage() {
                   return t >= periodoInicio.getTime() && t <= periodoFim.getTime();
                 })
                 .reduce((s, e) => s + e.valor, 0),
-              comissoes: calcularComissoesSemanais({
-                configs: comissoesConfigs,
-                totalEntradas: extratoTotals.entradas,
-                totalSaidas: extratoTotals.saidas,
-              }),
+              comissoes: comissoesResult,
             }}
           />
           <ExtratoBancarioSemanalCard />

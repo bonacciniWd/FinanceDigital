@@ -1,73 +1,11 @@
 /**
  * @module comissoesSemanaisService
- * @description CRUD para `comissoes_semanais_config` e `relatorio_semanal_destinatarios`.
+ * @description CRUD para `relatorio_semanal_destinatarios` e envios.
+ *
+ * NOTA: as funções de `comissoes_semanais_config` foram removidas (legacy).
+ * Use `comissoesConfigService.ts` para o novo modelo de comissões.
  */
 import { supabase } from '../lib/supabase';
-import type { ComissaoSemanalConfig, TipoRegraComissao } from '../lib/comissoes-semanais';
-
-export interface UpsertComissaoConfigInput {
-  id?: string;
-  nome: string;
-  userId?: string | null;
-  tipo: TipoRegraComissao;
-  valorPct?: number;
-  valorFixo?: number;
-  ativo?: boolean;
-  ordem?: number;
-  observacao?: string | null;
-}
-
-function mapConfig(r: Record<string, unknown>): ComissaoSemanalConfig {
-  return {
-    id: r.id as string,
-    nome: r.nome as string,
-    userId: (r.user_id as string | null) ?? null,
-    tipo: r.tipo as TipoRegraComissao,
-    valorPct: Number(r.valor_pct ?? 0),
-    valorFixo: Number(r.valor_fixo ?? 0),
-    ativo: !!r.ativo,
-    ordem: Number(r.ordem ?? 0),
-    observacao: (r.observacao as string | null) ?? null,
-  };
-}
-
-export async function listComissoesConfigs(): Promise<ComissaoSemanalConfig[]> {
-  const { data, error } = await supabase
-    .from('comissoes_semanais_config')
-    .select('*')
-    .order('ordem', { ascending: true })
-    .order('nome', { ascending: true });
-  if (error) throw error;
-  return (data ?? []).map((r) => mapConfig(r as Record<string, unknown>));
-}
-
-export async function upsertComissaoConfig(input: UpsertComissaoConfigInput): Promise<void> {
-  const payload: Record<string, unknown> = {
-    nome: input.nome.trim(),
-    user_id: input.userId ?? null,
-    tipo: input.tipo,
-    valor_pct: input.valorPct ?? 0,
-    valor_fixo: input.valorFixo ?? 0,
-    ativo: input.ativo ?? true,
-    ordem: input.ordem ?? 0,
-    observacao: input.observacao ?? null,
-  };
-  if (input.id) {
-    const { error } = await supabase
-      .from('comissoes_semanais_config')
-      .update(payload)
-      .eq('id', input.id);
-    if (error) throw error;
-  } else {
-    const { error } = await supabase.from('comissoes_semanais_config').insert(payload);
-    if (error) throw error;
-  }
-}
-
-export async function deleteComissaoConfig(id: string): Promise<void> {
-  const { error } = await supabase.from('comissoes_semanais_config').delete().eq('id', id);
-  if (error) throw error;
-}
 
 // ────── Destinatários do relatório semanal ──────
 export interface RelatorioSemanalDestinatario {

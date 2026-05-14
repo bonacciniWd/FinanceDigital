@@ -19,6 +19,7 @@ export interface AdminUser {
   email: string;
   role: string;
   avatar_url: string | null;
+  sigla: string | null;
   created_at: string;
   updated_at: string;
 }

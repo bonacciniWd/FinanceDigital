@@ -58,6 +58,7 @@ export interface Database {
           email: string;
           role: UserRole;
           avatar_url: string | null;
+          sigla: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -67,12 +68,14 @@ export interface Database {
           email: string;
           role?: UserRole;
           avatar_url?: string | null;
+          sigla?: string | null;
         };
         Update: {
           name?: string;
           email?: string;
           role?: UserRole;
           avatar_url?: string | null;
+          sigla?: string | null;
           updated_at?: string;
         };
       };
@@ -234,6 +237,7 @@ export interface Database {
           desembolsado: boolean;
           desembolsado_em: string | null;
           desembolsado_por: string | null;
+          criado_por: string | null;
           skip_verification: boolean;
           created_at: string;
           updated_at: string;
@@ -259,6 +263,7 @@ export interface Database {
           desembolsado?: boolean;
           desembolsado_em?: string | null;
           desembolsado_por?: string | null;
+          criado_por?: string | null;
           skip_verification?: boolean;
         };
         Update: {
@@ -281,6 +286,7 @@ export interface Database {
           desembolsado?: boolean;
           desembolsado_em?: string | null;
           desembolsado_por?: string | null;
+          criado_por?: string | null;
           skip_verification?: boolean;
           updated_at?: string;
         };

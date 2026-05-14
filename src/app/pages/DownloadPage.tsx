@@ -123,7 +123,15 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.9.4', date: '13 Mai 2026', isLatest: true, items: [
+  { version: '1.9.5', date: '14 Mai 2026', isLatest: true, items: [
+    'Comissões · engine reformulado: cobradores agora agrupados em N1+N2 (recente, 1-30 dias) e N3+N4 (antigo, 31+ dias) — fim das tabelas duplicadas N1/N2 e N3/N4',
+    'Comissões · base de cálculo corrigida: % aplicado APENAS sobre parcelas/acordos EFETIVAMENTE PAGOS no período (antes inflava com "acordos fechados" mesmo sem pagamento)',
+    'Comissões · nova página de configuração: cadastro de % por grupo, Gerente (% sobre entradas) e Dono (% sobre entradas) com edição inline',
+    'Extratos EFI · fix crítico: filtro "7d/30d" não mostrava mais movimentações posteriores ao último extrato CNAB importado — agora CNAB cobre até o último dia importado e PIX-API complementa o restante automaticamente',
+    'Extratos EFI · auto-paginação na Edge Function (PIX recebidos, PIX enviados, cobranças): suporte a >100 itens por consulta',
+    'Extratos EFI · chunking client-side em períodos >30 dias: contorna limite hard de 60 dias da API EFI dividindo em janelas paralelas',
+  ]},
+  { version: '1.9.4', date: '13 Mai 2026', isLatest: false, items: [
     'Redução agressiva de egress Supabase: corrigida query de estatísticas WhatsApp que baixava tabela inteira a cada 30s (agora usa COUNT no servidor)',
     'Conversas WhatsApp: query reduzida a colunas necessárias (removido metadata JSON gordo)',
     'Documentos: thumbnails servidos em 400px qualidade 70 (~90% menos bytes); full-size carrega só ao abrir lightbox',

@@ -5,6 +5,7 @@
  * @see database.types para tipagem completa
  */
 import { supabase } from '../lib/supabase';
+import { registrarInteracao } from './interacoesService';
 import type {
   Emprestimo,
   EmprestimoInsert,
@@ -68,13 +69,31 @@ export async function getEmprestimoById(id: string): Promise<EmprestimoComClient
 /** Criar novo empréstimo */
 export async function createEmprestimo(emprestimo: EmprestimoInsert): Promise<Emprestimo> {
 
+  // Auto-preenche criado_por com o usuário autenticado (para a regra de
+  // comissão N3/N4 sobre empréstimos cadastrados pelo cobrador).
+  let payload = emprestimo;
+  if (!payload.criado_por) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) payload = { ...payload, criado_por: user.id };
+  }
+
   const { data, error } = await supabase
     .from('emprestimos')
-    .insert(emprestimo)
+    .insert(payload)
     .select()
     .single();
 
   if (error) throw new Error(error.message);
+
+  if (data?.cliente_id) {
+    await registrarInteracao({
+      clienteId: data.cliente_id,
+      tipo: 'emprestimo_criado',
+      refTabela: 'emprestimos',
+      refId: data.id,
+    });
+  }
+
   return data;
 }
 

@@ -2,35 +2,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as service from '../services/comissoesSemanaisService';
 
 const KEYS = {
-  configs: 'comissoes_semanais_configs',
   destinatarios: 'relatorio_semanal_destinatarios',
   envios: 'relatorio_semanal_envios',
 };
-
-// ── Configurações de comissões semanais ──
-export function useComissoesSemanaisConfigs() {
-  return useQuery({
-    queryKey: [KEYS.configs],
-    queryFn: () => service.listComissoesConfigs(),
-    staleTime: 60_000,
-  });
-}
-
-export function useUpsertComissaoConfig() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: service.UpsertComissaoConfigInput) => service.upsertComissaoConfig(input),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [KEYS.configs] }),
-  });
-}
-
-export function useDeleteComissaoConfig() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => service.deleteComissaoConfig(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [KEYS.configs] }),
-  });
-}
 
 // ── Destinatários do relatório semanal ──
 export function useRelatorioDestinatarios() {

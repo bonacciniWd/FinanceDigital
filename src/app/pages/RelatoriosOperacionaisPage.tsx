@@ -20,6 +20,7 @@ import { useParcelas } from '../hooks/useParcelas';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useCardsCobranca } from '../hooks/useKanbanCobranca';
 import { useClientes } from '../hooks/useClientes';
+import { FAIXAS_COBRANCA, nivelPorDias } from '../lib/faixas-cobranca';
 
 const MESES_NOME = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
 
@@ -116,19 +117,22 @@ export default function RelatoriosOperacionaisPage() {
     });
   }, [parcelas]);
 
-  // ── Eficiência de Cobrança por Etapa (com N1/N2/N3) ──
+  // ── Eficiência de Cobrança por Etapa (com N1/N2/N3/N4) ──
   const cobrancaData = useMemo(() => {
     if (!cardsCobranca) return [];
     const vencidos = cardsCobranca.filter((c) => c.etapa === 'vencido');
-    const n1Cards = vencidos.filter((c) => c.diasAtraso >= 1 && c.diasAtraso <= 15);
-    const n2Cards = vencidos.filter((c) => c.diasAtraso >= 16 && c.diasAtraso <= 45);
-    const n3Cards = vencidos.filter((c) => c.diasAtraso >= 46);
+    const cardsPorNivel = FAIXAS_COBRANCA.map((f) => ({
+      faixa: f,
+      cards: vencidos.filter((c) => c.diasAtraso >= f.diaMin && c.diasAtraso <= f.diaMax),
+    }));
 
     type EtapaDef = { etapa: string; cards: typeof cardsCobranca; successFn: (c: typeof cardsCobranca) => number };
     const etapas: EtapaDef[] = [
-      { etapa: 'N1 — Vencido (1-15d)', cards: n1Cards, successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
-      { etapa: 'N2 — Vencido (16-45d)', cards: n2Cards, successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
-      { etapa: 'N3 — Vencido (46d+)', cards: n3Cards, successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
+      ...cardsPorNivel.map(({ faixa, cards }) => ({
+        etapa: `${faixa.nivel.toUpperCase()} — Vencido (${faixa.diaMin}-${faixa.diaMax}d)`,
+        cards,
+        successFn: (cs: typeof cardsCobranca) => cs.filter((c) => c.tentativasContato >= 1).length,
+      })),
       { etapa: '1° Contato', cards: cardsCobranca.filter((c) => c.etapa === 'contatado'), successFn: (cs) => cs.filter((c) => c.tentativasContato >= 1).length },
       { etapa: 'Negociação', cards: cardsCobranca.filter((c) => c.etapa === 'negociacao'), successFn: (cs) => cs.filter((c) => c.tentativasContato >= 2).length },
       { etapa: 'Acordo', cards: cardsCobranca.filter((c) => c.etapa === 'acordo'), successFn: (cs) => cs.length },
@@ -147,10 +151,10 @@ export default function RelatoriosOperacionaisPage() {
   // ── Desempenho por Responsável ──
   const userCobrancaData = useMemo(() => {
     if (!cardsCobranca) return [];
-    const byUser = new Map<string, { nome: string; total: number; contatados: number; acordos: number; pagos: number; perdidos: number; n1: number; n2: number; n3: number }>();
+    const byUser = new Map<string, { nome: string; total: number; contatados: number; acordos: number; pagos: number; perdidos: number; n1: number; n2: number; n3: number; n4: number }>();
     for (const c of cardsCobranca) {
       const nome = c.responsavelNome || 'Sem responsável';
-      if (!byUser.has(nome)) byUser.set(nome, { nome, total: 0, contatados: 0, acordos: 0, pagos: 0, perdidos: 0, n1: 0, n2: 0, n3: 0 });
+      if (!byUser.has(nome)) byUser.set(nome, { nome, total: 0, contatados: 0, acordos: 0, pagos: 0, perdidos: 0, n1: 0, n2: 0, n3: 0, n4: 0 });
       const u = byUser.get(nome)!;
       u.total++;
       if (c.etapa === 'contatado') u.contatados++;
@@ -158,9 +162,11 @@ export default function RelatoriosOperacionaisPage() {
       if (c.etapa === 'pago') u.pagos++;
       if (c.etapa === 'perdido') u.perdidos++;
       if (c.etapa === 'vencido') {
-        if (c.diasAtraso >= 1 && c.diasAtraso <= 15) u.n1++;
-        else if (c.diasAtraso >= 16 && c.diasAtraso <= 45) u.n2++;
-        else if (c.diasAtraso >= 46) u.n3++;
+        const nivel = nivelPorDias(c.diasAtraso);
+        if (nivel === 'n1') u.n1++;
+        else if (nivel === 'n2') u.n2++;
+        else if (nivel === 'n3') u.n3++;
+        else if (nivel === 'n4') u.n4++;
       }
     }
     return Array.from(byUser.values()).sort((a, b) => b.total - a.total);
@@ -419,6 +425,7 @@ export default function RelatoriosOperacionaisPage() {
                         <th className="py-2 px-2 font-medium text-center text-yellow-600">N1</th>
                         <th className="py-2 px-2 font-medium text-center text-orange-600">N2</th>
                         <th className="py-2 px-2 font-medium text-center text-red-600">N3</th>
+                        <th className="py-2 px-2 font-medium text-center text-red-800">N4</th>
                         <th className="py-2 px-2 font-medium text-center">Contatados</th>
                         <th className="py-2 px-2 font-medium text-center">Acordos</th>
                         <th className="py-2 px-2 font-medium text-center text-green-600">Pagos</th>
@@ -436,6 +443,7 @@ export default function RelatoriosOperacionaisPage() {
                             <td className="py-2 px-2 text-center text-yellow-600 font-medium">{u.n1 || '-'}</td>
                             <td className="py-2 px-2 text-center text-orange-600 font-medium">{u.n2 || '-'}</td>
                             <td className="py-2 px-2 text-center text-red-600 font-medium">{u.n3 || '-'}</td>
+                            <td className="py-2 px-2 text-center text-red-800 font-medium">{u.n4 || '-'}</td>
                             <td className="py-2 px-2 text-center">{u.contatados || '-'}</td>
                             <td className="py-2 px-2 text-center">{u.acordos || '-'}</td>
                             <td className="py-2 px-2 text-center text-green-600 font-medium">{u.pagos || '-'}</td>

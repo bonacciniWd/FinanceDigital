@@ -6,6 +6,23 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
+## [1.9.5] — 2026-05-14
+
+### Reformulado — Engine de comissões
+
+- **Agrupamento N1+N2 e N3+N4**: cobradores agora têm uma configuração única por grupo (recente 1–30 dias / antigo 31+ dias) em vez de quatro tabelas separadas. Fim da duplicação na UI quando o mesmo usuário aparecia em N1 e N2.
+- **Base de cálculo = pagamentos reais**: o engine não usa mais `valor_divida_original` de "acordos fechados" como base — agora aplica os percentuais **apenas sobre parcelas e acordos EFETIVAMENTE PAGOS** no período. Antes uma carteira de R$48.696 fechada (sem pagamento) gerava R$3.895 de comissão fantasma.
+- **Página de configuração**: novo card permite cadastrar % por grupo, Gerente (% sobre entradas) e Dono (% sobre entradas).
+- DB migrations 080–083: `emprestimos.criado_por_profiles_sigla`, tabela `comissoes_config`, drop de tabela legada `interacoes_cliente_comissoes`, `dono.user_id` opcional.
+
+### Corrigido — Extratos EFI
+
+- **Fix crítico do filtro "7d/30d"**: quando havia qualquer extrato CNAB importado no período, a UI substituía completamente os dados da API EFI — fazendo desaparecer todas as movimentações posteriores ao último dia importado. Agora o CNAB cobre `[início … último_dia_CNAB]` e a API PIX complementa `(último_dia_CNAB … fim]`.
+- **Auto-paginação na Edge Function `efi`**: `list_pix`, `list_sent_pix` e `list_charges` agora iteram `paginacao.paginaAtual` até esgotar (cap 50 págs / 5000 itens), em vez de retornar apenas a primeira página de 100.
+- **Chunking client-side**: períodos >30 dias são divididos em janelas paralelas em `efiListarPix` / `efiListarPixEnviados`, contornando o limite hard de 60 dias da API EFI.
+
+---
+
 ## [1.9.4] — 2026-05-13
 
 ### Corrigido — Redução agressiva de egress Supabase

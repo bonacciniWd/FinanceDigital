@@ -72,6 +72,7 @@ import { useClienteModal } from '../contexts/ClienteModalContext';
 import type { ParcelaUpdate } from '../lib/database.types';
 import type { KanbanCobrancaView, Emprestimo } from '../lib/view-types';
 import type { KanbanCobrancaEtapa } from '../lib/database.types';
+import { FAIXAS_COBRANCA, DIAS_ARQUIVAMENTO } from '../lib/faixas-cobranca';
 
 interface ColumnDef {
   id: string;
@@ -85,6 +86,7 @@ const VIRTUAL_ETAPA_MAP: Record<string, KanbanCobrancaEtapa> = {
   vencido_n1: 'vencido',
   vencido_n2: 'vencido',
   vencido_n3: 'vencido',
+  vencido_n4: 'vencido',
 };
 
 const columnToEtapa = (colId: string): KanbanCobrancaEtapa =>
@@ -92,9 +94,7 @@ const columnToEtapa = (colId: string): KanbanCobrancaEtapa =>
 
 const COLUMNS: ColumnDef[] = [
   { id: 'vence_hoje',  title: 'VENCE HOJE',       dotColor: '#facc15' },
-  { id: 'vencido_n1',  title: 'N1 · 1-15 dias',   dotColor: '#f97316' },
-  { id: 'vencido_n2',  title: 'N2 · 16-45 dias',  dotColor: '#ef4444' },
-  { id: 'vencido_n3',  title: 'N3 · 46+ dias',     dotColor: '#991b1b' },
+  ...FAIXAS_COBRANCA.map((f) => ({ id: f.colId, title: f.titulo.toUpperCase(), dotColor: f.dotColor })),
   { id: 'arquivado',   title: 'ARQUIVADOS',       dotColor: '#64748b' },
   { id: 'contatado',   title: 'CONTATADO',         dotColor: '#3b82f6' },
   { id: 'negociacao',  title: 'NEGOCIAÇÃO',        dotColor: '#f97316' },
@@ -315,13 +315,19 @@ export default function KanbanCobrancaPage() {
           return info.proxVencFuturo === todayStr;
         });
       } else if (col.id === 'vencido_n1') {
-        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 1 && c.diasAtraso <= 15);
+        const f = FAIXAS_COBRANCA[0];
+        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= f.diaMin && c.diasAtraso <= f.diaMax);
       } else if (col.id === 'vencido_n2') {
-        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 16 && c.diasAtraso <= 45);
+        const f = FAIXAS_COBRANCA[1];
+        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= f.diaMin && c.diasAtraso <= f.diaMax);
       } else if (col.id === 'vencido_n3') {
-        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= 46 && c.diasAtraso <= 365);
+        const f = FAIXAS_COBRANCA[2];
+        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= f.diaMin && c.diasAtraso <= f.diaMax);
+      } else if (col.id === 'vencido_n4') {
+        const f = FAIXAS_COBRANCA[3];
+        list = filteredCards.filter((c) => c.etapa === 'vencido' && c.diasAtraso >= f.diaMin && c.diasAtraso <= f.diaMax);
       } else if (col.id === 'arquivado') {
-        list = filteredCards.filter((c) => c.etapa === 'arquivado' || (c.etapa === 'vencido' && c.diasAtraso > 365));
+        list = filteredCards.filter((c) => c.etapa === 'arquivado' || (c.etapa === 'vencido' && c.diasAtraso > DIAS_ARQUIVAMENTO));
       } else {
         list = filteredCards.filter((c) => c.etapa === col.id);
       }
@@ -345,7 +351,7 @@ export default function KanbanCobrancaPage() {
     // que são exibidos na coluna ARQUIVADOS por regra de negócio.
     const cardsAtivos = allCards.filter((c) => {
       if (['pago', 'perdido', 'arquivado'].includes(c.etapa)) return false;
-      if (c.etapa === 'vencido' && c.diasAtraso > 365) return false;
+      if (c.etapa === 'vencido' && c.diasAtraso > DIAS_ARQUIVAMENTO) return false;
       return true;
     });
     const total = cardsAtivos.reduce((sum, c) => sum + c.valorDivida, 0);
