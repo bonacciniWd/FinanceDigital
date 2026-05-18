@@ -20,7 +20,7 @@ import { useParcelas } from '../hooks/useParcelas';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useMembrosRede } from '../hooks/useRedeIndicacoes';
 import { useAnalises } from '../hooks/useAnaliseCredito';
-import { valorCorrigido } from '../lib/juros';
+import { totalCorrigidoEmprestimo } from '../lib/juros';
 import { toast } from 'sonner';
 
 interface Relatorio {
@@ -94,17 +94,28 @@ export default function RelatoriosPage() {
 
   const loading = loadingClientes || loadingParcelas || loadingMembros || loadingEmprestimos || loadingAnalises;
 
-  // Mapa: clienteId → dívida corrigida (soma das parcelas abertas com juros)
+  // Mapa: clienteId → dívida corrigida (soma das parcelas abertas com juros,
+  // capada por empréstimo pelo teto global de 220% após >90d de atraso).
   const clienteDebitoMap = useMemo(() => {
     const map = new Map<string, number>();
-    if (!parcelas) return map;
+    if (!parcelas || !emprestimos) return map;
+    // 1) Indexa parcelas abertas por emprestimoId
+    const parcelasPorEmp = new Map<string, typeof parcelas>();
     for (const p of parcelas) {
       if (p.status === 'paga' || p.status === 'cancelada') continue;
-      const corrigido = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total;
-      map.set(p.clienteId, (map.get(p.clienteId) ?? 0) + corrigido);
+      const arr = parcelasPorEmp.get(p.emprestimoId) ?? [];
+      arr.push(p);
+      parcelasPorEmp.set(p.emprestimoId, arr);
+    }
+    // 2) Para cada empréstimo, calcula saldo capped e soma no cliente
+    for (const e of emprestimos) {
+      const ps = parcelasPorEmp.get(e.id);
+      if (!ps || ps.length === 0) continue;
+      const { total } = totalCorrigidoEmprestimo(e.valor, ps);
+      map.set(e.clienteId, (map.get(e.clienteId) ?? 0) + total);
     }
     return map;
-  }, [parcelas]);
+  }, [parcelas, emprestimos]);
 
   /** Retorna o débito corrigido do cliente (parcelas abertas com juros) ou c.valor como fallback */
   const debitoCliente = (c: { id: string; valor: number }) => clienteDebitoMap.get(c.id) ?? c.valor;
@@ -165,14 +176,27 @@ export default function RelatoriosPage() {
 
   // ── Dados do Preview Inadimplência ──
   const inadimplenciaPreview = useMemo(() => {
-    if (!clientes || !parcelas) return null;
+    if (!clientes || !parcelas || !emprestimos) return null;
     const totalClientes = clientes.length;
     const inadimplentes = clientes.filter((c) => c.status === 'vencido');
     const qtdInadimplentes = inadimplentes.length;
     const taxaInadimplencia =
       totalClientes > 0 ? ((qtdInadimplentes / totalClientes) * 100).toFixed(1) : '0';
-    const parcelasVencidas = parcelas.filter((p) => p.status === 'vencida');
-    const valorEmAtraso = parcelasVencidas.reduce((s, p) => s + valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto).total, 0);
+    // valorEmAtraso aplica teto por empréstimo (220% após >90d). Soma parcelas
+    // VENCIDAS agrupadas por emprestimoId e usa principal para cap.
+    const vencidasPorEmp = new Map<string, typeof parcelas>();
+    for (const p of parcelas) {
+      if (p.status !== 'vencida') continue;
+      const arr = vencidasPorEmp.get(p.emprestimoId) ?? [];
+      arr.push(p);
+      vencidasPorEmp.set(p.emprestimoId, arr);
+    }
+    let valorEmAtraso = 0;
+    for (const e of emprestimos) {
+      const ps = vencidasPorEmp.get(e.id);
+      if (!ps || ps.length === 0) continue;
+      valorEmAtraso += totalCorrigidoEmprestimo(e.valor, ps).total;
+    }
     const mediaDiasAtraso =
       inadimplentes.length > 0
         ? Math.round(
@@ -189,7 +213,7 @@ export default function RelatoriosPage() {
       mediaDiasAtraso,
       top5,
     };
-  }, [clientes, parcelas, clienteDebitoMap]);
+  }, [clientes, parcelas, emprestimos, clienteDebitoMap]);
 
   // ── Fluxo de Caixa Mensal ──
   const fluxoCaixaPreview = useMemo(() => {

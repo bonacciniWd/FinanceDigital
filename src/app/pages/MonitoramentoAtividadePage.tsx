@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Search, Monitor, Coffee, LogIn, LogOut, AlertTriangle, Loader2 } from 'lucide-react';
 import { useFuncionarios, useAllSessoesHoje } from '../hooks/useFuncionarios';
+import { useMonitoramentoRealtime } from '../hooks/useMonitoramentoRealtime';
 import type { Funcionario } from '../lib/view-types';
 
 function formatarHoras(valor: number) {
@@ -55,6 +56,8 @@ function formatHora(iso: string) {
 }
 
 export default function MonitoramentoAtividadePage() {
+  // Push em tempo real: complementa o refetchInterval dos hooks abaixo.
+  useMonitoramentoRealtime();
   const [busca, setBusca] = useState('');
   const [filtroStatus, setFiltroStatus] = useState('todos');
   const { data: funcionarios = [], isLoading: loadingFunc } = useFuncionarios();

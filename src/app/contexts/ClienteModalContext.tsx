@@ -12,7 +12,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import ClienteDetalhesModal from '../components/ClienteDetalhesModal';
 
-export type ClienteModalTab = 'dados' | 'emprestimos' | 'cobranca' | 'whatsapp' | 'historico';
+export type ClienteModalTab = 'dados' | 'emprestimos' | 'cobranca' | 'whatsapp' | 'timeline' | 'historico';
 
 interface OpenOptions {
   /** Aba inicial ao abrir (padrão: 'dados') */

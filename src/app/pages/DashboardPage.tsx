@@ -23,7 +23,7 @@ import { useClientes } from '../hooks/useClientes';
 import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useParcelas } from '../hooks/useParcelas';
 import { useDashboardStats } from '../hooks/useDashboardStats';
-import { valorCorrigido } from '../lib/juros';
+import { totalCorrigidoEmprestimo, valorCorrigido } from '../lib/juros';
 import { StatusBadge } from '../components/StatusBadge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { DashboardSkeleton } from '../components/DashboardSkeleton';
@@ -94,6 +94,25 @@ export default function DashboardPage() {
     cutoff.setDate(1);
     const today = new Date();
 
+    // Pré-calcula fator de cap por empréstimo: relação capped/bruto sobre TODAS
+    // as parcelas em aberto do empréstimo. Mantém soma <= 220% do principal.
+    const empMap = new Map<string, typeof emprestimos[0]>();
+    for (const e of emprestimos) empMap.set(e.id, e);
+    const parcelasAbertasPorEmp = new Map<string, typeof todasParcelas>();
+    for (const p of todasParcelas) {
+      if (p.status === 'paga' || p.status === 'cancelada') continue;
+      const arr = parcelasAbertasPorEmp.get(p.emprestimoId) ?? [];
+      arr.push(p);
+      parcelasAbertasPorEmp.set(p.emprestimoId, arr);
+    }
+    const fatorCapPorEmp = new Map<string, number>();
+    for (const [empId, ps] of parcelasAbertasPorEmp) {
+      const emp = empMap.get(empId);
+      if (!emp) continue;
+      const r = totalCorrigidoEmprestimo(emp.valor, ps);
+      fatorCapPorEmp.set(empId, r.bruto > 0 ? r.total / r.bruto : 1);
+    }
+
     // Agrupar parcelas por mês (YYYY-MM)
     const buckets = new Map<string, { receita: number; inadimplencia: number }>();
     for (const p of todasParcelas) {
@@ -104,8 +123,10 @@ export default function DashboardPage() {
       if (p.status === 'paga') {
         b.receita += p.valor;
       } else if (p.status !== 'cancelada' && dv < today) {
-        // Parcela vencida (não paga e data já passou) — valor corrigido com juros
-        b.inadimplencia += valorParcCorrigido(p);
+        // Parcela vencida (não paga e data já passou) — valor corrigido com juros,
+        // rateado pelo fator de cap do empréstimo (regra global 220%).
+        const fator = fatorCapPorEmp.get(p.emprestimoId) ?? 1;
+        b.inadimplencia += valorParcCorrigido(p) * fator;
       }
       buckets.set(key, b);
     }
@@ -117,7 +138,7 @@ export default function DashboardPage() {
         receita: b.receita,
         inadimplencia: b.inadimplencia,
       }));
-  }, [todasParcelas, periodo]);
+  }, [todasParcelas, emprestimos, periodo]);
 
   // Effective status per client — empréstimos are source of truth for 'vencido'
   const getEffectiveStatus = (c: typeof clientes[0]) =>

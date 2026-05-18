@@ -123,7 +123,16 @@ const FEATURES = [
 ];
 
 const CHANGELOG = [
-  { version: '1.9.5', date: '14 Mai 2026', isLatest: true, items: [
+  { version: '2.0.0', date: '18 Mai 2026', isLatest: true, items: [
+    'Automação de Cobrança · hub unificado em /configuracoes/cobranca-agendamento com 3 abas (Templates · Regras · Fila). /chat/templates redireciona para a aba Templates.',
+    'Cobrança · delay configurável entre disparos consecutivos (anti-ban WhatsApp, 0–3600s, default 60s) aplicado pela edge function processar-fila-cobranca.',
+    'Cobrança · picker de clientes do Kanban Cobrança: multi-seleção + enfileiramento em lote para uma regra, respeitando janela e limites.',
+    'Cobrança · popup de ajuda dentro do dialog de regra explicando cada um dos 15 campos (auto-abre em “Nova regra”).',
+    'Timeline 360º · nova tabela timeline_interacoes agrega WhatsApp, mudanças de etapa no Kanban, acordos e pagamentos; botão Timeline direto no card do Kanban Cobrança.',
+    'Mídias compartilhadas · nova página /emprestimos/midias para anexar arquivos a múltiplos empréstimos do mesmo cliente, com cleanup automático no Storage ao quitar.',
+    'Monitoramento · presença online realtime por funcionário.',
+  ]},
+  { version: '1.9.5', date: '14 Mai 2026', isLatest: false, items: [
     'Comissões · engine reformulado: cobradores agora agrupados em N1+N2 (recente, 1-30 dias) e N3+N4 (antigo, 31+ dias) — fim das tabelas duplicadas N1/N2 e N3/N4',
     'Comissões · base de cálculo corrigida: % aplicado APENAS sobre parcelas/acordos EFETIVAMENTE PAGOS no período (antes inflava com "acordos fechados" mesmo sem pagamento)',
     'Comissões · nova página de configuração: cadastro de % por grupo, Gerente (% sobre entradas) e Dono (% sobre entradas) com edição inline',

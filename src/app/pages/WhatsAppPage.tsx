@@ -9,7 +9,7 @@
  * @route /comunicacao/whatsapp
  * @access Protegido — perfis admin, gerência
  */
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -72,6 +72,7 @@ import {
 import { useCreateTicket, useTicketsByCliente } from '../hooks/useTickets';
 import { useAuth } from '../contexts/AuthContext';
 import ComprovanteUploader from '../components/ComprovanteUploader';
+import ClienteChatSidebar from '../components/ClienteChatSidebar';
 
 // ── Conversor áudio → WAV 16 kHz mono (via Web Audio API) ─────────────
 // Funciona com QUALQUER formato que o browser grave (WebM/Opus, OGG/Opus, MP4/AAC).
@@ -507,6 +508,92 @@ export default function WhatsAppPage() {
     [conversaEtiquetas]
   );
 
+  // Normaliza telefones para comparar (últimos 11 dígitos)
+  const phoneKey = useCallback((tel: string | null | undefined) => {
+    const d = (tel ?? '').replace(/\D/g, '');
+    return d.slice(-11);
+  }, []);
+
+  // Mapa rápido: últimos 11 dígitos -> Cliente
+  const clientesByPhone = useMemo(() => {
+    const m = new Map<string, typeof allClientes[number]>();
+    for (const c of allClientes) {
+      const k = phoneKey(c.telefone);
+      if (k.length === 11 && !m.has(k)) m.set(k, c);
+    }
+    return m;
+  }, [allClientes, phoneKey]);
+
+  const findClienteByTelefone = useCallback(
+    (telefone: string) => {
+      const k = phoneKey(telefone);
+      return k.length === 11 ? clientesByPhone.get(k) ?? null : null;
+    },
+    [clientesByPhone, phoneKey]
+  );
+
+  // Cliente vinculado à conversa selecionada (objeto completo p/ sidebar)
+  // Tenta primeiro o vínculo explícito; se não houver, faz match por telefone.
+  const linkedClienteFull = useMemo(() => {
+    if (linkedClienteId) {
+      const byId = allClientes.find((c) => c.id === linkedClienteId);
+      if (byId) return byId;
+    }
+    if (selectedTelefone) {
+      return findClienteByTelefone(selectedTelefone);
+    }
+    return null;
+  }, [linkedClienteId, allClientes, selectedTelefone, findClienteByTelefone]);
+
+  // Resolve o nome a exibir para uma conversa:
+  // 1) cliente vinculado (conversa_cliente → clientes.nome)
+  // 2) cliente cujo telefone bate (sem vínculo explícito)
+  // 3) push_name capturado pelo WhatsApp
+  // 4) telefone formatado
+  const getDisplayName = useCallback(
+    (telefone: string, pushName?: string | null) => {
+      const link = conversaClientes.find((cc) => cc.telefone === telefone);
+      if (link?.cliente?.nome) return link.cliente.nome;
+      const cli = link?.cliente_id ? allClientes.find((c) => c.id === link.cliente_id) : null;
+      if (cli?.nome) return cli.nome;
+      const match = findClienteByTelefone(telefone);
+      if (match?.nome) return match.nome;
+      if (pushName && pushName.trim()) return pushName;
+      return formatPhone(telefone);
+    },
+    [conversaClientes, allClientes, findClienteByTelefone]
+  );
+
+  const getInitialsFor = useCallback(
+    (telefone: string, pushName?: string | null) => {
+      const link = conversaClientes.find((cc) => cc.telefone === telefone);
+      const nome = link?.cliente?.nome
+        ?? (link?.cliente_id ? allClientes.find((c) => c.id === link.cliente_id)?.nome : null)
+        ?? findClienteByTelefone(telefone)?.nome
+        ?? pushName
+        ?? null;
+      return getInitials(nome ?? null, telefone);
+    },
+    [conversaClientes, allClientes, findClienteByTelefone]
+  );
+
+  // Resolve o Cliente (objeto completo) para uma conversa: vínculo > match por telefone.
+  const clienteForConversa = useCallback(
+    (telefone: string) => {
+      const link = conversaClientes.find((cc) => cc.telefone === telefone);
+      if (link?.cliente_id) {
+        const byId = allClientes.find((c) => c.id === link.cliente_id);
+        if (byId) return byId;
+      }
+      return findClienteByTelefone(telefone);
+    },
+    [conversaClientes, allClientes, findClienteByTelefone]
+  );
+
+  // Auto-vinculação: para conversas sem vínculo explícito mas cujo telefone bate
+  // com um cliente cadastrado, cria o link em conversa_cliente (uma vez por telefone).
+  const autoLinkAttempted = useRef<Set<string>>(new Set());
+
   // Selecionar primeira instância conectada automaticamente
   useEffect(() => {
     if (!activeInstanciaId && instancias.length > 0) {
@@ -534,6 +621,26 @@ export default function WhatsAppPage() {
 
   const { data: conversas = [], isLoading: loadingConversas } =
     useConversasWhatsapp(activeInstanciaId || undefined);
+
+  // Auto-vinculação: para cada conversa sem vínculo explícito cujo telefone bate
+  // com um cliente cadastrado, cria o link em conversa_cliente automaticamente.
+  useEffect(() => {
+    if (!activeInstanciaId || conversas.length === 0 || allClientes.length === 0) return;
+    const linkedSet = new Set(conversaClientes.map((cc) => cc.telefone));
+    for (const c of conversas) {
+      if (linkedSet.has(c.telefone)) continue;
+      const key = `${activeInstanciaId}:${c.telefone}`;
+      if (autoLinkAttempted.current.has(key)) continue;
+      const match = findClienteByTelefone(c.telefone);
+      if (!match) continue;
+      autoLinkAttempted.current.add(key);
+      vincularCliente.mutate({
+        telefone: c.telefone,
+        instancia_id: activeInstanciaId,
+        cliente_id: match.id,
+      });
+    }
+  }, [conversas, conversaClientes, allClientes, activeInstanciaId, findClienteByTelefone, vincularCliente]);
 
   // Info da conversa selecionada (para header do chat)
   const selectedConversaInfo = conversas.find((c) => c.telefone === selectedTelefone) ?? null;
@@ -621,12 +728,19 @@ export default function WhatsAppPage() {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [mensagens]);
 
-  // Filtrar conversas (por telefone ou nome)
-  const filteredConversas = conversas.filter(
-    (c) => !searchTerm ||
-      c.telefone.includes(searchTerm) ||
-      (c.push_name && c.push_name.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  // Filtrar conversas (por telefone, push_name ou nome do cliente vinculado/match)
+  const filteredConversas = conversas.filter((c) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    if (c.telefone.includes(searchTerm)) return true;
+    if (c.push_name && c.push_name.toLowerCase().includes(term)) return true;
+    const link = conversaClientes.find((cc) => cc.telefone === c.telefone);
+    const nome = link?.cliente?.nome
+      ?? (link?.cliente_id ? allClientes.find((cli) => cli.id === link.cliente_id)?.nome : null)
+      ?? findClienteByTelefone(c.telefone)?.nome
+      ?? null;
+    return !!nome && nome.toLowerCase().includes(term);
+  });
 
   // ── QR Polling — auto-check connection + auto-refresh QR ──
   const qrRefreshCounterRef = useRef(0);
@@ -1348,7 +1462,26 @@ export default function WhatsAppPage() {
                   </div>
                 ) : (
                   <div className="p-2 space-y-1">
-                    {filteredConversas.map((c) => (
+                    {filteredConversas.map((c) => {
+                      const displayName = getDisplayName(c.telefone, c.push_name);
+                      const phoneFmt = formatPhone(c.telefone);
+                      const showPhoneSubtitle = displayName !== phoneFmt;
+                      const cli = clienteForConversa(c.telefone);
+                      const statusColor = cli?.status === 'em_dia'
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                        : cli?.status === 'a_vencer'
+                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                          : cli?.status === 'vencido'
+                            ? 'bg-red-500/15 text-red-700 dark:text-red-400'
+                            : '';
+                      const statusLabel = cli?.status === 'em_dia'
+                        ? 'em dia'
+                        : cli?.status === 'a_vencer'
+                          ? 'a vencer'
+                          : cli?.status === 'vencido'
+                            ? `vencido${cli.diasAtraso ? ` ${cli.diasAtraso}d` : ''}`
+                            : '';
+                      return (
                       <button
                         key={c.telefone}
                         onClick={() => setSelectedTelefone(c.telefone)}
@@ -1356,19 +1489,24 @@ export default function WhatsAppPage() {
                       >
                         <div className="flex items-start gap-3">
                           <div className={`w-10 h-10 ${getAvatarColor(c.telefone)} text-white rounded-full flex items-center justify-center text-sm font-semibold shrink-0`}>
-                            {getInitials(c.push_name, c.telefone)}
+                            {getInitialsFor(c.telefone, c.push_name)}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center justify-between mb-1 gap-2">
                               <span className="font-medium text-sm truncate">
-                                {c.push_name || formatPhone(c.telefone)}
+                                {displayName}
                               </span>
-                              <span className="text-[10px] text-muted-foreground">
+                              <span className="text-[10px] text-muted-foreground shrink-0">
                                 {new Date(c.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                               </span>
                             </div>
-                            {c.push_name && (
-                              <p className="text-[11px] text-muted-foreground truncate mb-0.5">{formatPhone(c.telefone)}</p>
+                            {showPhoneSubtitle && (
+                              <p className="text-[11px] text-muted-foreground truncate mb-0.5">{phoneFmt}</p>
+                            )}
+                            {statusLabel && (
+                              <span className={`inline-block text-[9px] leading-tight px-1.5 py-0.5 rounded-full font-medium mb-1 ${statusColor}`}>
+                                {statusLabel}
+                              </span>
                             )}
                             <div className="flex items-center gap-1">
                               {c.direcao === 'saida' && <CheckCheck className="w-3 h-3 text-blue-500 shrink-0" />}
@@ -1393,7 +1531,8 @@ export default function WhatsAppPage() {
                           </div>
                         </div>
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </ScrollArea>
@@ -1415,14 +1554,14 @@ export default function WhatsAppPage() {
                   <div className="p-4 border-b flex items-center justify-between gap-2">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className={`w-10 h-10 ${getAvatarColor(selectedTelefone)} text-white rounded-full flex items-center justify-center font-semibold text-sm shrink-0`}>
-                        {getInitials(selectedConversaInfo?.push_name ?? null, selectedTelefone)}
+                        {getInitialsFor(selectedTelefone, selectedConversaInfo?.push_name ?? null)}
                       </div>
                       <div className="min-w-0">
                         <div className="font-semibold truncate">
-                          {selectedConversaInfo?.push_name || formatPhone(selectedTelefone)}
+                          {getDisplayName(selectedTelefone, selectedConversaInfo?.push_name ?? null)}
                         </div>
                         <div className="text-xs text-muted-foreground truncate">
-                          {selectedConversaInfo?.push_name && `${formatPhone(selectedTelefone)} · `}via {activeInstancia.instance_name}
+                          {formatPhone(selectedTelefone)} · via {activeInstancia.instance_name}
                         </div>
                         {/* Linked client + tags inline */}
                         <div className="flex flex-wrap items-center gap-1 mt-1">
@@ -1767,6 +1906,32 @@ export default function WhatsAppPage() {
               )}
             </Card>
           </div>
+
+          {/* Painel lateral: detalhes do cliente vinculado */}
+          {selectedTelefone && linkedClienteFull && (
+            <div className="w-72 shrink-0 h-full min-h-0 hidden lg:block">
+              <ClienteChatSidebar
+                cliente={linkedClienteFull}
+                telefone={selectedTelefone}
+                hasOpenTicket={hasOpenTicket}
+                isCreatingTicket={createTicket.isPending}
+                onCriarTicket={() => {
+                  if (!linkedClienteId) return;
+                  createTicket.mutate({
+                    cliente_id: linkedClienteId,
+                    assunto: `Atendimento WhatsApp — ${selectedTelefone}`,
+                    descricao: 'Ticket criado manualmente a partir da conversa WhatsApp.',
+                    canal: 'whatsapp',
+                    status: 'aberto',
+                    prioridade: 'media',
+                  }, {
+                    onSuccess: () => toast.success('Ticket de atendimento criado!'),
+                    onError: () => toast.error('Erro ao criar ticket.'),
+                  });
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 

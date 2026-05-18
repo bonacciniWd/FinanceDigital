@@ -6,80 +6,37 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ---
 
-## [1.9.5] — 2026-05-14
+## [2.0.0] — 2026-05-18
 
-### Reformulado — Engine de comissões
+### Adicionado — Automação de Cobrança + Timeline 360º + Mídias compartilhadas
 
-- **Agrupamento N1+N2 e N3+N4**: cobradores agora têm uma configuração única por grupo (recente 1–30 dias / antigo 31+ dias) em vez de quatro tabelas separadas. Fim da duplicação na UI quando o mesmo usuário aparecia em N1 e N2.
-- **Base de cálculo = pagamentos reais**: o engine não usa mais `valor_divida_original` de "acordos fechados" como base — agora aplica os percentuais **apenas sobre parcelas e acordos EFETIVAMENTE PAGOS** no período. Antes uma carteira de R$48.696 fechada (sem pagamento) gerava R$3.895 de comissão fantasma.
-- **Página de configuração**: novo card permite cadastrar % por grupo, Gerente (% sobre entradas) e Dono (% sobre entradas).
-- DB migrations 080–083: `emprestimos.criado_por_profiles_sigla`, tabela `comissoes_config`, drop de tabela legada `interacoes_cliente_comissoes`, `dono.user_id` opcional.
+**Hub unificado de Automação de Cobrança** (rota `/configuracoes/cobranca-agendamento`)
+- Três abas (`?tab=templates|regras|fila`): Templates de mensagens, Regras de disparo automático, Fila de execução.
+- `/chat/templates` agora redireciona para o hub.
+- **Regras** (`cobranca_agendamentos`): janela horária, fuso, dias da semana, faixa de atraso, template, instância, limites globais/por cliente, intervalo mínimo entre re-envios.
+- **Novo: delay entre disparos consecutivos** (`intervalo_entre_envios_seg`, 0–3600s, default 60s) — anti-ban WhatsApp aplicado pela edge function `processar-fila-cobranca` (migration 089).
+- **Novo: picker de clientes do Kanban Cobrança** — multi-seleção + enfileiramento em lote (`enfileirarLote`) respeitando janela e limites da regra.
+- **Novo: popup de ajuda** (`AjudaRegraDialog`) com explicação de cada um dos 15 campos da regra; abre automaticamente em "Nova regra".
+- Edge function `processar-fila-cobranca` consome a fila respeitando todos os limites.
 
-### Corrigido — Extratos EFI
+**Timeline de Interações 360º** (migration 086)
+- Tabela `timeline_interacoes` agrega WhatsApp, mudanças no Kanban, acordos, pagamentos e notas manuais por cliente.
+- Triggers populam automaticamente: `trg_whatsapp_to_timeline`, `trg_kanban_etapa_to_timeline`, `trg_acordo_to_timeline`, `trg_parcela_paga_to_timeline`.
+- Novo componente `TimelineInteracoes` + botão **Timeline** direto no card do Kanban Cobrança.
 
-- **Fix crítico do filtro "7d/30d"**: quando havia qualquer extrato CNAB importado no período, a UI substituía completamente os dados da API EFI — fazendo desaparecer todas as movimentações posteriores ao último dia importado. Agora o CNAB cobre `[início … último_dia_CNAB]` e a API PIX complementa `(último_dia_CNAB … fim]`.
-- **Auto-paginação na Edge Function `efi`**: `list_pix`, `list_sent_pix` e `list_charges` agora iteram `paginacao.paginaAtual` até esgotar (cap 50 págs / 5000 itens), em vez de retornar apenas a primeira página de 100.
-- **Chunking client-side**: períodos >30 dias são divididos em janelas paralelas em `efiListarPix` / `efiListarPixEnviados`, contornando o limite hard de 60 dias da API EFI.
+**Mídias compartilhadas multi-empréstimo** (migrations 085, 088)
+- Nova página `/emprestimos/midias` (`EmprestimoMidiasPage`) para anexos compartilhados entre múltiplos empréstimos do mesmo cliente.
+- Cleanup automático: ao quitar/deletar empréstimo, mídias órfãs são removidas (incluindo objeto no Storage); mídias ainda vinculadas são preservadas.
 
----
+**Monitoramento de atividade realtime**
+- Hook `useMonitoramentoRealtime` + `MonitoramentoAtividadePage` com presença online por funcionário.
 
-## [1.9.4] — 2026-05-13
-
-### Corrigido — Redução agressiva de egress Supabase
-
-App estava consumindo ~5.85 GB/mês de egress (limite Free: 5 GB). Investigação identificou e corrigiu:
-
-- **Vilão principal**: `getEstatisticas` (WhatsApp) rodava a cada 30s via `useEstatisticasWhatsapp` fazendo `SELECT direcao, status FROM whatsapp_mensagens_log` **sem `LIMIT`** — baixava a tabela inteira a cada refresh. Agora usa 3 `count: 'exact', head: true` em paralelo (Postgres conta no servidor, zero linhas trafegam).
-- **Vilão secundário**: `getConversas` baixava 500 rows com `select('*')` incluindo `metadata` JSON gordo. Restrito a colunas necessárias (`telefone, conteudo, direcao, created_at, metadata, status`).
-- **Signed URLs de documentos**: cada `createSignedUrl` gera JWT novo → URL única → CDN miss. Adicionado `staleTime: 50min` (alinhado ao TTL de 1h do token) em `signed_url_thumb` / `signed_url_full` para reaproveitar a mesma URL e bater o cache CDN.
-- **Image transformations** (Storage): thumbnails de `client-documents` agora servidos como `width: 400, quality: 70` (redução ~90% por imagem); full-res só carrega ao abrir lightbox/hover (lazy via query gated em `signed_url_full`).
-- **`cacheControl: '604800'`** (7 dias) nos uploads de `client-documents`, `comprovantes-acordo` e identity verification → CDN mantém cópia por mais tempo.
-- **Polling WhatsApp**: `useMensagensByTelefone` e `useConversasWhatsapp` reduzidos de 5s → 30s. Realtime subscription continua cobrindo updates instantâneos; polling é só backup.
-
-Esperado: redução de 80–95% no egress mensal.
-
----
-
-## [1.9.3] — 2026-05-12
-
-### Adicionado — Kanban Cobrança · Envio com template + auto-tag + renovação
-
-- **Kanban Cobrança · Chat → "Enviar template (sistema)"**: novo dialog inline com seletor de template (categorias `cobranca`, `negociacao`, `lembrete`), textarea editável e botão "Enviar via sistema". Pré-seleciona automaticamente o template adequado pelos dias de atraso + gênero do cliente. Envia pela instância marcada como `is_system` sem sair da página.
-- **Auto-tag por coluna**: ao enviar via sistema, aplica automaticamente etiqueta da coluna (`N1 / N2 / N3 / Negociação / Acordo / Pago`) e etiqueta do cobrador na conversa do cliente. `find-or-create` em `etiquetas` + `conversa_etiquetas` (toggle idempotente).
-- **Auto-move para "Contatado"**: card vai para `contatado` imediatamente após envio bem-sucedido (`registrarContato.mutateAsync` agora é awaited, erros surfacam em vez de fire-and-forget).
-- **Renovação de empréstimo**: ao marcar empréstimo como quitado (em qualquer das duas tabs do `ClienteDetalhesModal` — Empréstimos ou Cobrança) ou ao quitar a última parcela pendente, abre dialog "Empréstimo quitado! Deseja criar um novo empréstimo?" com navegação para `/analise-credito` já com `clienteId` pré-preenchido.
+**Whatsapp log isolation** (migration 084)
+- Logs de mensagens isolados por instância para evitar vazamento cruzado entre cônsoles.
 
 ### Corrigido
-
-- **Card volta de "Contatado" para N3 após refresh**: `syncCobrancas` agora trava cards em `contatado` por 24h após `ultimo_contato`. Antes, sync agressivo resetava o card para `vencido/N3` no próximo refresh se o `registrarContato` tivesse falhado silenciosamente. Constante `HORAS_LOCK_CONTATADO = 24` em `kanbanCobrancaService.ts`.
-- **AnaliseCreditoPage**: campo `skipVerification` agora vem marcado por padrão (formulário novo e reset pós-criação) — fluxo majoritário é sem reanálise.
-- **AcordoFormModal**: modo de entrada padrão agora é **R$ (valor fixo)** em vez de % — alinhado ao uso real do operador.
-
-## [1.9.2] — 2026-05-11
-
-### Adicionado — Anti-Ban WhatsApp + Templates no Kanban
-
-- **Cold-outreach guard** no `cron-notificacoes`: pula números que nunca enviaram mensagem entrante (regra anti-ban mais crítica).
-- **Cap por número/dia** (default 2): bloqueia spammar o mesmo cliente quando ele tem várias parcelas atrasadas.
-- **Limite diário total** reduzido de 40 para 25 mensagens (mais conservador).
-- **Delay configurável** entre mensagens (default 8s, antes 3s).
-- **Delay extra entre texto e QR PIX** (≥4s) — antes saiam quase juntos como bot.
-- **Delay 5s** após cada WhatsApp de aprovação de crédito (evita rajada).
-- **Kanban Cobrança · Chat** agora usa **templates da página Templates** (mesma fonte do cron) ao invés de mensagem hardcoded. Seleção por `diasAtraso` + gênero do cliente. Fallback para mensagem detalhada se nenhum template casar.
-- Nova seção **Configurações → Sistema → Anti-Ban WhatsApp** com 4 knobs ajustáveis em runtime: `cron_max_msgs_dia`, `cron_max_msgs_por_numero_dia`, `cron_delay_ms`, `cron_skip_cold_outreach`.
-- Migration `078_whatsapp_anti_ban_defaults.sql` seeda valores conservadores.
-- README §52 documenta causas de ban, regra do "chip aquecido" e como auditar logs do cron.
-
-## [1.9.1] — 2026-05-11
-
-### Corrigido — WhatsApp Web abre em janela interna (Electron)
-
-- **Kanban Cobrança · Chat → WhatsApp App / Web**: antes abria o navegador externo (ou o app WhatsApp instalado no macOS), que mostrava a mensagem _"O WhatsApp funciona no Google Chrome 85 ou posterior"_. Agora abre uma `BrowserWindow` interna do Electron carregando `web.whatsapp.com/send` com user-agent de Chrome 124.
-- A janela é filha de `mainWindow` (fecha junto com o app) e usa `partition` em memória — a sessão do WhatsApp Web é descartada ao fechar a janela, sem persistir login.
-- Bloqueio de popups: `setWindowOpenHandler` recusa qualquer tentativa do conteúdo abrir nova janela externa.
-- Reaproveita janela já aberta para o mesmo número (foco em vez de duplicar).
-- Fallback navegador (web): usa `https://web.whatsapp.com/send?phone=...` em vez de `wa.me/...` (este último dispara o app instalado no macOS).
-- Novos handlers IPC: `whatsapp:open` e `whatsapp:closeAll`. Renderer chama via `window.electronAPI.openWhatsApp(phone, message?)`.
+- Migration 085: enum `user_role` não tinha `'operador'` — substituído por `'comercial'` nas políticas RLS.
+- Drift de migrations 085/086/088 no remoto reconciliado via `migration repair --status reverted` + re-push.
 
 ---
 

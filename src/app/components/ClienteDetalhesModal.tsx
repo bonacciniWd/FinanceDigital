@@ -77,14 +77,17 @@ import AcordoFormModal from './AcordoFormModal';
 import EmprestimoEditModal from './EmprestimoEditModal';
 import ComprovanteUploader from './ComprovanteUploader';
 import { CadastroLinkDialog } from './CadastroLinkDialog';
+import TimelineInteracoes from './TimelineInteracoes';
 import type { ClienteUpdate, ParcelaUpdate } from '../lib/database.types';
 import type { Parcela } from '../lib/view-types';
 import { valorCorrigido, diasDeAtraso, calcularJurosAtraso, JUROS_DIAS_MAX } from '../lib/juros';
 
+type ModalTab = 'dados' | 'emprestimos' | 'cobranca' | 'whatsapp' | 'timeline' | 'historico';
+
 interface Props {
   clienteId: string | null;
-  tab: 'dados' | 'emprestimos' | 'cobranca' | 'whatsapp' | 'historico';
-  onTabChange: (tab: 'dados' | 'emprestimos' | 'cobranca' | 'whatsapp' | 'historico') => void;
+  tab: ModalTab;
+  onTabChange: (tab: ModalTab) => void;
   onClose: () => void;
 }
 
@@ -198,11 +201,12 @@ function ModalBody({ clienteId, tab, onTabChange, onClose }: Props & { clienteId
       </DialogHeader>
 
       <Tabs value={tab} onValueChange={(v) => onTabChange(v as Props['tab'])} className="flex-1 flex flex-col overflow-hidden">
-        <TabsList className="mx-6 mt-4 grid grid-cols-5">
+        <TabsList className="mx-6 mt-4 grid grid-cols-6">
           <TabsTrigger value="dados"><UserIcon className="w-3.5 h-3.5 mr-1" />Dados</TabsTrigger>
           <TabsTrigger value="emprestimos"><DollarSign className="w-3.5 h-3.5 mr-1" />Empréstimos</TabsTrigger>
           <TabsTrigger value="cobranca"><HandshakeIcon className="w-3.5 h-3.5 mr-1" />Cobrança</TabsTrigger>
           <TabsTrigger value="whatsapp"><MessageSquare className="w-3.5 h-3.5 mr-1" />WhatsApp</TabsTrigger>
+          <TabsTrigger value="timeline"><History className="w-3.5 h-3.5 mr-1" />Timeline</TabsTrigger>
           <TabsTrigger value="historico"><History className="w-3.5 h-3.5 mr-1" />Histórico</TabsTrigger>
         </TabsList>
 
@@ -218,6 +222,9 @@ function ModalBody({ clienteId, tab, onTabChange, onClose }: Props & { clienteId
           </TabsContent>
           <TabsContent value="whatsapp" className="mt-0">
             <WhatsappTab cliente={cliente} />
+          </TabsContent>
+          <TabsContent value="timeline" className="mt-0">
+            <TimelineInteracoes clienteId={clienteId} cliente={{ nome: cliente.nome, telefone: cliente.telefone }} />
           </TabsContent>
           <TabsContent value="historico" className="mt-0">
             <HistoricoTab clienteId={clienteId} />

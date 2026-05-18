@@ -37,7 +37,6 @@ const IndicarNovoPage = lazy(() => import('./pages/IndicarNovoPage'));
 const WhatsAppPage = lazy(() => import('./pages/WhatsAppPage'));
 const FluxosChatPage = lazy(() => import('./pages/FluxosChatPage'));
 const FluxoEditorPage = lazy(() => import('./pages/FluxoEditorPage'));
-const TemplatesMensagensPage = lazy(() => import('./pages/TemplatesMensagensPage'));
 const KanbanCobrancaPage = lazy(() => import('./pages/KanbanCobrancaPage'));
 const KanbanAnalisePage = lazy(() => import('./pages/KanbanAnalisePage'));
 const KanbanAtendimentoPage = lazy(() => import('./pages/KanbanAtendimentoPage'));
@@ -66,6 +65,8 @@ const ConfigSistemaPage = lazy(() => import('./pages/ConfigSistemaPage'));
 const RelatorioComissoesPage = lazy(() => import('./pages/RelatorioComissoesPage'));
 const BibliotecaMidiaPage = lazy(() => import('./pages/BibliotecaMidiaPage'));
 const AgendadorStatusPage = lazy(() => import('./pages/AgendadorStatusPage'));
+const EmprestimoMidiasPage = lazy(() => import('./pages/EmprestimoMidiasPage'));
+const CobrancaAgendamentoPage = lazy(() => import('./pages/CobrancaAgendamentoPage'));
 
 const PageFallback = () => (
   <div className="flex items-center justify-center h-full min-h-[40vh]">
@@ -162,11 +163,14 @@ export const router = createBrowserRouter([
       // Comunicação
       { path: 'whatsapp', element: lz(<WhatsAppPage />) },
       { path: 'chat/fluxos', element: lz(<FluxosChatPage />) },
-      { path: 'chat/templates', element: lz(<TemplatesMensagensPage />) },
+      { path: 'chat/templates', element: <Navigate to="/configuracoes/cobranca-agendamento?tab=templates" replace /> },
 
       // Marketing
       { path: 'marketing/biblioteca', element: lz(<BibliotecaMidiaPage />) },
       { path: 'marketing/agendador', element: lz(<AgendadorStatusPage />) },
+
+      // Mídias compartilhadas (multi-empréstimo)
+      { path: 'emprestimos/midias', element: lz(<EmprestimoMidiasPage />) },
 
       // Kanban
       { path: 'kanban/cobranca', element: lz(<KanbanCobrancaPage />) },
@@ -188,6 +192,7 @@ export const router = createBrowserRouter([
       { path: 'configuracoes/ip-whitelist', element: lz(<IpWhitelistPage />) },
       { path: 'configuracoes/sistema', element: lz(<ConfigSistemaPage />) },
       { path: 'configuracoes/conta', element: lz(<MinhaContaPage />) },
+      { path: 'configuracoes/cobranca-agendamento', element: lz(<CobrancaAgendamentoPage />) },
 
       // Equipe
       { path: 'equipe/monitoramento', element: lz(<MonitoramentoAtividadePage />) },

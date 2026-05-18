@@ -651,7 +651,7 @@ export default function ClientesPage() {
               clientCountByState={clientCountByState}
               clientCountByCity={clientCountByCity}
               citiesInState={citiesInState}
-            />
+             />
           </CardContent>
         </Card>
       )}

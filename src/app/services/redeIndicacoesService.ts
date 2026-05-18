@@ -12,7 +12,7 @@
  * @see database.types para tipagem completa
  */
 import { supabase } from '../lib/supabase';
-import { valorCorrigido } from '../lib/juros';
+import { totalCorrigidoEmprestimo } from '../lib/juros';
 import type {
   Cliente,
   ClienteInsert,
@@ -72,7 +72,7 @@ async function buildRedeFromClientes(
   const [clientesRes, emprestimosRes, parcelasRes] = await Promise.all([
     supabase.from('clientes').select('*').order('nome'),
     supabase.from('emprestimos').select('id, cliente_id, valor, status'),
-    supabase.from('parcelas').select('cliente_id, valor_original, data_vencimento, juros, multa, desconto, status'),
+    supabase.from('parcelas').select('cliente_id, emprestimo_id, valor_original, data_vencimento, juros, multa, desconto, status'),
   ]);
 
   if (clientesRes.error) throw new Error(clientesRes.error.message);
@@ -80,7 +80,7 @@ async function buildRedeFromClientes(
   if (clientes.length === 0) return [];
 
   const emprestimos = (emprestimosRes.data ?? []) as unknown as { id: string; cliente_id: string; valor: number; status: string }[];
-  const parcelas = (parcelasRes.data ?? []) as unknown as { cliente_id: string; valor_original: number; data_vencimento: string; juros: number; multa: number; desconto: number; status: string }[];
+  const parcelas = (parcelasRes.data ?? []) as unknown as { cliente_id: string; emprestimo_id: string; valor_original: number; data_vencimento: string; juros: number; multa: number; desconto: number; status: string }[];
 
   // Build loan totals per client (sum of active loans)
   const loanTotals = new Map<string, number>();
@@ -90,12 +90,27 @@ async function buildRedeFromClientes(
     }
   }
 
-  // Build corrected debt per client from open parcelas
-  const debtTotals = new Map<string, number>();
+  // Build corrected debt per client from open parcelas, AGRUPADO POR EMPRÉSTIMO
+  // para aplicar o teto global de 220% (após >90d) por contrato.
+  const parcelasPorEmp = new Map<string, Array<{ valorOriginal: number; dataVencimento: string; juros: number; multa: number; desconto: number }>>();
   for (const p of parcelas) {
     if (p.status === 'paga' || p.status === 'cancelada') continue;
-    const corrigido = valorCorrigido(p.valor_original, p.data_vencimento, p.juros, p.multa, p.desconto).total;
-    debtTotals.set(p.cliente_id, (debtTotals.get(p.cliente_id) ?? 0) + corrigido);
+    const arr = parcelasPorEmp.get(p.emprestimo_id) ?? [];
+    arr.push({
+      valorOriginal: p.valor_original,
+      dataVencimento: p.data_vencimento,
+      juros: p.juros,
+      multa: p.multa,
+      desconto: p.desconto,
+    });
+    parcelasPorEmp.set(p.emprestimo_id, arr);
+  }
+  const debtTotals = new Map<string, number>();
+  for (const e of emprestimos) {
+    const ps = parcelasPorEmp.get(e.id);
+    if (!ps || ps.length === 0) continue;
+    const { total } = totalCorrigidoEmprestimo(e.valor, ps);
+    debtTotals.set(e.cliente_id, (debtTotals.get(e.cliente_id) ?? 0) + total);
   }
 
   // Derive real status from parcelas: if any pendente parcela is past due → vencido; if any due within 5 days → a_vencer; else em_dia

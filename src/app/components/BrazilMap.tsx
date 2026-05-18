@@ -174,7 +174,7 @@ export default function BrazilMap({
     : citiesInState;
 
   return (
-    <div className="relative flex gap-4" style={{ minHeight: 400 }}>
+    <div className="relative flex gap-4" style={{ minHeight: 500 }}>
       {/* Map area */}
       <div className="flex-1 relative overflow-hidden rounded-lg border bg-muted/30">
         {/* Zoom controls */}

@@ -177,9 +177,11 @@ export default function TemplatesMensagensPage() {
           <h1 className="text-2xl font-semibold text-foreground">Templates de Mensagens</h1>
           <p className="text-muted-foreground mt-1">Mensagens personalizadas por sexo para WhatsApp e Chat</p>
         </div>
-        <Button className="bg-primary hover:bg-primary/90" onClick={openCreateModal}>
-          <Plus className="w-4 h-4 mr-2" />Novo Template
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button className="bg-primary hover:bg-primary/90" onClick={openCreateModal}>
+            <Plus className="w-4 h-4 mr-2" />Novo Template
+          </Button>
+        </div>
       </div>
 
       {/* Info sobre personalização por sexo */}

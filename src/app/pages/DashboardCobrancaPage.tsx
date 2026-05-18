@@ -20,7 +20,7 @@ import { useEmprestimos } from '../hooks/useEmprestimos';
 import { useParcelas } from '../hooks/useParcelas';
 import { useCardsCobranca } from '../hooks/useKanbanCobranca';
 import { useAcordos } from '../hooks/useAcordos';
-import { valorCorrigido } from '../lib/juros';
+import { totalCorrigidoEmprestimo } from '../lib/juros';
 import { DashboardSkeleton } from '../components/DashboardSkeleton';
 
 export default function DashboardCobrancaPage() {
@@ -76,11 +76,6 @@ export default function DashboardCobrancaPage() {
     });
 
     // Calcular valor corrigido de cada parcela (com juros automáticos, capados em 365d pelo lib)
-    const valorCorrigidoParcela = (p: typeof parcelasAbertas[0]) => {
-      const { total } = valorCorrigido(p.valorOriginal, p.dataVencimento, p.juros, p.multa, p.desconto);
-      return total;
-    };
-
     // Parcelas abertas por empréstimo
     const parcelasPorEmp = new Map<string, typeof parcelasAbertas>();
     for (const p of parcelasAbertas) {
@@ -89,27 +84,36 @@ export default function DashboardCobrancaPage() {
       parcelasPorEmp.set(p.emprestimoId, arr);
     }
 
-    // Valor total em atraso = soma corrigida das parcelas abertas dos inadimplentes
-    const valorTotalAtraso = inadimplentes.reduce((acc, e) => {
+    // Saldo corrigido por empréstimo, JÁ COM TETO global (220% do principal após >90d).
+    // Memoiza para reuso nas agregações por inadimplentes/carteira/cliente.
+    const saldoCorrigidoPorEmp = new Map<string, number>();
+    for (const e of [...ativos, ...inadimplentes]) {
       const ps = parcelasPorEmp.get(e.id) ?? [];
-      return acc + ps.reduce((s, p) => s + valorCorrigidoParcela(p), 0);
-    }, 0);
+      if (ps.length === 0) continue;
+      saldoCorrigidoPorEmp.set(e.id, totalCorrigidoEmprestimo(e.valor, ps).total);
+    }
 
-    // Valor total da carteira ativa (ativos + inadimplentes)
-    const valorCarteira = [...ativos, ...inadimplentes].reduce((acc, e) => {
-      const ps = parcelasPorEmp.get(e.id) ?? [];
-      return acc + ps.reduce((s, p) => s + valorCorrigidoParcela(p), 0);
-    }, 0);
+    // Valor total em atraso = soma corrigida (capped) das parcelas dos inadimplentes
+    const valorTotalAtraso = inadimplentes.reduce(
+      (acc, e) => acc + (saldoCorrigidoPorEmp.get(e.id) ?? 0),
+      0,
+    );
+
+    // Valor total da carteira ativa (ativos + inadimplentes), também capped
+    const valorCarteira = [...ativos, ...inadimplentes].reduce(
+      (acc, e) => acc + (saldoCorrigidoPorEmp.get(e.id) ?? 0),
+      0,
+    );
 
     // Dias de atraso real por cliente
     const clientesDados = clientesInadimplentes.map(c => {
       const empsCliente = inadimplentes.filter(e => e.clienteId === c.id);
 
-      // Total devido = soma corrigida de todas as parcelas abertas desse cliente
-      const totalDevido = empsCliente.reduce((s, e) => {
-        const ps = parcelasPorEmp.get(e.id) ?? [];
-        return s + ps.reduce((sum, p) => sum + valorCorrigidoParcela(p), 0);
-      }, 0);
+      // Total devido = soma dos saldos capped dos empréstimos inadimplentes do cliente
+      const totalDevido = empsCliente.reduce(
+        (s, e) => s + (saldoCorrigidoPorEmp.get(e.id) ?? 0),
+        0,
+      );
 
       // Dias de atraso = max entre todos os empréstimos inadimplentes do cliente (cap 365)
       const diasAtraso = empsCliente.reduce((max, e) => {

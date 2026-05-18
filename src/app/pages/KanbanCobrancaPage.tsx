@@ -29,6 +29,7 @@ import {
   Loader2,
   AlertCircle,
   UserCheck,
+  History,
   Banknote,
   AlertOctagon,
   CheckCircle2,
@@ -1049,6 +1050,18 @@ export default function KanbanCobrancaPage() {
                               )}
                             </div>
                             <div className="flex gap-1 pt-2 relative">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 text-xs px-2"
+                                title="Abrir timeline de interações"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openClienteModal(card.clienteId, { tab: 'timeline' });
+                                }}
+                              >
+                                <History className="w-3 h-3 mr-1" />Timeline
+                              </Button>
                               <div className="flex-1 relative">
                                 <Button size="sm" variant="secondary" className="flex-1 w-full h-8 text-xs" onClick={(e) => { e.stopPropagation(); setChatMenuCard(chatMenuCard === card.id ? null : card.id); }}>
                                   <MessageSquare className="w-3 h-3 mr-1" />Chat

@@ -6,7 +6,7 @@ html {
 }
 
 html.electron-app {
-  zoom: 1;
+  zoom: 0.9;
 }
 
 body {
@@ -27,7 +27,7 @@ body {
   --card-foreground: #1e293b;
   --popover: rgba(255, 255, 255, 0.72);
   --popover-foreground: #1e293b;
-  --primary: #6366f1;
+  --primary: #1e2087;
   --primary-foreground: #ffffff;
   --secondary: #06b6d4;
   --secondary-foreground: #ffffff;
@@ -77,7 +77,7 @@ body {
 .dark {
   /* Liquid Glass — Dark Theme */
   --background: transparent;
-  --background-solid: #070c1b;
+  --background-solid: #01040f;
   --foreground: #e2e8f0;
   --card: rgba(15, 23, 42, 0.55);
   --card-foreground: #e2e8f0;
