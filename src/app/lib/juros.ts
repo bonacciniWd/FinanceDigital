@@ -127,3 +127,55 @@ export function valorCorrigido(
   const total = Math.max(valorOriginal + juros + multa - desconto, 0);
   return { total, juros, dias: Math.min(dias, runtime.diasMax) };
 }
+
+// ── Teto de saldo corrigido por empréstimo ──────────────────
+// Após CAP_APOS_DIAS de atraso, o total corrigido não pode ultrapassar
+// o valor original do empréstimo × CAP_FATOR. Evita "bola de neve" infinita
+// quando o cliente acumula meses de juros.
+export const CAP_FATOR = 2.2;       // 220%
+export const CAP_APOS_DIAS = 90;
+
+type ParcelaJuros = {
+  valor: number;
+  dataVencimento: string | Date;
+  juros?: number;
+  multa?: number;
+  desconto?: number;
+  status?: string;
+  congelada?: boolean | null;
+};
+
+/**
+ * Soma o total corrigido (principal + juros automáticos) das parcelas
+ * abertas de um empréstimo, aplicando o teto CAP_FATOR após CAP_APOS_DIAS.
+ *
+ * @param valorOriginalEmprestimo  Valor base do empréstimo (para o cap)
+ * @param parcelasAbertas          Lista de parcelas (já filtradas ou não)
+ * @returns { total, bruto } — `bruto` é a soma sem teto; `total` aplica o cap
+ */
+export function totalCorrigidoEmprestimo(
+  valorOriginalEmprestimo: number,
+  parcelasAbertas: ParcelaJuros[],
+): { total: number; bruto: number } {
+  let bruto = 0;
+  let maxDiasAtraso = 0;
+  for (const p of parcelasAbertas) {
+    if (p.status === 'paga' || p.status === 'cancelada') continue;
+    const dias = diasDeAtraso(p.dataVencimento);
+    const congelar = p.congelada === true || dias > runtime.diasMax;
+    const { total } = valorCorrigido(
+      p.valor,
+      p.dataVencimento,
+      p.juros ?? 0,
+      p.multa ?? 0,
+      p.desconto ?? 0,
+      { congelarJuros: congelar },
+    );
+    bruto += total;
+    if (dias > maxDiasAtraso) maxDiasAtraso = dias;
+  }
+  const total = maxDiasAtraso > CAP_APOS_DIAS
+    ? Math.min(bruto, valorOriginalEmprestimo * CAP_FATOR)
+    : bruto;
+  return { total, bruto };
+}
