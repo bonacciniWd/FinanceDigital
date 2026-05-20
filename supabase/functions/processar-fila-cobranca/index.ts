@@ -243,12 +243,6 @@ Deno.serve(async (req: Request) => {
 
         // Incrementa stats do agendamento
         if (ag) {
-          await admin.rpc("noop").catch(() => {});
-          await admin
-            .from("cobranca_agendamentos")
-            .update({ total_disparos: (ag as any).total_disparos ? undefined : undefined })
-            .eq("id", ag.id);
-          // increment via RPC fallback
           await admin
             .from("cobranca_agendamentos")
             .update({ total_disparos: ((ag as any).total_disparos ?? 0) + 1 })

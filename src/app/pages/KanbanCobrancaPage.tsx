@@ -648,7 +648,14 @@ export default function KanbanCobrancaPage() {
     const cliente = clientes.find((c) => c.id === card.clienteId);
     const sexo = (cliente?.sexo || 'masculino') as 'masculino' | 'feminino';
     const proxima = futuras[0] ?? vencidas[0];
-    const valorReferencia = vencidas.length > 0 ? totalVencido : totalGeral;
+    // {valor} reflete o valor a pagar AGORA:
+    //  • com parcelas vencidas → soma das vencidas (corrigidas com juros/multa)
+    //  • sem vencidas → APENAS a próxima parcela (não o total restante do empréstimo)
+    const valorReferencia = vencidas.length > 0
+      ? totalVencido
+      : (futuras[0]?.valor ?? 0);
+    // totalGeral mantido apenas para fallback do bloco hardcoded
+    void totalGeral;
     const empRef = empsCliente[0];
 
     const tpl = tipoAlvo

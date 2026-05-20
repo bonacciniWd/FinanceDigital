@@ -43,7 +43,10 @@ import {
 import { useTemplates } from '../hooks/useTemplates';
 import { useInstancias } from '../hooks/useWhatsapp';
 import { useCardsCobranca } from '../hooks/useKanbanCobranca';
+import { useParcelas, useParcelasVencidas } from '../hooks/useParcelas';
+import { useClientes } from '../hooks/useClientes';
 import { useAuth } from '../contexts/AuthContext';
+import { todayISO, formatDateBR } from '../lib/date-utils';
 import type { CobrancaAgendamento, CobrancaFilaStatus } from '../services/cobrancaAgendamentoService';
 
 const DIAS_SEMANA = [
@@ -470,18 +473,80 @@ function AjudaRegraDialog({ open, onClose }: { open: boolean; onClose: () => voi
 function KanbanClientPicker({ regra, onClose }: { regra: CobrancaAgendamento; onClose: () => void }) {
   const { data: cards = [], isLoading } = useCardsCobranca();
   const { data: templates = [] } = useTemplates();
+  const { data: parcelasPendentes = [] } = useParcelas('pendente');
+  const { data: parcelasVencidasList = [] } = useParcelasVencidas();
+  const { data: clientes = [] } = useClientes();
   const enfileirar = useEnfileirarLote();
   const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
   const [filtroEtapa, setFiltroEtapa] = useState<string>('todos');
 
+  const todayStr = useMemo(() => todayISO(), []);
+
+  /**
+   * Mapa por clienteId com:
+   *   • proxima        – próxima parcela em aberto (futura ou, se não houver, a vencida mais antiga)
+   *   • vencidas       – lista de parcelas vencidas (status='vencida' ou data < hoje)
+   *   • diasAtrasoReal – atraso real (em dias) da parcela mais antiga vencida
+   *   • venceHoje      – true se a próxima parcela vence hoje E não há nenhuma vencida
+   *   • totalEmprestimo– soma dos valores ORIGINAIS de todas as parcelas em aberto (futuras+vencidas)
+   *
+   * Fonte de verdade: parcelas (mesmo cálculo da KanbanCobrancaPage para "VENCE HOJE").
+   */
+  type ParcInfo = {
+    proxima: typeof parcelasPendentes[number] | null;
+    vencidas: typeof parcelasPendentes;
+    diasAtrasoReal: number;
+    venceHoje: boolean;
+  };
+  const parcelasInfoByCliente = useMemo(() => {
+    const map = new Map<string, ParcInfo>();
+    const all = [...parcelasPendentes, ...parcelasVencidasList].filter((p) => !p.congelada);
+    const byCliente = new Map<string, typeof all>();
+    for (const p of all) {
+      const arr = byCliente.get(p.clienteId) ?? [];
+      arr.push(p);
+      byCliente.set(p.clienteId, arr);
+    }
+    for (const [cid, parts] of byCliente) {
+      const sorted = [...parts].sort((a, b) => a.dataVencimento.localeCompare(b.dataVencimento));
+      const vencidas = sorted.filter((p) => p.status === 'vencida' || p.dataVencimento < todayStr);
+      const futuras = sorted.filter((p) => p.status !== 'vencida' && p.dataVencimento >= todayStr);
+      const proxima = futuras[0] ?? vencidas[0] ?? null;
+      const venceHoje = futuras[0]?.dataVencimento === todayStr && vencidas.length === 0;
+      let diasAtrasoReal = 0;
+      if (vencidas[0]) {
+        const d = new Date(vencidas[0].dataVencimento + 'T00:00:00');
+        const h = new Date(todayStr + 'T00:00:00');
+        diasAtrasoReal = Math.max(0, Math.floor((h.getTime() - d.getTime()) / 86400000));
+      }
+      map.set(cid, { proxima, vencidas, diasAtrasoReal, venceHoje });
+    }
+    return map;
+  }, [parcelasPendentes, parcelasVencidasList, todayStr]);
+
+  // ETAPAS consideradas "finais" para fins de filtro "vence hoje" (espelha KanbanCobrancaPage)
+  const ETAPAS_FINAIS = useMemo(
+    () => new Set(['pago', 'perdido', 'arquivado', 'contatado', 'negociacao', 'acordo']),
+    [],
+  );
+
   const elegiveis = useMemo(() => {
     return cards.filter((c) => {
-      if (filtroEtapa !== 'todos' && c.etapa !== filtroEtapa) return false;
       if (c.etapa === 'pago' || c.etapa === 'arquivado') return false;
       if (!c.clienteTelefone) return false;
-      return true;
+      if (filtroEtapa === 'todos') return true;
+      // "A vencer" no picker = mesma semântica da coluna "VENCE HOJE" do Kanban:
+      //   • etapa não está em estágios finais
+      //   • próxima parcela vence HOJE
+      //   • cliente NÃO tem parcelas vencidas
+      if (filtroEtapa === 'a_vencer') {
+        if (ETAPAS_FINAIS.has(c.etapa)) return false;
+        const info = parcelasInfoByCliente.get(c.clienteId);
+        return !!info?.venceHoje;
+      }
+      return c.etapa === filtroEtapa;
     });
-  }, [cards, filtroEtapa]);
+  }, [cards, filtroEtapa, parcelasInfoByCliente, ETAPAS_FINAIS]);
 
   const template = templates.find((t) => t.id === regra.template_id);
 
@@ -502,12 +567,33 @@ function KanbanClientPicker({ regra, onClose }: { regra: CobrancaAgendamento; on
     if (!template) return toast.error('Defina um template na regra antes de enfileirar.');
     if (selecionados.size === 0) return toast.error('Selecione ao menos um cliente.');
 
+    const fmtBRL = (n: number) =>
+      n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
     const itens = elegiveis
       .filter((c) => selecionados.has(c.id))
       .map((c) => {
-        const nome = c.clienteNome ?? '';
-        const msg = (template.mensagemMasculino || template.mensagemFeminino || '')
-          .replace(/\{nome\}/g, nome);
+        const nome = (c.clienteNome ?? '').split(' ')[0] || (c.clienteNome ?? '');
+        const cliente = clientes.find((cl) => cl.id === c.clienteId);
+        const sexo = (cliente?.sexo === 'feminino' ? 'feminino' : 'masculino') as 'masculino' | 'feminino';
+        const info = parcelasInfoByCliente.get(c.clienteId);
+        const proxima = info?.proxima ?? null;
+        // {valor}: se houver vencidas, soma das vencidas (valor original); senão, somente próxima parcela
+        const valorRef = info && info.vencidas.length > 0
+          ? info.vencidas.reduce((s, p) => s + p.valor, 0)
+          : (proxima?.valor ?? 0);
+        const vars: Record<string, string> = {
+          nome,
+          valor: fmtBRL(valorRef),
+          data: proxima ? formatDateBR(proxima.dataVencimento) : '',
+          numeroParcela: String(proxima?.numero ?? ''),
+          parcela: String(proxima?.numero ?? ''),
+          diasAtraso: String(info?.diasAtrasoReal ?? Math.max(0, c.diasAtraso || 0)),
+        };
+        const base = sexo === 'feminino'
+          ? (template.mensagemFeminino || template.mensagemMasculino || '')
+          : (template.mensagemMasculino || template.mensagemFeminino || '');
+        const msg = base.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
         return {
           cliente_id: c.clienteId,
           telefone: c.clienteTelefone ?? '',
@@ -550,7 +636,7 @@ function KanbanClientPicker({ regra, onClose }: { regra: CobrancaAgendamento; on
             <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="todos">Todas as etapas</SelectItem>
-              <SelectItem value="a_vencer">A vencer</SelectItem>
+              <SelectItem value="a_vencer">Vence hoje (a vencer)</SelectItem>
               <SelectItem value="vencido">Vencido</SelectItem>
               <SelectItem value="contatado">Contatado</SelectItem>
               <SelectItem value="negociacao">Negociação</SelectItem>
